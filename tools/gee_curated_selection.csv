@@ -1,0 +1,63 @@
+source_path,category,decision,execution,description
+01_stage1_to_stage4_2025_master,01_foundation,BASELINE_SOURCE,REVIEW_ONLY,2025 source ROI Landsat preprocessing training and Gaussian MLC; multi-stage script; never rerun in bulk
+02_stage5_temporal_transfer,01_foundation,BASELINE_SOURCE,REVIEW_ONLY,2025 to 2020 temporal screening and 2020 Gaussian MLC; inspect multiple task definitions first
+03_2020_area_stats,01_foundation,BASELINE_QA,READ_OR_EXPORT,Reload saved 2020 classification and calculate mapped class areas
+04_stage5_temporal_transfer_2015,01_foundation,HISTORICAL_PROVENANCE,MANUAL_SETUP,2020 to 2015 candidate screening; not a standalone completed 2015 export
+04A_2015_training_manual_review,02_2015_mlc,MANUAL_REFERENCE,READ_ONLY_QA,2015 one group at a time manual training review helper
+04B_2015_training_consolidation,02_2015_mlc,MANUAL_REFERENCE,EXPORT_TASKS,Consolidate approved 2015 training candidates and supplementary source assets
+04C_2015_add_missing_training,02_2015_mlc,MANUAL_REFERENCE,MANUAL_SETUP,2015 targeted Water and Agricultural training additions; geometry imports required
+04D_2015_finalize_training,02_2015_mlc,BASELINE_SOURCE,EXPORT_TASKS,Freeze and export independently reviewed 2015 training set
+04E_2015_validation_transfer,02_2015_mlc,MANUAL_REFERENCE,READ_ONLY_QA,Independent 2020 to 2015 validation temporal screening after training lock
+04F_2015_validation_manual_review,02_2015_mlc,MANUAL_REFERENCE,READ_ONLY_QA,Manual inspection helper for independent 2015 validation groups
+04G_2015_validation_consolidation,02_2015_mlc,MANUAL_REFERENCE,READ_ONLY_QA,Assemble reviewed 2015 validation candidates without changing training
+04H_2015_add_missing_validation,02_2015_mlc,MANUAL_REFERENCE,MANUAL_SETUP,Target class shortages in 2015 independent validation samples
+04I_2015_finalize_validation,02_2015_mlc,BASELINE_SOURCE,EXPORT_TASKS,Freeze and export 2015 independent validation set
+04J_2015_gaussian_mlc,02_2015_mlc,BASELINE_SOURCE,EXPORT_TASKS,Five class true Gaussian MLC for 2015 with validation and result exports
+04K_2015_area_statistics,02_2015_mlc,BASELINE_QA,READ_OR_EXPORT,2015 mapped class area statistics using saved MLC image
+stage7/07AB_FINAL_BUILTUP_DISCREPANCY_ATTRIBUTION_2010_2015,03_2010_provisional,BASELINE_QA,READ_ONLY_QA,Read-only attribution of 2010 and 2015 Built-up class discrepancy
+stage7/07D_2010_all_classes_candidate_QA,03_2010_provisional,MANUAL_REFERENCE,READ_ONLY_QA,2010 manual 28-polygon candidate QA; requires existing native training polygons asset; does not export it
+stage7/07E_2010_manual_label_triage,03_2010_provisional,MANUAL_REFERENCE,READ_ONLY_QA,Inspect 2010 polygon candidate labels before 07F 600-point balanced sample; does not auto-approve labels
+stage7/07F_2010_manual_balanced_training_v1,03_2010_provisional,MANUAL_REFERENCE,EXPORT_TASKS,600 balanced 2010 training locations from manually interpreted polygons
+stage7/07G_2010_manual_Gaussian_MLC_v1,03_2010_provisional,HISTORICAL_PREDECESSOR,EXPORT_TASKS,Initial manual Landsat-5-only 2010 Gaussian MLC precursor; not final provisional L5+L7 reported map
+stage7/07H2_2010_site_heldout_CV,03_2010_provisional,HISTORICAL_PREDECESSOR,READ_ONLY_QA,Five-fold training-site held-out cross validation of earlier 2010 manual model; distinct from independent validation
+stage7/07H_Independent_Accuracy_Assessment,03_2010_provisional,HISTORICAL_PREDECESSOR,READ_ONLY_QA,Independent 300-point assessment of initial 2010 manual Landsat-5-only model; not the L5+L7 baseline accuracy
+stage7/07L_2010_L5_L7_clear_observation_feasibility,03_2010_provisional,BASELINE_QA,READ_ONLY_QA,Diagnose extra clear 2010 Landsat 7 support before changing predictor stack
+stage7/07M_2010_L5L7_experimental_stack,03_2010_provisional,BASELINE_SOURCE,EXPORT_TASKS,Generate 2010 Landsat 5 plus 7 nine band experimental predictor asset
+stage7/07N_2010_L5L7_Gaussian_MLC_test,03_2010_provisional,BASELINE_QA,READ_ONLY_QA,Test frozen Gaussian MLC on L5 plus L7 re-extracted sample signatures
+stage7/07O_2010_L5L7_MLC_export_exp_v1,03_2010_provisional,PROVISIONAL_BASELINE,EXPORT_TASKS,Export 2010 L5 plus L7 training and officially reported provisional five class raster
+stage7/07P_2010_L5L7_site_heldout_CV,03_2010_provisional,BASELINE_QA,READ_ONLY_QA,Site held-out cross-validation of 2010 L5 plus L7 model; not independent map accuracy
+stage7/07Q_2010_L5L7_spatial_area_audit,03_2010_provisional,BASELINE_QA,READ_ONLY_QA,Read-only 2010 L5 plus L7 spatial extent area and reference audit
+stage7/07R_2010_2015_cross_year_plausibility,03_2010_provisional,BASELINE_QA,READ_ONLY_QA,Historical 2010 to 2015 plausibility checks; not direct urban change proof
+07AC4_VERIFY_RECOVERED_2025_TIFF,04_four_class,BASELINE_QA,READ_OR_EXPORT,Verify restored original 2025 five-class TIFF and derived four-class aggregation; has optional export disabled by default
+07AD_FINAL_POST_EXPORT_FOUR_CLASS_QA,04_four_class,LOCKED_REPORTING,READ_ONLY_QA,Post-export comparison of original and four class rasters and masks
+07AE,04_four_class,LOCKED_REPORTING,READ_ONLY_QA,Diagnose mapped pixel area reduction and mask accounting
+stage7/07AC5_FINAL_FOUR_CLASS_EXPORT_ALL_YEARS,04_four_class,LOCKED_REPORTING,EXPORT_TASKS,Four class classification asset exports for 2010 2015 2020 and 2025
+stage7/07AC_FOUR_CLASS_AGGREGATION_QA_AND_EXPORT,04_four_class,LOCKED_REPORTING,READ_OR_EXPORT,Aggregate original class 4 and 5 for four class reporting and assess change
+stage8/08G10_Export_Three_Fusion_Candidates,05_fusion,FUSION_CANDIDATE,EXPORT_TASKS,Export three distinct 2015 2020 2025 retained fusion candidate assets
+stage8/08G11_Analysis_A_B_GHSL_Comparison,05_fusion,FUSION_QA,READ_ONLY_QA,Read-only fusion area and GHSL built surface comparison at different native scales
+stage8/08G13_Analysis_A_Corrected_2010_Final_QA,05_fusion,FUSION_QA,READ_ONLY_QA,Correct original 2010 asset selection and audit 2010 versus 2015 2020 2025
+stage8/08G15_2010_GAIA_GHSL_Temporal_Fusion_Comparison,05_fusion,SENSITIVITY_ONLY,READ_ONLY_QA,Read-only 2010 original add only and two-way GAIA GHSL temporal fusion comparison
+stage8/08G4B_2020_Conservative_Builtup_Fusion,05_fusion,FUSION_QA,READ_ONLY_QA,Read-only conservative GAIA plus WorldCover built-up correction experiment informing 2020 retained fusion
+stage8/08G8_2025_GAIA_DW_PairedValidation,05_fusion,FUSION_QA,READ_ONLY_QA,2025 GAIA and Dynamic World paired validation using recreated sample not identical archive points
+stage8/08G9_2015_Temporal_Consistency_Fusion,05_fusion,FUSION_CANDIDATE,READ_ONLY_QA,Construct 2015 temporal consistency fusion in memory for comparisons
+stage8/11_CHENNAI_STAGE08G15_RECOVER_2010_FUSION_AND_EXPORT_FIVE_LULC_MAPS,05_fusion,SENSITIVITY_ONLY,EXPORT_TASKS,Reconstruct sensitivity and export four reported time series maps plus additional 2010 alternative
+tnjregion/00_TNJ_City_ROI,06_generalisability,EXTERNAL_BENCHMARK,EXPORT_TASKS,Create approximate screenshot traced Thanjavur pilot ROI; not official municipal boundary
+tnjregion/01_TNJ_2020_Frozen_MLC,06_generalisability,EXTERNAL_BENCHMARK,EXPORT_TASKS,Transfer frozen 2020 Chennai five class Gaussian model to Thanjavur with no local training
+tnjregion/02_TNJ_2020_Reference_Points,06_generalisability,MANUAL_REFERENCE,READ_OR_EXPORT,Initial stratified candidate target reference point locations; later 112 point review is definitive
+tnjregion/03A_TNJ_Freeze_Reference_Points,06_generalisability,MANUAL_REFERENCE,EXPORT_TASKS,Freeze blind target reference coordinates before human image interpretation
+tnjregion/03B_TNJ_2020_Reference_Reviewer,06_generalisability,MANUAL_REFERENCE,MANUAL_SETUP,Historical blind human review of 2020 Thanjavur 252 candidate locations; manual labels and progress management
+tnjregion/03D_TNJ_Reduced_Validation_Design,06_generalisability,EXTERNAL_BENCHMARK,EXPORT_TASKS,Prespecified 112 point target reference subset with predicted class strata
+tnjregion/03E_TNJ_2020_Review_Remaining_91,06_generalisability,MANUAL_REFERENCE,MANUAL_SETUP,Finish independent manual 112 point reference interpretation from checkpoints
+tnjregion/04_TNJ_2020_Final_Accuracy_Benchmark,06_generalisability,EXTERNAL_BENCHMARK,READ_OR_EXPORT,Calculate area adjusted accuracy on 112 independently reviewed target locations
+tnjregion/05A2_V3_Monthly_Spectral_Extraction,06_generalisability,EXTERNAL_BENCHMARK,READ_OR_EXPORT,Corrected month level 2020 Landsat spectral and observation extraction
+tnjregion/05A_TNJ_Spectral_Transfer_Diagnostics,06_generalisability,EXTERNAL_BENCHMARK,READ_OR_EXPORT,Diagnose baseline model parity and Chennai to Thanjavur spectral shifts
+tnjregion/06B_TNJ_2020_Source_Month_Matching,06_generalisability,EXTERNAL_BENCHMARK,EXPORT_TASKS,Experiment B target scene month matching with frozen Gaussian parameters
+tnjregion/06C_TNJ_2020_Quantile_Harmonisation_V2,06_generalisability,EXTERNAL_BENCHMARK,EXPORT_TASKS,Experiment C unlabeled quantile spectral adaptation with frozen Gaussian parameters
+tnjregion/07_TNJ_Final_Transfer_Audit,06_generalisability,EXTERNAL_BENCHMARK,READ_OR_EXPORT,Read-only paired A versus C audit and approximation to uncertainty
+tnjregion/08_TN_Closest_Spectral_City_Frozen_MLC_Auto_Proxy_2020,06_generalisability,AUTO_PROXY_SCREEN,EXPORT_TASKS,Select coastal pilot from unlabeled spectra and calculate external product agreement
+tnjregion/STAGE_09 _AUTOMATED_FROZEN_MLC_TRANSFER_BENCHMARK,06_generalisability,AUTO_PROXY_SCREEN,EXPORT_TASKS,Run Nagapattinam and Thoothukudi frozen transfer with automated proxy agreement
+08_REPORT_NDVI_NDWI_NDBI_ALL_YEARS,07_map_exports,DISPLAY_EXPORT,READ_OR_EXPORT,Export or preview seasonal full-year indices for report and maps
+export_final4_to_drive.js,07_map_exports,DISPLAY_EXPORT,EXPORT_TASKS,Export final four class categorical GeoTIFF rasters for React FastAPI viewer
+export_historical_satellite_rgb,07_map_exports,DISPLAY_EXPORT,EXPORT_TASKS,Export annual historical Landsat RGB display rasters; does not change classification
+stage7/07C2_export_locked_ROI,07_map_exports,DISPLAY_EXPORT,EXPORT_TASKS,Export locked ROI boundary for mapping and the interactive viewer
+tnjregion/10_EXPORT_ALL_SIX_FROZEN_MLC_LULC_MAPS_TO_DRIVE,07_map_exports,DISPLAY_EXPORT,EXPORT_TASKS,Export 6 five class frozen transfer benchmark maps plus selected supporting data
