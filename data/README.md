@@ -1,6 +1,13 @@
 # Data catalogue — Chennai LULC research
 
-This is the repository's **data discovery and provenance directory**, not a claim that all research rasters have been uploaded here. The original classification GeoTIFFs, RGBA composites, five-class fusion candidate exports and GEE FeatureCollections remain **external binary datasets** unless separately deposited and verified. The local runtime data for the interactive app are excluded from GitHub.
+This is the repository's **data discovery and provenance directory**, not a claim that all Earth Engine research assets have been publicly exported. A checked subset of original Stage 08 application inputs and reference samples is now available as versioned GitHub Release attachments; the app's binary runtime inputs remain excluded from the **Git source tree**. Other historical exports, fusion-candidate rasters and GEE FeatureCollections may remain external or access-controlled.
+
+## Published checked dataset — v1.0.0
+
+- [Chennai LULC Dataset v1.0.0](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/dataset-v1.0.0) — 33 individually attached files, including nine original Stage 08 runtime inputs, 17 reference exports, and seven documentation/checksum/verification files.
+- [Pinned file manifest](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/dataset-v1.0.0/dataset_file_manifest.csv) · [SHA256SUMS](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/dataset-v1.0.0/SHA256SUMS.txt) · [Verifier](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/dataset-v1.0.0/verify_chennai_dataset_v1.py) · [QA report](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/dataset-v1.0.0/CHENNAI_DATASET_V1_QA_REPORT.md).
+- Download all release assets into an empty folder, verify with `python verify_chennai_dataset_v1.py --flat . --manifest dataset_file_manifest.csv`, then restore the folder layout with the same command plus `--reconstruct restored`. Copy only `boundary/`, `lulc4/` and `satellite/` into `app/data/raw/`, preserving filenames. The `samples/` references are research evidence rather than runtime requirements.
+- Read the QA report before reuse: the original 2010 classification is provisional; 2025 source-polygon overlaps and approximately 30 m separation concerns for three 2015 validation points must be disclosed. The 2025 sampled CSVs do not contain exact point coordinates.
 
 ## Included manifests
 
@@ -25,7 +32,7 @@ The primary documentation for the GEE snapshot is [`docs/ASSET_MANIFEST_VERIFIED
 
 1. Obtain the exact exported files from the researcher's GEE/Google Drive account; check access and third-party license terms before distributing. The folders listed in the CSV were visible in prior screenshots; no publicly accessible folder URLs were verified.
 2. Inventory actual local exports using [`tools/inventory_local_exports.py`](../tools/inventory_local_exports.py), which records file sizes and SHA-256 hashes without changing the files. Store the resulting file-level manifest in a versioned, reviewed location **only after checking filenames and paths for sensitive information**.
-3. Publish large datasets separately, preferably as a versioned GitHub Release asset or an appropriate research data repository (e.g., Zenodo) once licensing and permissions are confirmed. Fill in the blank verified URLs/hashes in a future manifest revision; **do not invent working download links**.
+3. The checked Stage 08 subset has already been published as [Dataset v1.0.0](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/dataset-v1.0.0), with file-specific hashes. Any **additional** historical exports not included in this release require separate file-identity, licensing, permissions and publication checks; do not infer that every original GEE asset is publicly downloadable.
 4. If full third-party data redistribution is not permitted, publish the analysis script, asset ID and acquisition/access instructions instead. **GEE asset IDs alone are not downloadable files.**
 
 ## Data integrity conventions

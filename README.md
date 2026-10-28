@@ -10,6 +10,8 @@ This repository preserves the research code and documented decisions behind a mu
 
 | If you want to… | Read this |
 |---|---|
+| **Download the checked Stage 08 data** | [Dataset v1.0.0](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/dataset-v1.0.0) · [SHA-256 manifest](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/dataset-v1.0.0/dataset_file_manifest.csv) · [Dataset QA report](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/dataset-v1.0.0/CHENNAI_DATASET_V1_QA_REPORT.md) |
+| Read the **final project report** | [Chennai LULC report with fusion maps](report/Chennai_LULC_Report_With_Fusion_Maps.pdf) |
 | Understand what **each of the 156 scripts** does | [Complete research code manual](docs/CODE_MANUAL.md) |
 | Explore the **62 selected source copies** by stage | [Curated GEE index](scripts/gee/INDEX.md) |
 | Understand **research order and execution precautions** | [GEE execution and interpretation guide](scripts/gee/EXECUTION_ORDER.md) |
@@ -147,12 +149,16 @@ chennai-lulc-gis/
 
 ## Datasets, authentic maps and extended results
 
+**Published checked dataset:** [Chennai LULC Dataset v1.0.0](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/dataset-v1.0.0) contains **33 individual attachments**: **26 original research files** (nine Stage 08 application inputs and 17 reference exports) and seven documentation/integrity files. The release includes [SHA-256 checksums](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/dataset-v1.0.0/dataset_file_manifest.csv), [verification instructions](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/dataset-v1.0.0/DATASET_README.md) and [scientific QA caveats](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/dataset-v1.0.0/CHENNAI_DATASET_V1_QA_REPORT.md). The original 2010 map remains **provisional**; the 2010 two-way fusion sensitivity is a separate experiment. The 2025 source-polygon overlaps and approximately 30 m spacing concern for three 2015 validation points remain documented, not silently corrected. No final accepted 2005 map or full historical Earth Engine reproduction is supplied by this release.
+
+**Related research:** [Final report](report/Chennai_LULC_Report_With_Fusion_Maps.pdf) · [Results tables](results/README.md) · [Authentic figures](figures/README.md) · [Source code and provenance](scripts/gee/INDEX.md) · [Interactive app](app/README.md).
+
 - **[Dataset catalogue](data/README.md):** a structured index of **69 Earth Engine asset IDs** (62 metadata-accessible in the dated audit), **eight** screenshot-evidenced Google Drive export folders, and the **nine** exact local inputs the FastAPI viewer requires. The inventory does **not** itself contain remote asset bytes or downloadable public links.
 - **[Original report figures](figures/README.md):** the unaltered, report-embedded map panels for 2010 original/2015/2020/2025 retained fusion (Fig. 8.9), the **separate 2010 two-way sensitivity** (Fig. 8.10), and original versus fusion-adjusted class-composition plots (Figs. 6.1 and 8.8). **JPEG figures are not georeferenced rasters.**
 - **[Extended reported tables](results/README.md):** recorded classification-area transitions, original/fusion paired validation, five-class post-fusion areas, gains and losses, and external Thanjavur/coastal-city results. Each CSV names its report table and PDF page. These are **transcriptions of approved results**, not new classifications.
 - **[Local export inventory tool](tools/inventory_local_exports.py):** scans actual files already on your machine and records relative paths, sizes and SHA-256 hashes without altering the TIFFs. A checksum cannot be claimed until the file has actually been read.
 
-**Full-size research exports remain external.** Use a versioned research-data deposit or GitHub Release attachments after file identity, redistribution permissions and license terms are reviewed; see [data/README.md](data/README.md). Do not promote the 2010 two-way sensitivity to an official baseline or imply all listed GEE assets are publicly accessible.
+**Data availability:** The checked Stage 08 application inputs and original reference files are available as [versioned release attachments](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/dataset-v1.0.0), not as binary files in source-code Git history. Other full-size research exports and GEE-hosted assets remain external or permission-dependent; see [data/README.md](data/README.md). The separate 2010 two-way sensitivity must not be presented as the official baseline.
 
 ## Research questions and scope
 
@@ -266,7 +272,7 @@ Cuddalore (**57.9251%**), Nagapattinam (**82.9085%**) and Thoothukudi (**46.0861
 
 ### Availability limits
 
-- This repository **does not contain** the Earth Engine-hosted training/reference assets or large source/output GeoTIFFs. Some required resources may need access permissions.
+- The **Git source tree** does not embed the large raster inputs or Earth Engine-hosted assets. The nine Stage 08 runtime inputs and 17 original reference files are downloadable from the [dataset-v1.0.0 release](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/dataset-v1.0.0); other GEE assets may still require access permissions.
 - Some historical GEE scripts rely on manually drawn geometries and Code Editor imports that are **not embedded** in the source code.
 - The **FastAPI + React/Leaflet prototype** was developed separately. `app/` contains the application source. Running it requires the local raster inputs and setup documented in [app/README.md](app/README.md).
 - An accepted **2005 final LULC** product and automated end-to-end reruns are **not claimed**. The [asset manifest](docs/ASSET_MANIFEST_VERIFIED.md) records 62/69 accessible static Earth Engine IDs and 107 `SUCCEEDED` operations from the October 2026 snapshot; these do not establish full task-to-file provenance.

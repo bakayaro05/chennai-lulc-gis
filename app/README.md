@@ -38,7 +38,7 @@ app/
 └── data/raw/                   # Required local inputs — excluded from GitHub
 ```
 
-The raw raster paths below are **runtime dependencies**, not tracked files. Their absence from GitHub is deliberate. Empty ignored folders may need to be created locally.
+The raw raster paths below are **runtime dependencies**, not tracked in the Git source tree. The nine exact original inputs are now published as separate attachments in [Chennai LULC Dataset v1.0.0](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/dataset-v1.0.0). Empty ignored folders may need to be created locally.
 
 ## 3. Required local data (exact filenames)
 
@@ -59,6 +59,15 @@ data/raw/
     ├── Chennai_RGB_2020.tif
     └── Chennai_RGB_2025.tif
 ```
+
+**Download and restore:** Get the 33 assets from [Dataset v1.0.0](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/dataset-v1.0.0) into one empty download folder. In that folder, run:
+
+```powershell
+python .\verify_chennai_dataset_v1.py --flat . --manifest .\dataset_file_manifest.csv
+python .\verify_chennai_dataset_v1.py --flat . --manifest .\dataset_file_manifest.csv --reconstruct .\restored
+```
+
+Copy the contents of `restored/boundary/`, `restored/lulc4/` and `restored/satellite/` to the corresponding `app/data/raw/` folders above. Keep the downloaded `samples/` references separately for research inspection; they are not required to run the GUI. Review the [dataset QA report](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/dataset-v1.0.0/CHENNAI_DATASET_V1_QA_REPORT.md) before treating reference samples as independent spatial evidence.
 
 **LULC input constraints (verified by `backend/raster_service.py`):** single-band EPSG:32644 raster, 951 columns × 1412 rows, 30 m cells and transform `(30, 0, 399060, 0, -30, 1463250)`, NoData metadata `-9999`, class values `1–4`, and separate **background value `0`**. All four must use the same mapped footprint.
 
@@ -151,7 +160,7 @@ cd backend
 2. **Four-class versus five-class:** classes 4 and 5 in the original five-class MLC are merged for four-class reporting; preserve the provenance of each accuracy number.
 3. **Published versus local areas:** reported four-class areas use archived GEE `pixelArea` calculations. Simple local 30 m whole-pixel counts differ; see `docs/milestone0_audit.json`. Never silently replace published numbers with the local totals.
 4. **Transparency:** background value `0` is not Water or a fifth LULC class. Declared GeoTIFF NoData `-9999` is different from the zero background actually present in these exports.
-5. **Exact inputs:** GitHub omits large GeoTIFFs; users must obtain the original verified files and boundary separately. Do not commit credentials or locally generated export rasters.
+5. **Exact inputs:** The Git **source tree** omits the large GeoTIFFs, but the nine required original raster/boundary inputs are provided in the [dataset-v1.0.0 release](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/dataset-v1.0.0). Verify their SHA-256 hashes and restore the original file layout; do not commit credentials or locally generated export rasters.
 6. **Scope:** 2005 is in the larger research plan, but an approved 2005 classification is not supplied by the verified Stage 08 app.
 
 ## 8. Repository documentation
