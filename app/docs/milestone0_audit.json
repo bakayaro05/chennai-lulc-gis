@@ -1,0 +1,404 @@
+{
+  "stage": "08 / Milestone 0",
+  "statistics_convention": "Local whole 30 m pixel count; NOT official GEE area weighting",
+  "background_value": 0,
+  "declared_nodata": -9999,
+  "archived_gee_mask_diagnostic_km2": 528.785508,
+  "mask_diagnostic_status": "Unresolved, pending ROI/method reproduction",
+  "years": {
+    "2010": {
+      "filename": "Chennai_LULC4_2010_provisional.tif",
+      "projection": "EPSG:32644",
+      "width": 951,
+      "height": 1412,
+      "transform": [
+        30.0,
+        0.0,
+        399060.0,
+        0.0,
+        -30.0,
+        1463250.0
+      ],
+      "format": "GTiff",
+      "is_cog": true,
+      "overview_resampling": "NEAREST",
+      "overview_levels": [
+        2,
+        4,
+        8,
+        16,
+        32
+      ],
+      "raw_values": {
+        "0": 750773,
+        "1": 312165,
+        "2": 90871,
+        "3": 24684,
+        "4": 164319
+      },
+      "background_zero_pixels": 750773,
+      "classified_pixels": 592039,
+      "class_counts": [
+        312165,
+        90871,
+        24684,
+        164319
+      ],
+      "local_planar_areas_km2": [
+        280.9485,
+        81.7839,
+        22.2156,
+        147.8871
+      ],
+      "local_total_km2": 532.8351,
+      "official_gee_areas_km2": [
+        279.821871,
+        81.218516,
+        21.77848,
+        146.952238
+      ],
+      "official_gee_total_km2": 529.771105,
+      "local_minus_gee_total_km2": 3.063995
+    },
+    "2015": {
+      "filename": "Chennai_LULC4_2015.tif",
+      "projection": "EPSG:32644",
+      "width": 951,
+      "height": 1412,
+      "transform": [
+        30.0,
+        0.0,
+        399060.0,
+        0.0,
+        -30.0,
+        1463250.0
+      ],
+      "format": "GTiff",
+      "is_cog": true,
+      "overview_resampling": "NEAREST",
+      "overview_levels": [
+        2,
+        4,
+        8,
+        16,
+        32
+      ],
+      "raw_values": {
+        "0": 750773,
+        "1": 224016,
+        "2": 37505,
+        "3": 44728,
+        "4": 285790
+      },
+      "background_zero_pixels": 750773,
+      "classified_pixels": 592039,
+      "class_counts": [
+        224016,
+        37505,
+        44728,
+        285790
+      ],
+      "local_planar_areas_km2": [
+        201.6144,
+        33.7545,
+        40.2552,
+        257.211
+      ],
+      "local_total_km2": 532.8351,
+      "official_gee_areas_km2": [
+        200.882401,
+        33.6546,
+        39.730711,
+        255.503391
+      ],
+      "official_gee_total_km2": 529.771103,
+      "local_minus_gee_total_km2": 3.063997
+    },
+    "2020": {
+      "filename": "Chennai_LULC4_2020.tif",
+      "projection": "EPSG:32644",
+      "width": 951,
+      "height": 1412,
+      "transform": [
+        30.0,
+        0.0,
+        399060.0,
+        0.0,
+        -30.0,
+        1463250.0
+      ],
+      "format": "GTiff",
+      "is_cog": true,
+      "overview_resampling": "NEAREST",
+      "overview_levels": [
+        2,
+        4,
+        8,
+        16,
+        32
+      ],
+      "raw_values": {
+        "0": 750773,
+        "1": 251860,
+        "2": 15739,
+        "3": 24990,
+        "4": 299450
+      },
+      "background_zero_pixels": 750773,
+      "classified_pixels": 592039,
+      "class_counts": [
+        251860,
+        15739,
+        24990,
+        299450
+      ],
+      "local_planar_areas_km2": [
+        226.674,
+        14.1651,
+        22.491,
+        269.505
+      ],
+      "local_total_km2": 532.8351,
+      "official_gee_areas_km2": [
+        225.716608,
+        14.108663,
+        22.036104,
+        267.909728
+      ],
+      "official_gee_total_km2": 529.771103,
+      "local_minus_gee_total_km2": 3.063997
+    },
+    "2025": {
+      "filename": "Chennai_LULC4_2025.tif",
+      "projection": "EPSG:32644",
+      "width": 951,
+      "height": 1412,
+      "transform": [
+        30.0,
+        0.0,
+        399060.0,
+        0.0,
+        -30.0,
+        1463250.0
+      ],
+      "format": "GTiff",
+      "is_cog": true,
+      "overview_resampling": "NEAREST",
+      "overview_levels": [
+        2,
+        4,
+        8,
+        16,
+        32
+      ],
+      "raw_values": {
+        "0": 750773,
+        "1": 286133,
+        "2": 49427,
+        "3": 23157,
+        "4": 233322
+      },
+      "background_zero_pixels": 750773,
+      "classified_pixels": 592039,
+      "class_counts": [
+        286133,
+        49427,
+        23157,
+        233322
+      ],
+      "local_planar_areas_km2": [
+        257.5197,
+        44.4843,
+        20.8413,
+        209.9898
+      ],
+      "local_total_km2": 532.8351,
+      "official_gee_areas_km2": [
+        256.372809,
+        44.269634,
+        20.389113,
+        208.739548
+      ],
+      "official_gee_total_km2": 529.771104,
+      "local_minus_gee_total_km2": 3.063996
+    }
+  },
+  "transitions": {
+    "2010-2015": {
+      "local_planar_matrix_km2": [
+        [
+          178.4475,
+          0.7398,
+          1.2393,
+          100.5219
+        ],
+        [
+          6.2802,
+          20.3373,
+          3.6018,
+          51.5646
+        ],
+        [
+          0.8451,
+          0.0882,
+          19.5642,
+          1.7181
+        ],
+        [
+          16.0416,
+          12.5892,
+          15.8499,
+          103.4064
+        ]
+      ],
+      "archived_gee_matrix_km2": [
+        [
+          177.827394,
+          0.737257,
+          1.207482,
+          100.049737
+        ],
+        [
+          6.25571,
+          20.272511,
+          3.586177,
+          51.104117
+        ],
+        [
+          0.830793,
+          0.088255,
+          19.184935,
+          1.674497
+        ],
+        [
+          15.968504,
+          12.556577,
+          15.752117,
+          102.67504
+        ]
+      ],
+      "largest_cell_difference_km2": 0.73136,
+      "overlap_pixels": 592039
+    },
+    "2015-2020": {
+      "local_planar_matrix_km2": [
+        [
+          173.178,
+          0.0441,
+          0.2691,
+          28.1232
+        ],
+        [
+          0.8442,
+          10.6785,
+          0.1764,
+          22.0554
+        ],
+        [
+          2.7288,
+          0.6534,
+          20.2878,
+          16.5852
+        ],
+        [
+          49.923,
+          2.7891,
+          1.7577,
+          202.7412
+        ]
+      ],
+      "archived_gee_matrix_km2": [
+        [
+          172.548244,
+          0.044128,
+          0.257766,
+          28.032263
+        ],
+        [
+          0.8429,
+          10.651266,
+          0.176509,
+          21.983925
+        ],
+        [
+          2.659763,
+          0.649753,
+          19.915633,
+          16.505561
+        ],
+        [
+          49.665701,
+          2.763516,
+          1.686196,
+          201.387979
+        ]
+      ],
+      "largest_cell_difference_km2": 1.353221,
+      "overlap_pixels": 592039
+    },
+    "2020-2025": {
+      "local_planar_matrix_km2": [
+        [
+          196.1937,
+          0.6336,
+          0.6615,
+          29.1852
+        ],
+        [
+          0.3978,
+          10.9737,
+          0.0954,
+          2.6982
+        ],
+        [
+          0.9261,
+          3.2967,
+          17.0235,
+          1.2447
+        ],
+        [
+          60.0021,
+          29.5803,
+          3.0609,
+          176.8617
+        ]
+      ],
+      "archived_gee_matrix_km2": [
+        [
+          195.368281,
+          0.62458,
+          0.653092,
+          29.070655
+        ],
+        [
+          0.398028,
+          10.932625,
+          0.094176,
+          2.683834
+        ],
+        [
+          0.911769,
+          3.281048,
+          16.599194,
+          1.244094
+        ],
+        [
+          59.694732,
+          29.431381,
+          3.042651,
+          175.740965
+        ]
+      ],
+      "largest_cell_difference_km2": 1.120735,
+      "overlap_pixels": 592039
+    }
+  },
+  "checks": {
+    "all_four_readable": true,
+    "identical_raster_dimensions": true,
+    "identical_grid_transform": true,
+    "identical_zero_background": true,
+    "basic_integrity": "PASS"
+  },
+  "problems": []
+}

@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Large geospatial datasets
+data/raw/*
+data/processed/*
+outputs/imagery/*
+outputs/lulc/*
+outputs/change/*
+
+# Keep directory structure
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!outputs/imagery/.gitkeep
+!outputs/lulc/.gitkeep
+!outputs/change/.gitkeep
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Environment/secrets
+.env
+.env.*
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

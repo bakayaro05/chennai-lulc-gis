@@ -1,0 +1,61 @@
+
+/*
+  Chennai LULC GIS — Stage 08
+  Option 2: Historical Satellite Timelapse
+*/
+
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin-bottom: 12px;
+}
+
+.mode-button {
+  min-width: 0;
+  padding: 10px 5px;
+  background: #1a3042;
+  border: 1px solid #365268;
+  border-radius: 7px;
+  color: #b7cbdc;
+  line-height: 1.3;
+  font-size: 10px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.mode-button:hover {
+  background: #28485b;
+}
+
+.mode-button.active {
+  color: white;
+  background: #147a78;
+  border-color: #55cdbb;
+}
+
+.mode-button:focus-visible {
+  outline: 2px solid #55cdbb;
+  outline-offset: 2px;
+}
+
+.historical-note {
+  margin: 12px 0 0;
+  padding: 10px 11px;
+  background: #222e36;
+  border-left: 3px solid #d5ad65;
+  color: #d9c9a6;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.segmented button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 360px) {
+  .mode-grid {
+    grid-template-columns: 1fr;
+  }
+}
