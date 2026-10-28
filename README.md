@@ -28,7 +28,7 @@ Core workstreams:
 2. **Four-class reporting:** A derived schema for comparing and displaying 2010, 2015, 2020 and 2025 maps, merging original classes 4 and 5 into a single reporting class.
 3. **Post-classification fusion:** Targeted built-up corrections supported by additional remote-sensing evidence, with original MLC outputs preserved separately.
 4. **Generalisability:** Apply a frozen Chennai 2020 five-class model to Thanjavur, then test season matching and unsupervised spectral alignment; screen three coastal cities against *automatic reference-product consensus*.
-5. **Visualization:** Export classification and historical true-colour layers intended for a separate FastAPI/React–Leaflet research prototype. **The application source has not yet been imported into this GitHub repository.**
+5. **Visualization:** Export classification and historical true-colour layers intended for a separate FastAPI/React–Leaflet research prototype. **The Stage 08 application source is now available in [app/](app/); its large raster inputs remain external.**
 
 ## Study design and data
 
@@ -123,7 +123,7 @@ Cuddalore (**57.9251%**), Nagapattinam (**82.9085%**) and Thoothukudi (**46.0861
 │       └── EXECUTION_ORDER.md
 ├── docs/                       # Full code manual, inventories, manifests, decisions
 ├── tools/                      # Reproducible archive scanner and curation verifier
-├── app/                        # Placeholder: FastAPI/React–Leaflet source not yet added
+├── app/                        # Imported Stage 08 FastAPI and React–Leaflet application
 ├── results/                    # Placeholder for small verified results / manifests
 └── README.md
 ```
@@ -157,7 +157,7 @@ The 62 selected files are **copies of the originals**, with `.js` suffixes added
 
 - This repository **does not contain** the Earth Engine-hosted training/reference assets or large source/output GeoTIFFs. Some required resources may need access permissions.
 - Some historical GEE scripts rely on manually drawn geometries and Code Editor imports that are **not embedded** in the source code.
-- The **FastAPI + React/Leaflet prototype** was developed separately. `app/` is presently only a placeholder, not a runnable application.
+- The **FastAPI + React/Leaflet prototype** was developed separately. `app/` contains the application source. Running it requires the local raster inputs and setup documented in [app/README.md](app/README.md).
 - **2005 final LULC**, automated end-to-end reruns, and live task-completion verification are **not claimed** here.
 
 ## Documentation, provenance and maintenance
