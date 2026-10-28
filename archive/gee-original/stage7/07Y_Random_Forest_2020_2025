@@ -1,0 +1,627 @@
+
+ // ============================================================================
+ // CHENNAI LULC — 07Y-2025 PAIRED RECONSTRUCTION
+ // Rebuild balanced points from saved 2025 MASTER POLYGONS (not original points).
+ // Compare Gaussian MLC versus Random Forest on the SAME reconstructed samples.
+ // Research diagnostic ONLY; not a reproduction of the original 83.67% test.
+ // No exports, no overwriting any assets.
+ // ============================================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+var GRID = ee.Projection('EPSG:32644', [30, 0, 399060, 0, -30, 1463250]);
+var CLASS_IDS = [1, 2, 3, 4, 5];
+var BANDS = ['blue','green','red','nir','swir1','swir2','NDVI','NDWI','NDBI'];
+
+var roi = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+).geometry();
+
+var trainingPolys = ee.FeatureCollection(
+  ROOT + 'chennai_training_polygons_2025_master'
+);
+
+var validationPolys = ee.FeatureCollection(
+  ROOT + 'chennai_validation_polygons_2025_master'
+);
+
+print('====================================================');
+print('07Y — 2025 RECONSTRUCTED PAIRED RF vs GAUSSIAN MLC');
+print('====================================================');
+
+print('Training polygon count:');
+print(trainingPolys.size());
+
+print('Validation polygon count:');
+print(validationPolys.size());
+
+print('Training polygon properties (must contain class_id):');
+print(trainingPolys.first().propertyNames());
+
+print('Validation polygon properties (must contain class_id):');
+print(validationPolys.first().propertyNames());
+
+print('Training polygon classes:');
+print(trainingPolys.aggregate_histogram('class_id'));
+
+print('Validation polygon classes:');
+print(validationPolys.aggregate_histogram('class_id'));
+
+// ============================================================
+// A. RECONSTRUCT THE 2025 LANDSAT 8 + 9 PREDICTOR STACK
+// ============================================================
+
+function prepareOLI(im) {
+
+  var qa = im.select('QA_PIXEL');
+  var sat = im.select('QA_RADSAT');
+
+  var clear = qa.bitwiseAnd(1).eq(0)
+    .and(qa.bitwiseAnd(1 << 1).eq(0))
+    .and(qa.bitwiseAnd(1 << 2).eq(0))
+    .and(qa.bitwiseAnd(1 << 3).eq(0))
+    .and(qa.bitwiseAnd(1 << 4).eq(0))
+    .and(qa.bitwiseAnd(1 << 5).eq(0))
+    .and(sat.eq(0));
+
+  return im.select(
+    ['SR_B2','SR_B3','SR_B4','SR_B5','SR_B6','SR_B7'],
+    ['blue','green','red','nir','swir1','swir2']
+  )
+  .multiply(0.0000275)
+  .add(-0.2)
+  .updateMask(clear);
+}
+
+function addIndices(im) {
+
+  var red = im.select('red');
+  var green = im.select('green');
+  var nir = im.select('nir');
+  var swir = im.select('swir1');
+
+  return im.addBands([
+    nir.subtract(red)
+      .divide(nir.add(red))
+      .rename('NDVI'),
+
+    green.subtract(nir)
+      .divide(green.add(nir))
+      .rename('NDWI'),
+
+    swir.subtract(nir)
+      .divide(swir.add(nir))
+      .rename('NDBI')
+  ]);
+}
+
+var l8 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+  .filterBounds(roi)
+  .filterDate('2025-01-01','2026-01-01');
+
+var l9 = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2')
+  .filterBounds(roi)
+  .filterDate('2025-01-01','2026-01-01');
+
+var stack = addIndices(
+  l8.merge(l9)
+    .map(prepareOLI)
+    .median()
+)
+.select(BANDS)
+.clip(roi);
+
+print('Landsat 8 scenes (expected 20):');
+print(l8.size());
+
+print('Landsat 9 scenes (expected 20):');
+print(l9.size());
+
+// ============================================================
+// B. GENERATE TRAINING AND VALIDATION PIXEL POOLS
+// ============================================================
+
+// Each sampled pixel retains the source polygon identifier.
+// Pixel coordinates identify duplicate pixel locations.
+
+function samplePool(polygons, label) {
+
+  var keyedPolys = polygons.map(function(f) {
+    return f.set(
+      'site_key',
+      ee.String(f.get('system:index'))
+    );
+  });
+
+  var bandsAndGrid = stack.addBands(
+    ee.Image.pixelCoordinates(GRID)
+      .rename(['grid_x','grid_y'])
+  );
+
+  return bandsAndGrid.sampleRegions({
+    collection: keyedPolys,
+    properties: ['class_id','site_key'],
+    projection: GRID,
+    scale: 30,
+    geometries: true,
+    tileScale: 8
+  })
+  .map(function(f) {
+
+    return f.set(
+      'grid_key',
+      ee.Number(f.get('grid_x'))
+        .format('%.0f')
+        .cat('_')
+        .cat(
+          ee.Number(f.get('grid_y'))
+            .format('%.0f')
+        )
+    );
+
+  })
+  .distinct(['grid_key']);
+}
+
+var trainingPool = samplePool(
+  trainingPolys,
+  'training'
+);
+
+var validationPool = samplePool(
+  validationPolys,
+  'validation'
+);
+
+print('Raw unique training-pixel counts by class:');
+print(trainingPool.aggregate_histogram('class_id'));
+
+print('Raw unique validation-pixel counts by class:');
+print(validationPool.aggregate_histogram('class_id'));
+
+// ============================================================
+// C. BALANCED SAMPLING
+// ============================================================
+
+// Approximate the original seeds:
+// Training = 42
+// Validation = 84
+//
+// This is a new paired comparison, not an exact reproduction
+// of the original 2025 sampling sequence.
+
+function takeByClass(pool, perClass, seed, randomName) {
+
+  var result = ee.FeatureCollection([]);
+
+  CLASS_IDS.forEach(function(c) {
+
+    result = result.merge(
+      pool
+        .filter(ee.Filter.eq('class_id', c))
+        .randomColumn(randomName, seed)
+        .sort(randomName)
+        .limit(perClass)
+    );
+
+  });
+
+  return result;
+}
+
+var training = takeByClass(
+  trainingPool,
+  120,
+  42,
+  'selection_random'
+);
+
+// ============================================================
+// D. EXCLUDE VALIDATION PIXELS CLOSE TO TRAINING
+// ============================================================
+
+// Remove validation candidates within 30 metres of any
+// selected training pixel.
+
+var validationCandidates = ee.FeatureCollection(
+
+  ee.Join.inverted().apply(
+
+    validationPool,
+
+    training,
+
+    ee.Filter.withinDistance({
+      distance: 30,
+      leftField: '.geo',
+      rightField: '.geo',
+      maxError: 1
+    })
+
+  )
+
+);
+
+var validation = takeByClass(
+  validationCandidates,
+  60,
+  84,
+  'selection_random'
+);
+
+print('====================================================');
+print('2025 BALANCED SAMPLE CHECKS');
+print('====================================================');
+
+print('Selected balanced training — expected 600:');
+print(training.size());
+
+print('Training by class — expected 120/class:');
+print(training.aggregate_histogram('class_id'));
+
+print('Validation eligible AFTER 30 m exclusion:');
+print(
+  validationCandidates.aggregate_histogram('class_id')
+);
+
+print('Selected validation — expected 300:');
+print(validation.size());
+
+print('Validation by class — expected 60/class:');
+print(validation.aggregate_histogram('class_id'));
+
+print('Number of source training polygon sites:');
+print(
+  training.aggregate_count_distinct('site_key')
+);
+
+// Important:
+// Interpret model accuracy only if:
+// 1. Training = 600
+// 2. Each training class = 120
+// 3. Validation = 300
+// 4. Each validation class = 60
+// 5. Historical polygon labels are valid.
+
+// ============================================================
+// E. RANDOM FOREST CLASSIFIER
+// ============================================================
+
+// Same settings as Stage 07X.
+
+function makeRF() {
+
+  return ee.Classifier.smileRandomForest({
+    numberOfTrees: 150,
+    variablesPerSplit: 3,
+    minLeafPopulation: 3,
+    bagFraction: 0.7,
+    seed: 20261013
+  });
+
+}
+
+var rf = makeRF().train({
+  features: training,
+  classProperty: 'class_id',
+  inputProperties: BANDS
+});
+
+var rfPred = validation.classify(
+  rf,
+  'classification'
+);
+
+var rfCM = rfPred.errorMatrix(
+  'class_id',
+  'classification',
+  CLASS_IDS
+);
+
+// ============================================================
+// F. TRUE GAUSSIAN MAXIMUM LIKELIHOOD CLASSIFIER
+// ============================================================
+
+// Nine-dimensional class-specific means and covariances.
+// Equal class priors.
+// Regularization = 1e-6 * identity matrix.
+
+var D = BANDS.length;
+
+function gaussianParams(c) {
+
+  var members = training.filter(
+    ee.Filter.eq('class_id', c)
+  );
+
+  var mu = ee.Array([
+    BANDS.map(function(b) {
+      return members.aggregate_mean(b);
+    })
+  ]).transpose();
+
+  var cov = ee.Array(
+    members.makeArray(BANDS, 'v')
+      .reduceColumns({
+        reducer: ee.Reducer.covariance()
+          .setOutputs(['covariance']),
+        selectors: ['v']
+      })
+      .get('covariance')
+  )
+  .add(
+    ee.Array.identity(D).multiply(1e-6)
+  );
+
+  return ee.Dictionary({
+    mean: mu,
+    inverse: cov.matrixInverse(),
+    determinant: cov.matrixDeterminant()
+  });
+
+}
+
+var x = stack.toArray().toArray(1);
+
+function score(params, name) {
+
+  params = ee.Dictionary(params);
+
+  var delta = x.subtract(
+    ee.Image.constant(
+      ee.Array(params.get('mean'))
+    )
+  );
+
+  var inv = ee.Image.constant(
+    ee.Array(params.get('inverse'))
+  );
+
+  var sq = delta
+    .arrayTranspose()
+    .matrixMultiply(inv)
+    .matrixMultiply(delta)
+    .arrayGet([0,0]);
+
+  var logDet = ee.Number(
+    params.get('determinant')
+  )
+  .max(1e-300)
+  .log();
+
+  return sq
+    .multiply(-0.5)
+    .add(
+      ee.Image.constant(logDet)
+        .multiply(-0.5)
+    )
+    .rename(name);
+}
+
+var scores = score(
+  gaussianParams(1), 's1'
+)
+.addBands(
+  score(gaussianParams(2), 's2')
+)
+.addBands(
+  score(gaussianParams(3), 's3')
+)
+.addBands(
+  score(gaussianParams(4), 's4')
+)
+.addBands(
+  score(gaussianParams(5), 's5')
+);
+
+var mlc = scores
+  .toArray()
+  .arrayArgmax()
+  .arrayGet([0])
+  .add(1)
+  .toInt8()
+  .rename('classification');
+
+// ============================================================
+// G. VALIDATE GAUSSIAN MLC
+// ============================================================
+
+var mlcPred = mlc.sampleRegions({
+  collection: validation,
+  properties: ['class_id'],
+  projection: GRID,
+  scale: 30,
+  geometries: false,
+  tileScale: 8
+});
+
+var mlcCM = mlcPred.errorMatrix(
+  'class_id',
+  'classification',
+  CLASS_IDS
+);
+
+// ============================================================
+// H. GROUPED RANDOM FOREST CROSS-VALIDATION
+// ============================================================
+
+// All pixels from one source training polygon remain
+// in the same fold.
+
+function withSiteFolds(c) {
+
+  var subset = training.filter(
+    ee.Filter.eq('class_id', c)
+  );
+
+  var sites = ee.List(
+    subset.aggregate_array('site_key')
+  )
+  .distinct()
+  .sort();
+
+  return subset.map(function(f) {
+
+    return f.set(
+      'site_fold',
+      ee.Number(
+        sites.indexOf(f.get('site_key'))
+      ).mod(5)
+    );
+
+  });
+
+}
+
+var folded = ee.FeatureCollection([]);
+
+CLASS_IDS.forEach(function(c) {
+
+  folded = folded.merge(
+    withSiteFolds(c)
+  );
+
+});
+
+var cvPred = ee.FeatureCollection(
+
+  ee.List.sequence(0,4).iterate(
+
+    function(v,acc) {
+
+      v = ee.Number(v);
+
+      var tr = folded.filter(
+        ee.Filter.neq('site_fold', v)
+      );
+
+      var te = folded.filter(
+        ee.Filter.eq('site_fold', v)
+      );
+
+      var model = makeRF().train({
+        features: tr,
+        classProperty: 'class_id',
+        inputProperties: BANDS
+      });
+
+      return ee.FeatureCollection(acc).merge(
+        te.classify(
+          model,
+          'classification'
+        )
+      );
+
+    },
+
+    ee.FeatureCollection([])
+
+  )
+
+);
+
+var cvCM = cvPred.errorMatrix(
+  'class_id',
+  'classification',
+  CLASS_IDS
+);
+
+// ============================================================
+// I. FINAL COMPARISON — CONSOLE
+// ============================================================
+
+print('====================================================');
+print('2025 PAIRED COMPARISON — NEWLY RECONSTRUCTED SAMPLES');
+print('====================================================');
+
+print('Gaussian MLC validation confusion matrix:');
+print(mlcCM);
+
+print('Gaussian MLC validation OA (%):');
+print(
+  ee.Number(
+    mlcCM.accuracy()
+  ).multiply(100)
+);
+
+print('Gaussian MLC producer accuracies:');
+print(mlcCM.producersAccuracy());
+
+print('RF validation confusion matrix:');
+print(rfCM);
+
+print('RF validation OA (%):');
+print(
+  ee.Number(
+    rfCM.accuracy()
+  ).multiply(100)
+);
+
+print('RF producer accuracies:');
+print(rfCM.producersAccuracy());
+
+print('RF reference Class 5 predicted classes:');
+print(
+  rfPred
+    .filter(ee.Filter.eq('class_id',5))
+    .aggregate_histogram('classification')
+);
+
+print('RF grouped fold counts:');
+print(
+  folded.aggregate_histogram('site_fold')
+);
+
+print('RF grouped CV sample count — expected 600:');
+print(cvPred.size());
+
+print('RF grouped site-held-out CV OA (%):');
+print(
+  ee.Number(
+    cvCM.accuracy()
+  ).multiply(100)
+);
+
+print('RF grouped CV confusion matrix:');
+print(cvCM);
+
+print('Original 2025 MLC OA = 83.67%, DIFFERENT test samples.');
+print('Do not compare that number directly with this reconstructed test.');
+
+print('No exports; no assets modified.');
+
+// ============================================================
+// J. MAP — 2025 LANDSAT COMPOSITE
+// ============================================================
+
+Map.layers().reset();
+Map.centerObject(roi, 10);
+
+Map.addLayer(
+  stack.select(['red','green','blue']),
+  {
+    min: 0.02,
+    max: 0.30
+  },
+  '2025 Landsat composite',
+  true
+);
+
+// ============================================================
+// END STAGE 07Y
+// ============================================================
+
+var consistencyCheck = ee.Dictionary({
+  mlc_matrix: mlcCM.array().toList(),
+  mlc_validation_count: mlcPred.size(),
+  mlc_accuracy_percent:
+    ee.Number(mlcCM.accuracy()).multiply(100),
+  mlc_producer_accuracy: mlcCM.producersAccuracy(),
+
+  rf_matrix: rfCM.array().toList(),
+  rf_validation_count: rfPred.size(),
+  rf_accuracy_percent:
+    ee.Number(rfCM.accuracy()).multiply(100),
+  rf_producer_accuracy: rfCM.producersAccuracy()
+});
+
+print(consistencyCheck);

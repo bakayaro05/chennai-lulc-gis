@@ -1,0 +1,631 @@
+
+ // ====================================================================
+ // CHENNAI LULC — STAGE 07V
+ // SPATIAL + TEMPORAL GAUSSIAN MLC EXPERIMENT
+ // 2015 FIRST, THEN 2010.
+ // READ-ONLY. NO EXPORTS OR MODIFICATION OF EXISTING ASSETS.
+ // ====================================================================
+
+ var TEST_YEAR = 2010;
+
+ var ROOT = 'projects/assignment-482806/assets/';
+ var CRS = 'EPSG:32644';
+ var TRANSFORM = [30, 0, 399060, 0, -30, 1463250];
+ var GRID = ee.Projection(CRS, TRANSFORM);
+ var SCALE = 30;
+ var CLASS_IDS = [1, 2, 3, 4, 5];
+
+ var BASE = [
+   'blue', 'green', 'red',
+   'nir', 'swir1', 'swir2',
+   'NDVI', 'NDWI', 'NDBI'
+ ];
+
+ var EXTRA = [
+   'NDVI_nb3_mean', 'NDBI_nb3_mean',
+   'NDVI_nb3_sd', 'NDBI_nb3_sd',
+   'NDVI_time_sd', 'NDBI_time_sd'
+ ];
+
+ var PREDICTORS = BASE.concat(EXTRA);
+ var D = PREDICTORS.length;
+
+ var ROI = ee.FeatureCollection(
+   ROOT + 'chennai_admin_study_area_clean'
+ ).geometry();
+
+ // ================================================================
+ // A. LOAD ORIGINAL TRAINING, VALIDATION AND CLASSIFICATIONS
+ // ================================================================
+
+ var is2015 = (TEST_YEAR === 2015);
+
+ var training = ee.FeatureCollection(ROOT + (
+   is2015
+     ? 'chennai_training_2015_final'
+     : 'chennai_training_2010_L5L7_manual_exp_v1'
+ ));
+
+ var validation = ee.FeatureCollection(ROOT + (
+   is2015
+     ? 'chennai_validation_2015_final'
+     : 'chennai_validation_2010_final'
+ ));
+
+ var originalMap = ee.Image(ROOT + (
+   is2015
+     ? 'chennai_mlc_lulc_2015'
+     : 'chennai_mlc_lulc_2010_L5L7_manual_exp_v1'
+ )).select('classification');
+
+ // ================================================================
+ // B. LANDSAT PREPROCESSING
+ // ================================================================
+
+ function prepareSR(img, isOLI) {
+
+   var qa = img.select('QA_PIXEL');
+   var sat = img.select('QA_RADSAT');
+
+   var clear = qa.bitwiseAnd(1 << 0).eq(0)
+     .and(qa.bitwiseAnd(1 << 1).eq(0))
+     .and(qa.bitwiseAnd(1 << 3).eq(0))
+     .and(qa.bitwiseAnd(1 << 4).eq(0))
+     .and(qa.bitwiseAnd(1 << 5).eq(0))
+     .and(sat.eq(0));
+
+   if (isOLI) {
+     clear = clear.and(
+       qa.bitwiseAnd(1 << 2).eq(0)
+     );
+   }
+
+   // QA_RADSAT == 0 also removes L7 dropped pixels.
+
+   var inputBands = isOLI
+     ? [
+         'SR_B2', 'SR_B3', 'SR_B4',
+         'SR_B5', 'SR_B6', 'SR_B7'
+       ]
+     : [
+         'SR_B1', 'SR_B2', 'SR_B3',
+         'SR_B4', 'SR_B5', 'SR_B7'
+       ];
+
+   return img.select(
+     inputBands,
+     ['blue', 'green', 'red',
+      'nir', 'swir1', 'swir2']
+   )
+   .multiply(0.0000275)
+   .add(-0.2)
+   .updateMask(clear);
+ }
+
+ function addAllIndices(img) {
+
+   var green = img.select('green');
+   var red = img.select('red');
+   var nir = img.select('nir');
+   var swir = img.select('swir1');
+
+   return img.addBands([
+
+     nir.subtract(red)
+       .divide(nir.add(red))
+       .rename('NDVI'),
+
+     green.subtract(nir)
+       .divide(green.add(nir))
+       .rename('NDWI'),
+
+     swir.subtract(nir)
+       .divide(swir.add(nir))
+       .rename('NDBI')
+
+   ]);
+ }
+
+ var start = TEST_YEAR + '-01-01';
+ var end = (TEST_YEAR + 1) + '-01-01';
+
+ var l5 = ee.ImageCollection(
+   'LANDSAT/LT05/C02/T1_L2'
+ )
+ .filterBounds(ROI)
+ .filterDate(start, end);
+
+ var l7 = ee.ImageCollection(
+   'LANDSAT/LE07/C02/T1_L2'
+ )
+ .filterBounds(ROI)
+ .filterDate(start, end);
+
+ var l8 = ee.ImageCollection(
+   'LANDSAT/LC08/C02/T1_L2'
+ )
+ .filterBounds(ROI)
+ .filterDate(start, end);
+
+ var observations = is2015
+
+   ? l8.map(function(im) {
+       return addAllIndices(
+         prepareSR(im, true)
+       );
+     })
+
+   : l5.map(function(im) {
+       return addAllIndices(
+         prepareSR(im, false)
+       );
+     })
+     .merge(
+       l7.map(function(im) {
+         return addAllIndices(
+           prepareSR(im, false)
+         );
+       })
+     );
+
+ // Use saved 2010 nine-band stack.
+ // Reconstruct 2015 using its verified 07U2 method.
+
+ var baseline = is2015
+
+   ? addAllIndices(
+       observations.select([
+         'blue', 'green', 'red',
+         'nir', 'swir1', 'swir2'
+       ]).median()
+     ).select(BASE).clip(ROI)
+
+   : ee.Image(
+       ROOT + 'chennai_predictor_stack_2010_L5L7_exp_v1'
+     ).select(BASE);
+
+ baseline = baseline.reproject(GRID);
+
+ // ================================================================
+ // C. SPATIAL FEATURES — 3x3 PIXEL NEIGHBOURHOOD
+ // ================================================================
+
+ var kernel = ee.Kernel.square({
+   radius: 1,
+   units: 'pixels',
+   normalize: false
+ });
+
+ var twoIndices = baseline.select([
+   'NDVI', 'NDBI'
+ ]);
+
+ var spatialMeans = twoIndices.reduceNeighborhood({
+   reducer: ee.Reducer.mean(),
+   kernel: kernel
+ }).rename([
+   'NDVI_nb3_mean',
+   'NDBI_nb3_mean'
+ ]);
+
+ var spatialSD = twoIndices.reduceNeighborhood({
+   reducer: ee.Reducer.stdDev(),
+   kernel: kernel
+ }).rename([
+   'NDVI_nb3_sd',
+   'NDBI_nb3_sd'
+ ]);
+
+ // ================================================================
+ // D. TEMPORAL FEATURES — ANNUAL SPECTRAL VARIABILITY
+ // ================================================================
+
+ var temporalCollection = observations.select([
+   'NDVI', 'NDBI'
+ ]);
+
+ var temporalSD = temporalCollection.reduce(
+   ee.Reducer.stdDev(),
+   4
+ ).rename([
+   'NDVI_time_sd',
+   'NDBI_time_sd'
+ ]);
+
+ var obsCount = temporalCollection
+   .select('NDVI')
+   .count()
+   .unmask(0)
+   .rename('clear_obs');
+
+ // For rare pixels without enough observations, the temporal
+ // standard deviation is set to 0. We separately report the
+ // number of poorly observed validation locations.
+
+ var enriched = baseline
+   .addBands(spatialMeans)
+   .addBands(spatialSD)
+   .addBands(temporalSD.unmask(0))
+   .addBands(obsCount)
+   .select(
+     PREDICTORS.concat(['clear_obs'])
+   );
+
+ // ================================================================
+ // E. RE-EXTRACT TRAINING AND VALIDATION DATA
+ // ================================================================
+
+ var train15 = enriched.sampleRegions({
+   collection: training,
+   properties: ['class_id', 'poly_id'],
+   projection: GRID,
+   scale: SCALE,
+   geometries: false,
+   tileScale: 8
+ });
+
+ var val15 = enriched.sampleRegions({
+   collection: validation,
+   properties: ['class_id'],
+   projection: GRID,
+   scale: SCALE,
+   geometries: false,
+   tileScale: 8
+ });
+
+ // Verify that original spectral predictors have not changed.
+
+ var archiveTest = baseline
+   .select(['red', 'NDVI'])
+   .sampleRegions({
+
+     collection: training.map(function(f) {
+       return f
+         .set('arch_red', f.get('red'))
+         .set('arch_NDVI', f.get('NDVI'));
+     }),
+
+     properties: [
+       'arch_red',
+       'arch_NDVI'
+     ],
+
+     projection: GRID,
+     scale: SCALE,
+     geometries: false,
+     tileScale: 8
+
+   })
+   .map(function(f) {
+
+     return f
+
+       .set(
+         'red_err',
+         ee.Number(f.get('red'))
+           .subtract(
+             ee.Number(f.get('arch_red'))
+           )
+           .abs()
+       )
+
+       .set(
+         'ndvi_err',
+         ee.Number(f.get('NDVI'))
+           .subtract(
+             ee.Number(f.get('arch_NDVI'))
+           )
+           .abs()
+       );
+
+   });
+
+ // ================================================================
+ // F. PREFLIGHT CONSOLE
+ // ================================================================
+
+ print('====================================================');
+ print('STAGE 07V — SPATIAL + TEMPORAL MLC');
+ print('====================================================');
+
+ print('Selected year:');
+ print(TEST_YEAR);
+
+ print('Landsat 5 scenes:');
+ print(is2015 ? 0 : l5.size());
+
+ print('Landsat 7 scenes:');
+ print(is2015 ? 0 : l7.size());
+
+ print('Landsat 8 scenes:');
+ print(is2015 ? l8.size() : 0);
+
+ print('Predictor bands — expected 15:');
+ print(PREDICTORS);
+
+ print('Original training points — expected 600:');
+ print(training.size());
+
+ print('Original validation points — expected 300:');
+ print(validation.size());
+
+ print('Re-extracted training — expected 600:');
+ print(train15.size());
+
+ print('Re-extracted validation — expected 300:');
+ print(val15.size());
+
+ print('Training counts by class — expected 120 each:');
+ print(train15.aggregate_histogram('class_id'));
+
+ print('Validation counts by class — expected 60 each:');
+ print(val15.aggregate_histogram('class_id'));
+
+ print('Archive matching sample count — expected 600:');
+ print(archiveTest.size());
+
+ print('Maximum red band difference — expected near zero:');
+ print(archiveTest.aggregate_max('red_err'));
+
+ print('Maximum NDVI difference — expected near zero:');
+ print(archiveTest.aggregate_max('ndvi_err'));
+
+ print('Mean clear observations at training points:');
+ print(train15.aggregate_mean('clear_obs'));
+
+ print('Mean clear observations at validation points:');
+ print(val15.aggregate_mean('clear_obs'));
+
+ print('Validation points with fewer than 3 observations:');
+ print(
+   val15.filter(
+     ee.Filter.lt('clear_obs', 3)
+   ).size()
+ );
+
+ // ================================================================
+ // G. ACTUAL 15-DIMENSIONAL GAUSSIAN MLC
+ // ================================================================
+
+ function parametersFor(classId) {
+
+   var members = train15.filter(
+     ee.Filter.eq('class_id', classId)
+   );
+
+   var mean = ee.Array([
+
+     PREDICTORS.map(function(b) {
+       return members.aggregate_mean(b);
+     })
+
+   ]).transpose();
+
+   var covariance = ee.Array(
+
+     members.makeArray(
+       PREDICTORS,
+       'features_array'
+     )
+     .reduceColumns({
+
+       reducer: ee.Reducer.covariance()
+         .setOutputs(['covariance']),
+
+       selectors: ['features_array']
+
+     })
+     .get('covariance')
+
+   )
+   .add(
+     ee.Array.identity(D).multiply(1e-6)
+   );
+
+   return ee.Dictionary({
+     mean: mean,
+     inverse: covariance.matrixInverse(),
+     determinant: covariance.matrixDeterminant()
+   });
+ }
+
+ var x = enriched
+   .select(PREDICTORS)
+   .toArray()
+   .toArray(1);
+
+ function gaussianScore(params, outputBand) {
+
+   params = ee.Dictionary(params);
+
+   var mu = ee.Image.constant(
+     ee.Array(params.get('mean'))
+   );
+
+   var inverse = ee.Image.constant(
+     ee.Array(params.get('inverse'))
+   );
+
+   var determinant = ee.Number(
+     params.get('determinant')
+   ).max(1e-300);
+
+   var delta = x.subtract(mu);
+
+   var mahalanobis = delta
+     .arrayTranspose()
+     .matrixMultiply(inverse)
+     .matrixMultiply(delta)
+     .arrayGet([0, 0]);
+
+   return mahalanobis
+     .multiply(-0.5)
+     .add(
+       ee.Image.constant(
+         determinant.log()
+       ).multiply(-0.5)
+     )
+     .rename(outputBand);
+
+ }
+
+ var scoreStack = gaussianScore(
+   parametersFor(1), 'score_1'
+ )
+ .addBands(
+   gaussianScore(parametersFor(2), 'score_2')
+ )
+ .addBands(
+   gaussianScore(parametersFor(3), 'score_3')
+ )
+ .addBands(
+   gaussianScore(parametersFor(4), 'score_4')
+ )
+ .addBands(
+   gaussianScore(parametersFor(5), 'score_5')
+ );
+
+ var experimentalMLC = scoreStack
+   .toArray()
+   .arrayArgmax()
+   .arrayGet([0])
+   .add(1)
+   .toInt8()
+   .rename('classification');
+
+ // ================================================================
+ // H. DEVELOPMENT VALIDATION
+ // ================================================================
+
+ var predictedValidation = experimentalMLC.sampleRegions({
+
+   collection: validation,
+   properties: ['class_id'],
+
+   projection: GRID,
+   scale: SCALE,
+
+   geometries: false,
+   tileScale: 8
+
+ });
+
+ var cm = predictedValidation.errorMatrix(
+   'class_id',
+   'classification',
+   CLASS_IDS
+ );
+
+ var builtTruth = predictedValidation.filter(
+   ee.Filter.eq('class_id', 1)
+ );
+
+ var vacantTruth = predictedValidation.filter(
+   ee.Filter.eq('class_id', 5)
+ );
+
+ print('====================================================');
+ print('STAGE 07V — ENHANCED MODEL VALIDATION');
+ print('====================================================');
+
+ print('Predicted validation count — expected 300:');
+ print(predictedValidation.size());
+
+ print('15-band Gaussian MLC confusion matrix:');
+ print(cm);
+
+ print('Overall accuracy (%) — development comparison:');
+ print(
+   ee.Number(cm.accuracy()).multiply(100)
+ );
+
+ print('Kappa:');
+ print(cm.kappa());
+
+ print('Producer accuracies — classes 1 to 5:');
+ print(cm.producersAccuracy());
+
+ print('User accuracies — classes 1 to 5:');
+ print(cm.consumersAccuracy());
+
+ print('Actual Built-up → predicted classes:');
+ print(
+   builtTruth.aggregate_histogram(
+     'classification'
+   )
+ );
+
+ print('Actual Vacant/Open → predicted classes:');
+ print(
+   vacantTruth.aggregate_histogram(
+     'classification'
+   )
+ );
+
+ print('Original model overall accuracy (%):');
+ print(
+   is2015
+     ? 85.66666666666667
+     : 69.33333333333333
+ );
+
+ // ================================================================
+ // I. MAP DISPLAY — NO FULL-SCALE CLASSIFICATION EXPORT
+ // ================================================================
+
+ Map.layers().reset();
+ Map.centerObject(ROI, 10);
+
+ Map.addLayer(
+   originalMap,
+   {
+     min: 1,
+     max: 5,
+     palette: [
+       'ff0000',
+       '008000',
+       '0000ff',
+       'ffff00',
+       'd2b48c'
+     ]
+   },
+   TEST_YEAR + ' ORIGINAL MLC',
+   true
+ );
+
+ Map.addLayer(
+   enriched.select('NDVI_nb3_sd'),
+   {
+     min: 0,
+     max: 0.25,
+     palette: [
+       'ffffff',
+       'ffff00',
+       'ff0000'
+     ]
+   },
+   TEST_YEAR + ' Spatial NDVI texture',
+   false
+ );
+
+ Map.addLayer(
+   enriched.select('NDVI_time_sd'),
+   {
+     min: 0,
+     max: 0.30,
+     palette: [
+       'ffffff',
+       '66cc66',
+       '003300'
+     ]
+   },
+   TEST_YEAR + ' Temporal NDVI variation',
+   false
+ );
+
+ print('====================================================');
+ print('END 07V — EXPERIMENT ONLY');
+ print('No classification export created.');
+ print('Original assets are unchanged.');
+ print('Change TEST_YEAR and run the other year.');
+ print('====================================================');

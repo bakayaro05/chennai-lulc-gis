@@ -1,0 +1,1217 @@
+// ============================================================================
+// 06D4 — 2010 V2B CORRECTION
+// REMOVE REJECTED VEGETATION POLY 16 + REPLACE WITH 4 CLEAN POLY 25 PIXELS
+// ============================================================================
+//
+// IMPORTANT
+// ---------
+// Current V2 asset is NOT overwritten.
+//
+// CURRENT V2 rollback asset:
+// projects/assignment-482806/assets/chennai_training_2010_final_v2
+//
+// NEW corrected asset:
+// projects/assignment-482806/assets/chennai_training_2010_final_v2b_corrected
+//
+// AUTHORITATIVE VEGETATION LEDGER:
+//   ACCEPT: 17, 25, 26
+//   REJECT: 16
+//
+// We remove the 4 class-2 / poly-16 pixels and replace them with
+// 4 independent class-2 / poly-25 historical training-side candidates.
+//
+// QA + one export task.
+// DO NOT START EXPORT UNTIL QA IS REVIEWED.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 1. CONSTANTS
+// ============================================================================
+
+var CRS = 'EPSG:32644';
+var SCALE = 30;
+var EXCLUSION_M = 30;
+
+var PROJ =
+  ee.Projection(CRS)
+    .atScale(SCALE);
+
+var PREDICTORS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+
+// ============================================================================
+// 2. ASSETS
+// ============================================================================
+
+var CURRENT_V2_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final_v2';
+
+var PASSB_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+var VALIDATION_ASSET =
+  'projects/assignment-482806/assets/chennai_validation_2010_final';
+
+var OUTPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final_v2b_corrected';
+
+
+// ============================================================================
+// 3. LOAD
+// ============================================================================
+
+var currentV2 =
+  ee.FeatureCollection(
+    CURRENT_V2_ASSET
+  );
+
+var passB =
+  ee.FeatureCollection(
+    PASSB_ASSET
+  );
+
+var stack =
+  ee.Image(
+    STACK_ASSET
+  );
+
+var validation =
+  ee.FeatureCollection(
+    VALIDATION_ASSET
+  );
+
+
+// ============================================================================
+// 4. AUTHORITATIVE GRID IMAGE
+// ============================================================================
+
+var coords =
+  ee.Image.pixelCoordinates(
+    PROJ
+  )
+  .rename([
+    'px',
+    'py'
+  ]);
+
+var samplingImage =
+  stack
+    .select(
+      PREDICTORS.concat([
+        'clear_count'
+      ])
+    )
+    .addBands(
+      coords
+    );
+
+
+// ============================================================================
+// 5. PIXEL KEY HELPER
+// ============================================================================
+
+function addPixelKey(feature) {
+
+  feature =
+    ee.Feature(feature);
+
+  var px =
+    ee.Number(
+      feature.get('px')
+    )
+    .format('%.6f');
+
+  var py =
+    ee.Number(
+      feature.get('py')
+    )
+    .format('%.6f');
+
+  var classId =
+    ee.Number(
+      feature.get('class_id')
+    )
+    .int();
+
+  var pixelKey =
+    px
+      .cat('_')
+      .cat(py);
+
+  var pixelClassKey =
+    classId
+      .format('%d')
+      .cat('_')
+      .cat(pixelKey);
+
+  return feature.set({
+
+    auth_pixel_key:
+      pixelKey,
+
+    pixel_class_key:
+      pixelClassKey
+
+  });
+
+}
+
+
+// ============================================================================
+// 6. IDENTIFY THE FOUR INCORRECT POLY-16 VEGETATION POINTS
+// ============================================================================
+
+var rejectedVeg16 =
+  currentV2
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        2
+      )
+    )
+
+    .filter(
+      ee.Filter.eq(
+        'poly_id',
+        16
+      )
+    );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D4 — REJECTED VEGETATION POLY 16 CHECK'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    rejected_veg16_rows_in_current_v2:
+      rejectedVeg16.size(),
+
+    expected:
+      4
+
+  })
+);
+
+
+// ============================================================================
+// 7. REMOVE REJECTED VEGETATION POLY 16 FROM CURRENT V2
+// ============================================================================
+//
+// Keep:
+//
+// 1. Every NON-vegetation training point
+// 2. Vegetation points ONLY when poly_id != 16
+//
+// This explicitly removes:
+// class_id = 2 AND poly_id = 16
+//
+// ============================================================================
+
+
+// All classes except Vegetation
+var nonVegetation =
+  currentV2.filter(
+    ee.Filter.neq(
+      'class_id',
+      2
+    )
+  );
+
+
+// Vegetation, excluding rejected polygon 16
+var vegetationWithout16 =
+  currentV2
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        2
+      )
+    )
+
+    .filter(
+      ee.Filter.neq(
+        'poly_id',
+        16
+      )
+    );
+
+
+// Merge them back together
+var retainedV2 =
+  nonVegetation
+    .merge(
+      vegetationWithout16
+    );
+
+// ============================================================================
+// 8. PREPARE ACCEPTED VEGETATION POLY 25 CANDIDATES
+// ============================================================================
+//
+// We deliberately use poly 25 rather than poly 26 because poly 26 already
+// contributes substantially more Vegetation pixels.
+//
+// ============================================================================
+
+var veg25Source =
+  passB
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        2
+      )
+    )
+
+    .filter(
+      ee.Filter.eq(
+        'poly_id',
+        25
+      )
+    )
+
+    .map(
+      function(feature) {
+
+        return ee.Feature(feature).set({
+
+          class_id:
+            2,
+
+          class_name:
+            'Vegetation',
+
+          poly_id:
+            25,
+
+          correction_source:
+            '05C1_passB_poly25'
+
+        });
+
+      }
+    );
+
+
+// ============================================================================
+// 9. RE-SAMPLE POLY 25 ON AUTHORITATIVE 2010 STACK
+// ============================================================================
+
+var veg25Sampled =
+  samplingImage.sampleRegions({
+
+    collection:
+      veg25Source,
+
+    properties: [
+      'class_id',
+      'class_name',
+      'poly_id',
+      'correction_source'
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      PROJ,
+
+    geometries:
+      true,
+
+    tileScale:
+      8
+
+  })
+
+  .filter(
+    ee.Filter.gte(
+      'clear_count',
+      2
+    )
+  )
+
+  .map(
+    addPixelKey
+  )
+
+  .distinct([
+    'pixel_class_key'
+  ]);
+
+
+// ============================================================================
+// 10. REMOVE ANY PIXELS ALREADY USED IN RETAINED V2
+// ============================================================================
+
+var pixelMatch =
+  ee.Filter.equals({
+
+    leftField:
+      'auth_pixel_key',
+
+    rightField:
+      'auth_pixel_key'
+
+  });
+
+
+var notAlreadyTraining =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      veg25Sampled,
+
+      retainedV2,
+
+      pixelMatch
+
+    )
+
+  );
+
+
+// ============================================================================
+// 11. APPLY 30 m VALIDATION EXCLUSION
+// ============================================================================
+
+var within30m =
+  ee.Filter.withinDistance({
+
+    distance:
+      EXCLUSION_M,
+
+    leftField:
+      '.geo',
+
+    rightField:
+      '.geo',
+
+    maxError:
+      1
+
+  });
+
+
+var eligibleVeg25 =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      notAlreadyTraining,
+
+      validation,
+
+      within30m
+
+    )
+
+  );
+
+
+// ============================================================================
+// 12. CANDIDATE QA
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D4 — REPLACEMENT CANDIDATE QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    raw_poly25_source_rows:
+      veg25Source.size(),
+
+    clear_unique_poly25_pixels:
+      veg25Sampled.size(),
+
+    after_removing_existing_training:
+      notAlreadyTraining.size(),
+
+    after_30m_validation_exclusion:
+      eligibleVeg25.size(),
+
+    required_replacements:
+      4
+
+  })
+);
+
+
+// ============================================================================
+// 13. SELECT EXACTLY FOUR REPLACEMENTS
+// ============================================================================
+
+var replacements =
+  eligibleVeg25
+
+    .randomColumn(
+      'correction_random',
+      62504
+    )
+
+    .sort(
+      'correction_random'
+    )
+
+    .limit(
+      4
+    )
+
+    .map(
+      function(feature) {
+
+        return ee.Feature(feature).set({
+
+          class_id:
+            2,
+
+          class_name:
+            'Vegetation',
+
+          poly_id:
+            25,
+
+          training_year:
+            2010,
+
+          training_version:
+            'V2B_corrected_veg16_rejected',
+
+          validation_exclusion_m:
+            EXCLUSION_M,
+
+          selection_role:
+            'historical_reuse_fill_correction',
+
+          reuse_asset:
+            '05C1_passB',
+
+          correction_note:
+            'Replaces rejected Vegetation poly 16'
+
+        });
+
+      }
+    );
+
+
+print(
+  'Selected replacement count — EXPECT 4'
+);
+
+print(
+  replacements.size()
+);
+
+
+// ============================================================================
+// 14. UPDATE VERSION LABEL ON RETAINED POINTS
+// ============================================================================
+
+var retainedUpdated =
+  retainedV2.map(
+    function(feature) {
+
+      return ee.Feature(feature).set({
+
+        training_version:
+          'V2B_corrected_veg16_rejected'
+
+      });
+
+    }
+  );
+
+
+// ============================================================================
+// 15. BUILD CORRECTED FINAL TRAINING SET
+// ============================================================================
+
+var correctedTraining =
+  retainedUpdated
+    .merge(
+      replacements
+    );
+
+
+// ============================================================================
+// 16. FINAL CLASS COUNTS
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D4 — CORRECTED FINAL CLASS COUNTS'
+);
+
+print(
+  '========================================'
+);
+
+
+[1, 2, 3, 4, 5].forEach(
+  function(classId) {
+
+    var n =
+      correctedTraining
+
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+
+        .size();
+
+
+    print(
+
+      ee.String(
+        'Class '
+      )
+
+      .cat(
+        String(classId)
+      )
+
+      .cat(
+        ' = '
+      )
+
+      .cat(
+        n.format('%d')
+      )
+
+    );
+
+  }
+);
+
+
+print(
+  ee.String('TOTAL = ')
+    .cat(
+      correctedTraining
+        .size()
+        .format('%d')
+    )
+);
+
+
+// ============================================================================
+// 17. CRITICAL VEGETATION LEDGER QA
+// ============================================================================
+
+var finalVegetation =
+  correctedTraining.filter(
+    ee.Filter.eq(
+      'class_id',
+      2
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D4 — VEGETATION LEDGER QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    vegetation_total:
+      finalVegetation.size(),
+
+    poly16_REJECTED_remaining:
+      finalVegetation
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            16
+          )
+        )
+        .size(),
+
+    poly17_n:
+      finalVegetation
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            17
+          )
+        )
+        .size(),
+
+    poly25_n:
+      finalVegetation
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            25
+          )
+        )
+        .size(),
+
+    poly26_n:
+      finalVegetation
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            26
+          )
+        )
+        .size()
+
+  })
+);
+
+
+// ============================================================================
+// 18. DUPLICATE / CROSS-CLASS CONFLICT QA
+// ============================================================================
+
+var uniqueClassPixels =
+  correctedTraining.distinct([
+    'pixel_class_key'
+  ]);
+
+var uniqueSpatialPixels =
+  correctedTraining.distinct([
+    'auth_pixel_key'
+  ]);
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D4 — PIXEL INTEGRITY QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    final_rows:
+      correctedTraining.size(),
+
+    unique_class_pixels:
+      uniqueClassPixels.size(),
+
+    unique_spatial_pixels:
+      uniqueSpatialPixels.size(),
+
+    duplicate_same_class_rows:
+      ee.Number(
+        correctedTraining.size()
+      )
+      .subtract(
+        uniqueClassPixels.size()
+      ),
+
+    cross_class_conflict_excess:
+      ee.Number(
+        uniqueClassPixels.size()
+      )
+      .subtract(
+        uniqueSpatialPixels.size()
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 19. FINAL 30 m VALIDATION-INDEPENDENCE CHECK
+// ============================================================================
+
+var independentFinal =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      correctedTraining,
+
+      validation,
+
+      within30m
+
+    )
+
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D4 — VALIDATION INDEPENDENCE QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    final_training:
+      correctedTraining.size(),
+
+    surviving_30m_exclusion:
+      independentFinal.size(),
+
+    within_30m_of_validation:
+      ee.Number(
+        correctedTraining.size()
+      )
+      .subtract(
+        independentFinal.size()
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 20. PREDICTOR COMPLETENESS + CLEAR COUNT
+// ============================================================================
+
+var complete =
+  correctedTraining.filter(
+    ee.Filter.notNull(
+      PREDICTORS.concat([
+        'clear_count'
+      ])
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D4 — ATTRIBUTE QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    predictor_complete:
+      complete.size(),
+
+    expected:
+      600,
+
+    minimum_clear_count:
+      correctedTraining.aggregate_min(
+        'clear_count'
+      ),
+
+    maximum_clear_count:
+      correctedTraining.aggregate_max(
+        'clear_count'
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 21. VERSION CONTROL
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  'VERSION CONTROL'
+);
+
+print(
+  'Current V2 remains untouched:'
+);
+
+print(
+  CURRENT_V2_ASSET
+);
+
+print(
+  'Corrected V2B will export to:'
+);
+
+print(
+  OUTPUT_ASSET
+);
+
+print(
+  '========================================'
+);
+
+
+
+// ============================================================================
+// DIAGNOSTIC — FIND EXACT SOURCE OF THE 3 VALIDATION PROXIMITY VIOLATIONS
+// ============================================================================
+
+function getOverlappingTraining(leftCollection, label) {
+
+  var pairs =
+    ee.FeatureCollection(
+      ee.Join.inner().apply(
+        leftCollection,
+        validation,
+        within30m
+      )
+    );
+
+  var trainingPoints =
+    ee.FeatureCollection(
+      pairs.map(
+        function(pair) {
+
+          pair =
+            ee.Feature(pair);
+
+          var trainingFeature =
+            ee.Feature(
+              pair.get('primary')
+            );
+
+          var validationFeature =
+            ee.Feature(
+              pair.get('secondary')
+            );
+
+          return trainingFeature.set({
+
+            overlap_test_group:
+              label,
+
+            nearby_validation_class:
+              validationFeature.get('class_id'),
+
+            nearby_validation_index:
+              validationFeature.get('system:index')
+
+          });
+
+        }
+      )
+    );
+
+  // One training point could theoretically be close to >1 validation point,
+  // so reduce to unique training pixels.
+  return trainingPoints.distinct([
+    'auth_pixel_key'
+  ]);
+}
+
+
+// --------------------------------------------------------------------------
+// Test the ORIGINAL materialized V2 asset
+// --------------------------------------------------------------------------
+
+var overlapCurrentV2 =
+  getOverlappingTraining(
+    currentV2,
+    'current_V2'
+  );
+
+
+// --------------------------------------------------------------------------
+// Test the 596 retained points after removing rejected Vegetation poly 16
+// --------------------------------------------------------------------------
+
+var overlapRetained =
+  getOverlappingTraining(
+    retainedUpdated,
+    'retained_596'
+  );
+
+
+// --------------------------------------------------------------------------
+// Test ONLY the four newly selected Vegetation replacements
+// --------------------------------------------------------------------------
+
+var overlapReplacements =
+  getOverlappingTraining(
+    replacements,
+    'new_veg25_replacements'
+  );
+
+
+// --------------------------------------------------------------------------
+// Test corrected final 600
+// --------------------------------------------------------------------------
+
+var overlapCorrected =
+  getOverlappingTraining(
+    correctedTraining,
+    'corrected_final_600'
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D4A — SOURCE OF VALIDATION PROXIMITY ISSUE'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    current_V2_overlap_n:
+      overlapCurrentV2.size(),
+
+    retained_596_overlap_n:
+      overlapRetained.size(),
+
+    new_replacement_overlap_n:
+      overlapReplacements.size(),
+
+    corrected_final_overlap_n:
+      overlapCorrected.size()
+
+  })
+);
+
+
+// ============================================================================
+// PRINT THE ACTUAL OFFENDING TRAINING POINTS
+// ============================================================================
+
+print(
+  'OVERLAPPING POINTS FROM CURRENT V2'
+);
+
+print(
+  overlapCurrentV2.select([
+    'class_id',
+    'poly_id',
+    'selection_role',
+    'reuse_asset',
+    'auth_pixel_key',
+    'nearby_validation_class',
+    'nearby_validation_index'
+  ])
+);
+
+
+print(
+  'OVERLAPPING POINTS FROM RETAINED 596'
+);
+
+print(
+  overlapRetained.select([
+    'class_id',
+    'poly_id',
+    'selection_role',
+    'reuse_asset',
+    'auth_pixel_key',
+    'nearby_validation_class',
+    'nearby_validation_index'
+  ])
+);
+
+
+print(
+  'OVERLAPPING POINTS FROM THE 4 NEW REPLACEMENTS'
+);
+
+print(
+  overlapReplacements.select([
+    'class_id',
+    'poly_id',
+    'selection_role',
+    'reuse_asset',
+    'auth_pixel_key',
+    'nearby_validation_class',
+    'nearby_validation_index'
+  ])
+);
+
+
+print(
+  'OVERLAPPING POINTS IN CORRECTED FINAL 600'
+);
+
+print(
+  overlapCorrected.select([
+    'class_id',
+    'poly_id',
+    'selection_role',
+    'reuse_asset',
+    'auth_pixel_key',
+    'nearby_validation_class',
+    'nearby_validation_index'
+  ])
+);
+
+
+print(
+  '========================================'
+);
+
+print(
+  'DO NOT START V2B EXPORT.'
+);
+
+print(
+  'Send back the 4 overlap counts and the offending-point tables.'
+);
+
+print(
+  '========================================'
+);
+
+
+// ============================================================================
+// 22. EXPORT TASK
+// ============================================================================
+//
+// ONE TASK ONLY.
+// DO NOT START UNTIL QA APPROVED.
+//
+// ============================================================================
+
+Export.table.toAsset({
+
+  collection:
+    correctedTraining,
+
+  description:
+    'chennai_training_2010_final_v2b_corrected',
+
+  assetId:
+    OUTPUT_ASSET
+
+});
+
+
+// ============================================================================
+// 23. FINISH
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D4 COMPLETE'
+);
+
+print(
+  'ONE EXPORT TASK CREATED — DO NOT START YET.'
+);
+
+print(
+  'Required conditions:'
+);
+
+print(
+  'TOTAL = 600'
+);
+
+print(
+  'ALL CLASSES = 120'
+);
+
+print(
+  'Vegetation poly 16 remaining = 0'
+);
+
+print(
+  'Vegetation poly 25 should increase by 4'
+);
+
+print(
+  'Duplicate rows = 0'
+);
+
+print(
+  'Cross-class conflict = 0'
+);
+
+print(
+  'Within 30m validation = 0'
+);
+
+print(
+  'Predictor complete = 600'
+);
+
+print(
+  '========================================'
+);

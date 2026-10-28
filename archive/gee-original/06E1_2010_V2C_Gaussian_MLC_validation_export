@@ -1,0 +1,1337 @@
+// ============================================================================
+// 06E1 — CHENNAI 2010 V2C
+// TRUE GAUSSIAN MAXIMUM LIKELIHOOD CLASSIFICATION
+// + INDEPENDENT VALIDATION
+// + CLASSIFICATION ASSET EXPORT
+// ============================================================================
+//
+// LOCKED INPUTS
+// -------------
+//
+// Training:
+// projects/assignment-482806/assets/chennai_training_2010_final_v2c_corrected
+//
+// Validation:
+// projects/assignment-482806/assets/chennai_validation_2010_final
+//
+// Predictor stack:
+// projects/assignment-482806/assets/chennai_predictor_stack_2010
+//
+// ROI:
+// projects/assignment-482806/assets/chennai_admin_study_area_clean
+//
+//
+// METHOD
+// ------
+// TRUE Gaussian Maximum Likelihood Classification.
+//
+// For every class:
+//
+//   - 9-band class mean vector
+//   - sample covariance matrix
+//   - diagonal regularization = 1e-6
+//   - covariance determinant
+//   - covariance inverse
+//
+// Gaussian discriminant:
+//
+//   g_c(x) =
+//       -0.5 * ln(|Sigma_c|)
+//       -0.5 * (x - mu_c)' Sigma_c^-1 (x - mu_c)
+//
+// Equal priors are used.
+//
+// The common:
+//   -0.5 * k * ln(2*pi)
+//
+// term and equal-prior term can be omitted because they are identical
+// for every class and therefore do not affect argmax.
+//
+// IMPORTANT
+// ---------
+// - NO training modification.
+// - NO validation modification.
+// - NO validation-guided tuning.
+// - NO area calculation from the live MLC graph.
+// - ONE classification asset export task only.
+//
+// Old V1 raster is NOT overwritten.
+//
+// NEW OUTPUT:
+// projects/assignment-482806/assets/chennai_mlc_lulc_2010_v2c
+//
+// ============================================================================
+
+
+// ============================================================================
+// 1. CONSTANTS
+// ============================================================================
+
+var ANALYSIS_CRS =
+  'EPSG:32644';
+
+var ANALYSIS_SCALE =
+  30;
+
+var REGULARIZATION =
+  1e-6;
+
+var CLASS_ORDER =
+  [1, 2, 3, 4, 5];
+
+var CLASS_NAMES = [
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+];
+
+var PREDICTORS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+var NUM_PREDICTORS =
+  PREDICTORS.length;
+
+
+// ============================================================================
+// 2. ASSET PATHS
+// ============================================================================
+
+var ROI_ASSET =
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean';
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+var TRAINING_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final_v2c_corrected';
+
+var VALIDATION_ASSET =
+  'projects/assignment-482806/assets/chennai_validation_2010_final';
+
+var OUTPUT_CLASSIFICATION_ASSET =
+  'projects/assignment-482806/assets/chennai_mlc_lulc_2010_v2c';
+
+
+// ============================================================================
+// 3. LOAD ONLY MATERIALIZED INPUTS
+// ============================================================================
+
+var roi =
+  ee.FeatureCollection(
+    ROI_ASSET
+  )
+  .geometry();
+
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  );
+
+
+var training2010 =
+  ee.FeatureCollection(
+    TRAINING_ASSET
+  );
+
+
+var validation2010 =
+  ee.FeatureCollection(
+    VALIDATION_ASSET
+  );
+
+
+var nativeProjection =
+  stack2010
+    .select('blue')
+    .projection();
+
+
+// ============================================================================
+// 4. INPUT QA
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06E1 — LOCKED INPUT QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.String('Training samples = ')
+    .cat(
+      training2010
+        .size()
+        .format('%d')
+    )
+);
+
+
+print(
+  ee.String('Validation samples = ')
+    .cat(
+      validation2010
+        .size()
+        .format('%d')
+    )
+);
+
+
+print(
+  'Training class histogram — EXPECT 120 EACH'
+);
+
+
+print(
+  training2010.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+print(
+  'Validation class histogram — EXPECT 60 EACH'
+);
+
+
+print(
+  validation2010.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+print(
+  'Predictor order:'
+);
+
+
+print(
+  ee.List(
+    PREDICTORS
+  )
+);
+
+
+print(
+  '2010 predictor stack bands:'
+);
+
+
+print(
+  stack2010.bandNames()
+);
+
+
+// ============================================================================
+// 5. BUILD GAUSSIAN PARAMETERS FOR ONE CLASS
+// ============================================================================
+
+function buildClassParameters(
+  classId
+) {
+
+  var classSamples =
+    training2010.filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    );
+
+
+  // --------------------------------------------------------------------------
+  // MEAN VECTOR
+  //
+  // Initially 1 x 9.
+  // Transpose -> 9 x 1.
+  // --------------------------------------------------------------------------
+
+  var meanValues =
+    PREDICTORS.map(
+      function(bandName) {
+
+        return classSamples.aggregate_mean(
+          bandName
+        );
+
+      }
+    );
+
+
+  var meanVector =
+    ee.Array([
+      meanValues
+    ])
+    .transpose();
+
+
+  // --------------------------------------------------------------------------
+  // COVARIANCE
+  //
+  // Each feature gets one nine-element array.
+  // covariance() reduces those sample vectors into a 9 x 9 matrix.
+  // --------------------------------------------------------------------------
+
+  var samplesWithArray =
+    classSamples.makeArray(
+      PREDICTORS,
+      'mlc_array'
+    );
+
+
+  var covarianceDictionary =
+    samplesWithArray.reduceColumns({
+
+      reducer:
+        ee.Reducer
+          .covariance()
+          .setOutputs([
+            'covariance'
+          ]),
+
+      selectors: [
+        'mlc_array'
+      ]
+
+    });
+
+
+  var rawCovariance =
+    ee.Array(
+      covarianceDictionary.get(
+        'covariance'
+      )
+    );
+
+
+  // --------------------------------------------------------------------------
+  // DIAGONAL REGULARIZATION
+  //
+  // Sigma_regularized = Sigma + 1e-6 I
+  // --------------------------------------------------------------------------
+
+  var identity =
+    ee.Array.identity(
+      NUM_PREDICTORS
+    );
+
+
+  var regularizedCovariance =
+    rawCovariance.add(
+      identity.multiply(
+        REGULARIZATION
+      )
+    );
+
+
+  // --------------------------------------------------------------------------
+  // DETERMINANTS
+  // --------------------------------------------------------------------------
+
+  var rawDeterminant =
+    rawCovariance.matrixDeterminant();
+
+
+  var regularizedDeterminant =
+    regularizedCovariance.matrixDeterminant();
+
+
+  // --------------------------------------------------------------------------
+  // INVERSE
+  // --------------------------------------------------------------------------
+
+  var inverseCovariance =
+    regularizedCovariance.matrixInverse();
+
+
+  return ee.Dictionary({
+
+    class_id:
+      classId,
+
+    sample_count:
+      classSamples.size(),
+
+    mean:
+      meanVector,
+
+    raw_covariance:
+      rawCovariance,
+
+    covariance:
+      regularizedCovariance,
+
+    raw_determinant:
+      rawDeterminant,
+
+    determinant:
+      regularizedDeterminant,
+
+    inverse:
+      inverseCovariance
+
+  });
+
+}
+
+
+// ============================================================================
+// 6. BUILD PARAMETERS FOR ALL FIVE CLASSES
+// ============================================================================
+
+var params2010 =
+  ee.List([
+
+    buildClassParameters(1),
+
+    buildClassParameters(2),
+
+    buildClassParameters(3),
+
+    buildClassParameters(4),
+
+    buildClassParameters(5)
+
+  ]);
+
+
+// ============================================================================
+// 7. COVARIANCE / DETERMINANT QA
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06E1 — GAUSSIAN PARAMETER QA'
+);
+
+print(
+  '========================================'
+);
+
+
+for (
+  var qaIndex = 0;
+  qaIndex < 5;
+  qaIndex++
+) {
+
+  var p =
+    ee.Dictionary(
+      params2010.get(
+        qaIndex
+      )
+    );
+
+
+  var className =
+    CLASS_NAMES[
+      qaIndex
+    ];
+
+
+  var qaText =
+    ee.String(
+      className
+    )
+
+    .cat(
+      ' | n='
+    )
+
+    .cat(
+      ee.Number(
+        p.get(
+          'sample_count'
+        )
+      )
+      .format('%d')
+    )
+
+    .cat(
+      ' | raw determinant='
+    )
+
+    .cat(
+      ee.Number(
+        p.get(
+          'raw_determinant'
+        )
+      )
+      .format('%.12e')
+    )
+
+    .cat(
+      ' | regularized determinant='
+    )
+
+    .cat(
+      ee.Number(
+        p.get(
+          'determinant'
+        )
+      )
+      .format('%.12e')
+    );
+
+
+  print(
+    qaText
+  );
+
+}
+
+
+// ============================================================================
+// 8. CREATE 9 x 1 PREDICTOR ARRAY IMAGE
+// ============================================================================
+//
+// stack.select(...).toArray()
+//     -> [9]
+//
+// .toArray(1)
+//     -> [9,1]
+//
+// ============================================================================
+
+var predictorColumn =
+  stack2010
+
+    .select(
+      PREDICTORS
+    )
+
+    .toArray()
+
+    .toArray(1);
+
+
+// ============================================================================
+// 9. GAUSSIAN LOG-LIKELIHOOD SCORE FUNCTION
+// ============================================================================
+
+function createScoreImage(
+  classParameters,
+  scoreBandName
+) {
+
+  classParameters =
+    ee.Dictionary(
+      classParameters
+    );
+
+
+  var meanVector =
+    ee.Array(
+      classParameters.get(
+        'mean'
+      )
+    );
+
+
+  var inverseCovariance =
+    ee.Array(
+      classParameters.get(
+        'inverse'
+      )
+    );
+
+
+  var determinant =
+    ee.Number(
+      classParameters.get(
+        'determinant'
+      )
+    )
+    .max(
+      1e-300
+    );
+
+
+  // --------------------------------------------------------------------------
+  // Convert constant matrices to array images
+  // --------------------------------------------------------------------------
+
+  var meanImage =
+    ee.Image.constant(
+      meanVector
+    );
+
+
+  var inverseImage =
+    ee.Image.constant(
+      inverseCovariance
+    );
+
+
+  // --------------------------------------------------------------------------
+  // Difference:
+  //
+  // d = x - mu
+  // --------------------------------------------------------------------------
+
+  var difference =
+    predictorColumn.subtract(
+      meanImage
+    );
+
+
+  // --------------------------------------------------------------------------
+  // Mahalanobis quadratic form:
+  //
+  // d' Sigma^-1 d
+  // --------------------------------------------------------------------------
+
+  var mahalanobisSquared =
+    difference
+
+      .arrayTranspose()
+
+      .matrixMultiply(
+        inverseImage
+      )
+
+      .matrixMultiply(
+        difference
+      )
+
+      .arrayGet(
+        [0, 0]
+      );
+
+
+  // --------------------------------------------------------------------------
+  // Gaussian log-likelihood:
+  //
+  // -0.5 ln|Sigma|
+  // -0.5 d' Sigma^-1 d
+  //
+  // --------------------------------------------------------------------------
+
+  var logDeterminant =
+    ee.Image.constant(
+      determinant.log()
+    );
+
+
+  var score =
+    mahalanobisSquared
+
+      .multiply(
+        -0.5
+      )
+
+      .add(
+        logDeterminant.multiply(
+          -0.5
+        )
+      )
+
+      .rename(
+        scoreBandName
+      );
+
+
+  return score;
+
+}
+
+
+// ============================================================================
+// 10. CREATE FIVE CLASS SCORE IMAGES
+// ============================================================================
+
+var score1 =
+  createScoreImage(
+    params2010.get(0),
+    'score_1'
+  );
+
+
+var score2 =
+  createScoreImage(
+    params2010.get(1),
+    'score_2'
+  );
+
+
+var score3 =
+  createScoreImage(
+    params2010.get(2),
+    'score_3'
+  );
+
+
+var score4 =
+  createScoreImage(
+    params2010.get(3),
+    'score_4'
+  );
+
+
+var score5 =
+  createScoreImage(
+    params2010.get(4),
+    'score_5'
+  );
+
+
+// ============================================================================
+// 11. STACK FIVE GAUSSIAN SCORES
+// ============================================================================
+
+var scoreStack =
+  score1
+
+    .addBands(
+      score2
+    )
+
+    .addBands(
+      score3
+    )
+
+    .addBands(
+      score4
+    )
+
+    .addBands(
+      score5
+    );
+
+
+// ============================================================================
+// 12. ARGMAX → CLASS IDS 1–5
+// ============================================================================
+
+var classified2010V2C =
+  scoreStack
+
+    .toArray()
+
+    .arrayArgmax()
+
+    .arrayGet(
+      [0]
+    )
+
+    .add(
+      1
+    )
+
+    .rename(
+      'classification'
+    )
+
+    .toInt8()
+
+    .clip(
+      roi
+    );
+
+
+// ============================================================================
+// 13. IMPORTANT
+//
+// DO NOT run a full-ROI histogram or area reduction here.
+//
+// We learned from the previous years that evaluating the entire Gaussian MLC
+// graph interactively is unnecessarily expensive.
+//
+// Validation sampling is small (300 points) and is appropriate here.
+//
+// The raster will be exported first.
+// Area statistics will be computed from the MATERIALIZED classification asset.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 14. VALIDATION PREDICTIONS
+// ============================================================================
+
+var validationPredictions =
+  classified2010V2C.sampleRegions({
+
+    collection:
+      validation2010,
+
+    properties: [
+      'class_id'
+    ],
+
+    scale:
+      ANALYSIS_SCALE,
+
+    projection:
+      nativeProjection,
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+
+  });
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06E1 — VALIDATION PREDICTION QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.String(
+    'Validation predictions generated = '
+  )
+  .cat(
+    validationPredictions
+      .size()
+      .format('%d')
+  )
+);
+
+
+print(
+  'Expected = 300'
+);
+
+
+// ============================================================================
+// 15. CONFUSION MATRIX
+// ============================================================================
+
+var confusionMatrix =
+  validationPredictions.errorMatrix(
+    'class_id',
+    'classification',
+    CLASS_ORDER
+  );
+
+
+var overallAccuracy =
+  confusionMatrix.accuracy();
+
+
+var kappa =
+  confusionMatrix.kappa();
+
+
+var producerAccuracy =
+  confusionMatrix.producersAccuracy();
+
+
+var userAccuracy =
+  confusionMatrix.consumersAccuracy();
+
+
+// ============================================================================
+// 16. PRINT ACCURACY
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06E1 — 2010 V2C GAUSSIAN MLC ACCURACY'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'Confusion matrix — rows=actual, columns=predicted'
+);
+
+
+print(
+  confusionMatrix
+);
+
+
+print(
+  'Overall Accuracy'
+);
+
+
+print(
+  overallAccuracy
+);
+
+
+print(
+  'Kappa'
+);
+
+
+print(
+  kappa
+);
+
+
+print(
+  'Producer Accuracy'
+);
+
+
+print(
+  producerAccuracy
+);
+
+
+print(
+  'User Accuracy'
+);
+
+
+print(
+  userAccuracy
+);
+
+
+// ============================================================================
+// 17. CORRECT / INCORRECT COUNTS
+// ============================================================================
+
+var predictionsWithCorrect =
+  validationPredictions.map(
+    function(feature) {
+
+      feature =
+        ee.Feature(
+          feature
+        );
+
+
+      var actual =
+        ee.Number(
+          feature.get(
+            'class_id'
+          )
+        );
+
+
+      var predicted =
+        ee.Number(
+          feature.get(
+            'classification'
+          )
+        );
+
+
+      var correct =
+        ee.Number(
+          ee.Algorithms.If(
+            actual.eq(
+              predicted
+            ),
+            1,
+            0
+          )
+        );
+
+
+      return feature.set(
+        'correct',
+        correct
+      );
+
+    }
+  );
+
+
+var correctCount =
+  predictionsWithCorrect
+
+    .filter(
+      ee.Filter.eq(
+        'correct',
+        1
+      )
+    )
+
+    .size();
+
+
+var incorrectCount =
+  predictionsWithCorrect
+
+    .filter(
+      ee.Filter.eq(
+        'correct',
+        0
+      )
+    )
+
+    .size();
+
+
+print(
+  ee.String(
+    'Correct predictions = '
+  )
+  .cat(
+    correctCount.format('%d')
+  )
+);
+
+
+print(
+  ee.String(
+    'Incorrect predictions = '
+  )
+  .cat(
+    incorrectCount.format('%d')
+  )
+);
+
+
+// ============================================================================
+// 18. CLASS-WISE CORRECT COUNTS
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06E1 — CLASS-WISE VALIDATION SUMMARY'
+);
+
+print(
+  '========================================'
+);
+
+
+for (
+  var classIndex = 0;
+  classIndex < 5;
+  classIndex++
+) {
+
+  var classId =
+    classIndex + 1;
+
+
+  var actualClass =
+    predictionsWithCorrect.filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    );
+
+
+  var correctClass =
+    actualClass.filter(
+      ee.Filter.eq(
+        'correct',
+        1
+      )
+    );
+
+
+  print(
+    ee.String(
+      CLASS_NAMES[classIndex]
+    )
+    .cat(
+      ' | actual=60 | correct='
+    )
+    .cat(
+      correctClass
+        .size()
+        .format('%d')
+    )
+  );
+
+}
+
+
+// ============================================================================
+// 19. OPTIONAL MAP DISPLAY
+// ============================================================================
+//
+// Only one layer.
+// No score layers are added.
+//
+// ============================================================================
+
+Map.centerObject(
+  roi,
+  10
+);
+
+
+Map.addLayer(
+
+  classified2010V2C,
+
+  {
+
+    min:
+      1,
+
+    max:
+      5,
+
+    palette: [
+
+      'ff0000',   // 1 Built-up
+      '008000',   // 2 Vegetation
+      '0000ff',   // 3 Water
+      'ffff00',   // 4 Agricultural/Open
+      'd2b48c'    // 5 Barren/Fallow
+
+    ]
+
+  },
+
+  '2010 V2C Gaussian MLC',
+
+  false
+
+);
+
+
+// ============================================================================
+// 20. EXPORT CLASSIFICATION TO ASSET
+// ============================================================================
+//
+// ONE TASK.
+//
+// This raster must be materialized before area calculations.
+//
+// DO NOT START THE TASK UNTIL ACCURACY OUTPUT HAS BEEN REVIEWED.
+//
+// ============================================================================
+
+Export.image.toAsset({
+
+  image:
+    classified2010V2C,
+
+  description:
+    'chennai_mlc_lulc_2010_v2c',
+
+  assetId:
+    OUTPUT_CLASSIFICATION_ASSET,
+
+  region:
+    roi,
+
+  scale:
+    ANALYSIS_SCALE,
+
+  crs:
+    ANALYSIS_CRS,
+
+  maxPixels:
+    1e13
+
+});
+
+
+// ============================================================================
+// 21. VERSION CONTROL
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06E1 — VERSION CONTROL'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'LOCKED V2C TRAINING:'
+);
+
+
+print(
+  TRAINING_ASSET
+);
+
+
+print(
+  'LOCKED VALIDATION:'
+);
+
+
+print(
+  VALIDATION_ASSET
+);
+
+
+print(
+  'OLD V1 CLASSIFICATION REMAINS UNTOUCHED:'
+);
+
+
+print(
+  'projects/assignment-482806/assets/chennai_mlc_lulc_2010'
+);
+
+
+print(
+  'NEW V2C CLASSIFICATION WILL EXPORT TO:'
+);
+
+
+print(
+  OUTPUT_CLASSIFICATION_ASSET
+);
+
+
+// ============================================================================
+// 22. FINISH
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06E1 COMPLETE'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'TRUE 9-BAND GAUSSIAN MLC USED.'
+);
+
+
+print(
+  'REGULARIZATION = 1e-6.'
+);
+
+
+print(
+  'EQUAL CLASS PRIORS.'
+);
+
+
+print(
+  'INDEPENDENT VALIDATION = 300.'
+);
+
+
+print(
+  'NO TRAINING OR VALIDATION MODIFICATION PERFORMED.'
+);
+
+
+print(
+  'NO AREA REDUCTION PERFORMED.'
+);
+
+
+print(
+  'ONE CLASSIFICATION ASSET EXPORT TASK CREATED.'
+);
+
+
+print(
+  'DO NOT START EXPORT UNTIL ACCURACY QA IS REVIEWED.'
+);
+
+
+print(
+  'Send back:'
+);
+
+
+print(
+  '1. Five determinant QA lines'
+);
+
+
+print(
+  '2. Validation predictions generated'
+);
+
+
+print(
+  '3. Confusion matrix'
+);
+
+
+print(
+  '4. Overall Accuracy'
+);
+
+
+print(
+  '5. Kappa'
+);
+
+
+print(
+  '6. Producer Accuracy'
+);
+
+
+print(
+  '7. User Accuracy'
+);
+
+
+print(
+  '8. Correct / Incorrect predictions'
+);
+
+
+print(
+  '9. Five class-wise correct counts'
+);
+
+
+print(
+  '========================================'
+);
+
+// ============================================================================
+// END 06E1
+// ============================================================================

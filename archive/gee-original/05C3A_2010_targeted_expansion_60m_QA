@@ -1,0 +1,1575 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05C3A
+//
+// TARGETED 60 m EXPANSION USING THE AUTHORITATIVE 2010 STACK
+//
+// PURPOSE
+// -------
+// Generate NEW high-confidence candidate pixels only around
+// defensible existing anchors.
+//
+// TARGETS:
+//
+// Vegetation:
+//   expand only around underrepresented poly_id 25
+//
+// Agricultural/Open:
+//   expand around existing stable / rescued high-confidence anchors
+//
+// Barren/Fallow:
+//   expand only around poly_id 62 and 64
+//   DO NOT expand poly_id 63 because it already dominates
+//
+// THIS SCRIPT DOES NOT:
+//
+// - change screening thresholds
+// - use rejected uncertain points as anchors
+// - use validation
+// - create final training
+// - run MLC
+// - add map layers
+//
+// OUTPUT TASK:
+// chennai_2010_targeted_expansion_05C3A
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSET PATHS
+// ================================================================
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var QA_05A_ASSET =
+  'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A';
+
+
+var PASSB_REQA_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+
+var RESCUED_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_rescued_uncertain_05C2A';
+
+
+var OUTPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_targeted_expansion_05C3A';
+
+
+// ================================================================
+// 2. SETTINGS
+// ================================================================
+
+var SCALE =
+  30;
+
+
+var EXPANSION_RADIUS_M =
+  60;
+
+
+var PREDICTORS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+var CLASS_IDS =
+  [1, 2, 3, 4, 5];
+
+
+var CLASS_NAMES = [
+
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+
+];
+
+
+var TARGET_PER_CLASS =
+  120;
+
+
+var DISTANCE_THRESHOLD =
+  1.25;
+
+
+var MARGIN_THRESHOLD =
+  0.25;
+
+
+var MIN_CLEAR_FOR_AUTO =
+  2;
+
+
+var MIN_LOCAL_FRACTION =
+  5 / 9;
+
+
+var MIN_VALID_NEIGHBOURS =
+  5;
+
+
+var EPSILON =
+  1e-6;
+
+
+// ================================================================
+// 3. LOAD MATERIALIZED INPUTS
+// ================================================================
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  );
+
+
+var qa05A =
+  ee.FeatureCollection(
+    QA_05A_ASSET
+  );
+
+
+var passB05C1 =
+  ee.FeatureCollection(
+    PASSB_REQA_ASSET
+  );
+
+
+var rescued05C2A =
+  ee.FeatureCollection(
+    RESCUED_ASSET
+  );
+
+
+var stackProjection =
+  stack2010
+    .select('blue')
+    .projection();
+
+
+// ================================================================
+// 4. BUILD CURRENT UNIQUE CANDIDATE POOL
+// ================================================================
+//
+// Add only rescued points that are not already in 05C1.
+//
+// ================================================================
+
+var existingKeys =
+  ee.List(
+    passB05C1.aggregate_array(
+      'auth_pixel_key'
+    )
+  );
+
+
+var rescuedNew =
+  rescued05C2A.map(
+    function(feature) {
+
+      var key =
+        feature.get(
+          'auth_pixel_key'
+        );
+
+
+      var duplicate =
+        existingKeys.contains(
+          key
+        );
+
+
+      return feature.set(
+        'already_in_05C1',
+        ee.Number(
+          ee.Algorithms.If(
+            duplicate,
+            1,
+            0
+          )
+        )
+      );
+
+    }
+  )
+  .filter(
+    ee.Filter.eq(
+      'already_in_05C1',
+      0
+    )
+  );
+
+
+var currentCandidates =
+  passB05C1
+    .merge(
+      rescuedNew
+    )
+    .distinct(
+      [
+        'auth_pixel_key'
+      ]
+    );
+
+
+// ================================================================
+// 5. LOAD HIGH-CONFIDENCE ANCHORS
+// ================================================================
+
+var stableAnchors =
+  qa05A.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'STABLE'
+    )
+  );
+
+
+// ================================================================
+// 6. TARGET VEGETATION ANCHORS
+// ================================================================
+//
+// Only poly 25.
+//
+// poly 26 already dominates the candidate pool.
+//
+// ================================================================
+
+var vegetationAnchors =
+  stableAnchors
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        2
+      )
+    )
+
+    .filter(
+      ee.Filter.eq(
+        'poly_id',
+        25
+      )
+    )
+
+    .map(
+      function(feature) {
+
+        return feature.set(
+          'anchor_source',
+          '05A_STABLE_VEG25'
+        );
+
+      }
+    );
+
+
+// ================================================================
+// 7. TARGET AGRICULTURAL/OPEN ANCHORS
+// ================================================================
+//
+// Use all 05A stable Agriculture/Open anchors.
+//
+// Also allow 05C2A rescued Agriculture/Open anchors because
+// they independently passed the same authoritative native-2010
+// acceptance criteria.
+//
+// ================================================================
+
+var agriStableAnchors =
+  stableAnchors
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        4
+      )
+    )
+
+    .map(
+      function(feature) {
+
+        return feature.set(
+          'anchor_source',
+          '05A_STABLE_AGRI'
+        );
+
+      }
+    );
+
+
+var agriRescuedAnchors =
+  rescued05C2A
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        4
+      )
+    )
+
+    .map(
+      function(feature) {
+
+        return feature.set(
+          'anchor_source',
+          '05C2A_RESCUED_AGRI'
+        );
+
+      }
+    );
+
+
+var agriAnchors =
+  agriStableAnchors.merge(
+    agriRescuedAnchors
+  );
+
+
+// ================================================================
+// 8. TARGET BARREN/FALLOW ANCHORS
+// ================================================================
+//
+// Only poly 62 + 64.
+//
+// poly 63 is deliberately excluded because it already supplies
+// almost the entire existing Barren/Fallow pool.
+//
+// ================================================================
+
+var barrenAnchors =
+  stableAnchors
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        5
+      )
+    )
+
+    .filter(
+      ee.Filter.inList(
+        'poly_id',
+        [
+          62,
+          64
+        ]
+      )
+    )
+
+    .map(
+      function(feature) {
+
+        return feature.set(
+          'anchor_source',
+          '05A_STABLE_BARREN_DIVERSITY'
+        );
+
+      }
+    );
+
+
+// ================================================================
+// 9. MERGE TARGET ANCHORS
+// ================================================================
+
+var targetedAnchors =
+  vegetationAnchors
+
+    .merge(
+      agriAnchors
+    )
+
+    .merge(
+      barrenAnchors
+    );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '05C3A — TARGET ANCHOR CHECK'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    vegetation_poly25_anchors:
+      vegetationAnchors.size(),
+
+    agricultural_anchors:
+      agriAnchors.size(),
+
+    barren_poly62_64_anchors:
+      barrenAnchors.size(),
+
+    all_targeted_anchors:
+      targetedAnchors.size()
+
+  })
+);
+
+
+print(
+  'Target-anchor class histogram'
+);
+
+
+print(
+  targetedAnchors.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+print(
+  'Target-anchor poly_id histogram'
+);
+
+
+print(
+  targetedAnchors.aggregate_histogram(
+    'poly_id'
+  )
+);
+
+
+// ================================================================
+// 10. REBUILD AUTHORITATIVE 2010-NATIVE CLASS SIGNATURES
+// ================================================================
+//
+// Signatures continue to use ALL 05A STABLE anchors.
+//
+// Targeted anchors above only control WHERE new candidates
+// are generated.
+//
+// ================================================================
+
+var nativeSeeds =
+  stack2010
+    .select(
+      PREDICTORS
+    )
+    .sampleRegions({
+
+      collection:
+        stableAnchors,
+
+      properties: [
+        'class_id',
+        'class_name',
+        'poly_id'
+      ],
+
+      scale:
+        SCALE,
+
+      projection:
+        stackProjection,
+
+      geometries:
+        true,
+
+      tileScale:
+        4
+
+    });
+
+
+// ================================================================
+// 11. BUILD CLASS SIGNATURES
+// ================================================================
+
+function buildSignature(
+  classId
+) {
+
+  var classSamples =
+    nativeSeeds.filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    );
+
+
+  var means =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_mean(
+            band
+          )
+        );
+
+      }
+    );
+
+
+  var sds =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_sample_sd(
+            band
+          )
+        )
+        .max(
+          EPSILON
+        );
+
+      }
+    );
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      means:
+        ee.List(
+          means
+        ),
+
+      sds:
+        ee.List(
+          sds
+        )
+
+    }
+  );
+}
+
+
+var nativeSignatures =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      buildSignature
+    )
+  );
+
+
+// ================================================================
+// 12. DISTANCE FUNCTION
+// ================================================================
+
+function distanceToClass(
+  image,
+  classId
+) {
+
+  var signature =
+    ee.Feature(
+      nativeSignatures
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+        .first()
+    );
+
+
+  var meanImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'means'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    );
+
+
+  var sdImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'sds'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    )
+    .max(
+      EPSILON
+    );
+
+
+  return image
+    .select(
+      PREDICTORS
+    )
+    .subtract(
+      meanImage
+    )
+    .divide(
+      sdImage
+    )
+    .pow(2)
+    .reduce(
+      ee.Reducer.mean()
+    )
+    .sqrt()
+    .rename(
+      'd' + classId
+    );
+}
+
+
+// ================================================================
+// 13. FIVE CLASS-DISTANCE IMAGES
+// ================================================================
+
+var d1 =
+  distanceToClass(
+    stack2010,
+    1
+  );
+
+
+var d2 =
+  distanceToClass(
+    stack2010,
+    2
+  );
+
+
+var d3 =
+  distanceToClass(
+    stack2010,
+    3
+  );
+
+
+var d4 =
+  distanceToClass(
+    stack2010,
+    4
+  );
+
+
+var d5 =
+  distanceToClass(
+    stack2010,
+    5
+  );
+
+
+var distanceImages = [
+
+  d1,
+  d2,
+  d3,
+  d4,
+  d5
+
+];
+
+
+var distanceStack =
+  ee.Image.cat(
+    distanceImages
+  );
+
+
+// ================================================================
+// 14. FIND BEST + SECOND-BEST CLASS
+// ================================================================
+
+var bestDist =
+  d1.rename(
+    'best_dist'
+  );
+
+
+var bestClass =
+  ee.Image.constant(
+    1
+  )
+  .rename(
+    'best_class'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+var secondDist =
+  ee.Image.constant(
+    9999
+  )
+  .rename(
+    'second_dist'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+for (
+  var i = 1;
+  i < CLASS_IDS.length;
+  i++
+) {
+
+  var currentClass =
+    CLASS_IDS[i];
+
+
+  var currentDistance =
+    distanceImages[i];
+
+
+  var better =
+    currentDistance.lt(
+      bestDist
+    );
+
+
+  var previousBest =
+    bestDist;
+
+
+  var updatedSecond =
+    secondDist.where(
+      better,
+      previousBest
+    );
+
+
+  var currentAsSecond =
+    currentDistance.where(
+      better,
+      9999
+    );
+
+
+  updatedSecond =
+    updatedSecond.min(
+      currentAsSecond
+    );
+
+
+  bestDist =
+    previousBest
+      .where(
+        better,
+        currentDistance
+      )
+      .rename(
+        'best_dist'
+      );
+
+
+  bestClass =
+    bestClass
+      .where(
+        better,
+        currentClass
+      )
+      .rename(
+        'best_class'
+      );
+
+
+  secondDist =
+    updatedSecond
+      .rename(
+        'second_dist'
+      );
+
+}
+
+
+// ================================================================
+// 15. CLASS MARGIN
+// ================================================================
+
+var margin =
+  secondDist
+    .subtract(
+      bestDist
+    )
+    .rename(
+      'margin'
+    );
+
+
+// ================================================================
+// 16. LOCAL 3 × 3 QA
+// ================================================================
+
+var kernel3x3 =
+  ee.Kernel.square({
+
+    radius:
+      1,
+
+    units:
+      'pixels',
+
+    normalize:
+      false
+
+  });
+
+
+var localValidN =
+  bestClass
+    .reduceNeighborhood({
+
+      reducer:
+        ee.Reducer.count(),
+
+      kernel:
+        kernel3x3,
+
+      skipMasked:
+        true
+
+    })
+    .rename(
+      'local_valid_n'
+    );
+
+
+var localSameN =
+  ee.Image.constant(
+    0
+  )
+  .rename(
+    'local_same_n'
+  )
+  .updateMask(
+    bestClass.mask()
+  );
+
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var neighbourCount =
+      bestClass
+        .eq(
+          classId
+        )
+        .reduceNeighborhood({
+
+          reducer:
+            ee.Reducer.sum(),
+
+          kernel:
+            kernel3x3,
+
+          skipMasked:
+            true
+
+        });
+
+
+    localSameN =
+      localSameN.where(
+
+        bestClass.eq(
+          classId
+        ),
+
+        neighbourCount
+
+      );
+
+  }
+);
+
+
+var localFraction =
+  localSameN
+    .divide(
+      localValidN.max(
+        1
+      )
+    )
+    .rename(
+      'local_fraction'
+    );
+
+
+// ================================================================
+// 17. CREATE TARGETED 60 m EXPANSION ZONES
+// ================================================================
+
+var expansionZones =
+  targetedAnchors.map(
+    function(feature) {
+
+      return ee.Feature(
+        feature.geometry()
+          .buffer(
+            EXPANSION_RADIUS_M
+          ),
+        {
+
+          class_id:
+            feature.get(
+              'class_id'
+            ),
+
+          class_name:
+            feature.get(
+              'class_name'
+            ),
+
+          poly_id:
+            feature.get(
+              'poly_id'
+            ),
+
+          anchor_source:
+            feature.get(
+              'anchor_source'
+            )
+
+        }
+      );
+
+    }
+  );
+
+
+// ================================================================
+// 18. AUTHORITATIVE PIXEL COORDINATES
+// ================================================================
+
+var pixelXY =
+  ee.Image.pixelCoordinates(
+    stackProjection
+  )
+  .rename(
+    [
+      'auth_px',
+      'auth_py'
+    ]
+  );
+
+
+// ================================================================
+// 19. CANDIDATE IMAGE
+// ================================================================
+
+var candidateImage =
+  stack2010
+    .select(
+      PREDICTORS
+    )
+
+    .addBands(
+      distanceStack
+    )
+
+    .addBands(
+      bestClass
+    )
+
+    .addBands(
+      bestDist
+    )
+
+    .addBands(
+      secondDist
+    )
+
+    .addBands(
+      margin
+    )
+
+    .addBands(
+      stack2010.select(
+        'clear_count'
+      )
+    )
+
+    .addBands(
+      localValidN
+    )
+
+    .addBands(
+      localFraction
+    )
+
+    .addBands(
+      pixelXY
+    );
+
+
+// ================================================================
+// 20. SAMPLE TARGETED EXPANSION ZONES
+// ================================================================
+
+var candidatePool =
+  candidateImage.sampleRegions({
+
+    collection:
+      expansionZones,
+
+    properties: [
+      'class_id',
+      'class_name',
+      'poly_id',
+      'anchor_source'
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      stackProjection,
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+
+  });
+
+
+// ================================================================
+// 21. CREATE AUTHORITATIVE PIXEL KEY
+// ================================================================
+
+candidatePool =
+  candidatePool.map(
+    function(feature) {
+
+      var px =
+        ee.Number(
+          feature.get(
+            'auth_px'
+          )
+        );
+
+
+      var py =
+        ee.Number(
+          feature.get(
+            'auth_py'
+          )
+        );
+
+
+      var key =
+        px.format(
+          '%.0f'
+        )
+        .cat(
+          '_'
+        )
+        .cat(
+          py.format(
+            '%.0f'
+          )
+        );
+
+
+      return feature.set(
+        'auth_pixel_key',
+        key
+      );
+
+    }
+  );
+
+
+// ================================================================
+// 22. OWN-CLASS DISTANCE HELPER
+// ================================================================
+
+function ownClassDistance(
+  feature,
+  classId
+) {
+
+  return ee.Number(
+
+    ee.Algorithms.If(
+      classId.eq(1),
+
+      feature.get(
+        'd1'
+      ),
+
+      ee.Algorithms.If(
+        classId.eq(2),
+
+        feature.get(
+          'd2'
+        ),
+
+        ee.Algorithms.If(
+          classId.eq(3),
+
+          feature.get(
+            'd3'
+          ),
+
+          ee.Algorithms.If(
+            classId.eq(4),
+
+            feature.get(
+              'd4'
+            ),
+
+            feature.get(
+              'd5'
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
+
+// ================================================================
+// 23. APPLY SAME HIGH-CONFIDENCE SCREENING
+// ================================================================
+
+var evaluatedCandidates =
+  candidatePool.map(
+    function(feature) {
+
+      var sourceClass =
+        ee.Number(
+          feature.get(
+            'class_id'
+          )
+        );
+
+
+      var predictedClass =
+        ee.Number(
+          feature.get(
+            'best_class'
+          )
+        );
+
+
+      var ownDistance =
+        ownClassDistance(
+          feature,
+          sourceClass
+        );
+
+
+      var classMargin =
+        ee.Number(
+          feature.get(
+            'margin'
+          )
+        );
+
+
+      var clearCount =
+        ee.Number(
+          feature.get(
+            'clear_count'
+          )
+        );
+
+
+      var localN =
+        ee.Number(
+          feature.get(
+            'local_valid_n'
+          )
+        );
+
+
+      var localFrac =
+        ee.Number(
+          feature.get(
+            'local_fraction'
+          )
+        );
+
+
+      var accepted =
+        clearCount
+          .gte(
+            MIN_CLEAR_FOR_AUTO
+          )
+
+          .and(
+            predictedClass.eq(
+              sourceClass
+            )
+          )
+
+          .and(
+            ownDistance.lte(
+              DISTANCE_THRESHOLD
+            )
+          )
+
+          .and(
+            classMargin.gte(
+              MARGIN_THRESHOLD
+            )
+          )
+
+          .and(
+            localN.gte(
+              MIN_VALID_NEIGHBOURS
+            )
+          )
+
+          .and(
+            localFrac.gte(
+              MIN_LOCAL_FRACTION
+            )
+          );
+
+
+      return feature.set({
+
+        targeted_distance:
+          ownDistance,
+
+        targeted_margin:
+          classMargin,
+
+        targeted_accept:
+          ee.Number(
+            ee.Algorithms.If(
+              accepted,
+              1,
+              0
+            )
+          ),
+
+        expansion_radius_m:
+          EXPANSION_RADIUS_M,
+
+        target_year:
+          2010
+
+      });
+
+    }
+  );
+
+
+// ================================================================
+// 24. ACCEPT + DEDUPLICATE
+// ================================================================
+
+var acceptedRaw =
+  evaluatedCandidates.filter(
+    ee.Filter.eq(
+      'targeted_accept',
+      1
+    )
+  );
+
+
+var acceptedUnique =
+  acceptedRaw.distinct(
+    [
+      'auth_pixel_key'
+    ]
+  );
+
+
+// ================================================================
+// 25. REMOVE PIXELS ALREADY PRESENT IN CURRENT POOL
+// ================================================================
+
+var currentPixelKeys =
+  ee.List(
+    currentCandidates.aggregate_array(
+      'auth_pixel_key'
+    )
+  );
+
+
+var taggedAccepted =
+  acceptedUnique.map(
+    function(feature) {
+
+      var key =
+        feature.get(
+          'auth_pixel_key'
+        );
+
+
+      var alreadyExists =
+        currentPixelKeys.contains(
+          key
+        );
+
+
+      return feature.set(
+        'already_in_current_pool',
+        ee.Number(
+          ee.Algorithms.If(
+            alreadyExists,
+            1,
+            0
+          )
+        )
+      );
+
+    }
+  );
+
+
+var newCandidates =
+  taggedAccepted.filter(
+    ee.Filter.eq(
+      'already_in_current_pool',
+      0
+    )
+  );
+
+
+// ================================================================
+// 26. PROJECTED COMBINED POOL
+// ================================================================
+
+var projectedPool =
+  currentCandidates
+
+    .merge(
+      newCandidates
+    )
+
+    .distinct(
+      [
+        'auth_pixel_key'
+      ]
+    );
+
+
+// ================================================================
+// 27. QA RESULTS
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05C3A — TARGETED 60 m EXPANSION RESULTS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    raw_candidate_rows:
+      candidatePool.size(),
+
+    accepted_before_dedup:
+      acceptedRaw.size(),
+
+    accepted_unique:
+      acceptedUnique.size(),
+
+    genuinely_new_candidates:
+      newCandidates.size()
+
+  })
+);
+
+
+print(
+  'NEW candidate class histogram'
+);
+
+
+print(
+  newCandidates.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+print(
+  'NEW candidate poly_id histogram'
+);
+
+
+print(
+  newCandidates.aggregate_histogram(
+    'poly_id'
+  )
+);
+
+
+// ================================================================
+// 28. CLASS-WISE PROJECTED COUNTS
+// ================================================================
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var currentClass =
+      currentCandidates.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    var newClass =
+      newCandidates.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    var projectedClass =
+      projectedPool.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        current_n:
+          currentClass.size(),
+
+        new_n:
+          newClass.size(),
+
+        projected_n:
+          projectedClass.size(),
+
+        projected_deficit:
+          ee.Number(
+            TARGET_PER_CLASS
+          )
+          .subtract(
+            projectedClass.size()
+          )
+          .max(
+            0
+          ),
+
+        projected_distinct_poly_id_n:
+          ee.List(
+            projectedClass.aggregate_array(
+              'poly_id'
+            )
+          )
+          .distinct()
+          .size(),
+
+        projected_poly_id_histogram:
+          projectedClass.aggregate_histogram(
+            'poly_id'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 29. EXPORT TASK
+// ================================================================
+//
+// DO NOT START THE TASK YET.
+//
+// First inspect the console results.
+//
+// ================================================================
+
+Export.table.toAsset({
+
+  collection:
+    newCandidates,
+
+  description:
+    'chennai_2010_targeted_expansion_05C3A',
+
+  assetId:
+    OUTPUT_ASSET
+
+});
+
+
+print(
+  '========================================'
+);
+
+print(
+  '05C3A COMPLETE — QA GENERATED'
+);
+
+print(
+  'DO NOT RUN THIS SCRIPT AGAIN.'
+);
+
+print(
+  'DO NOT START EXPORT UNTIL RESULTS ARE REVIEWED.'
+);
+
+print(
+  '========================================'
+);

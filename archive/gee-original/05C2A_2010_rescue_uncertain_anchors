@@ -1,0 +1,1116 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05C2A
+//
+// RESCUE 05A UNCERTAIN ANCHORS USING AUTHORITATIVE
+// 2010 TARGET-YEAR-NATIVE SIGNATURES
+//
+// PURPOSE
+// -------
+// Re-evaluate ONLY the 05A UNCERTAIN points using:
+//   - materialized correct 2010 predictor stack
+//   - 2010-native class signatures derived from 05A STABLE anchors
+//
+// This script does NOT:
+//   - expand buffers
+//   - build final training
+//   - use validation
+//   - run MLC
+//
+// OUTPUT:
+// chennai_2010_rescued_uncertain_05C2A
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSETS
+// ================================================================
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var QA_05A_ASSET =
+  'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A';
+
+
+var OUTPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_rescued_uncertain_05C2A';
+
+
+// ================================================================
+// 2. SETTINGS
+// ================================================================
+
+var SCALE =
+  30;
+
+
+var PREDICTORS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+var CLASS_IDS =
+  [1, 2, 3, 4, 5];
+
+
+var CLASS_NAMES = [
+
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+
+];
+
+
+var DISTANCE_THRESHOLD =
+  1.25;
+
+
+var MARGIN_THRESHOLD =
+  0.25;
+
+
+var MIN_CLEAR_FOR_AUTO =
+  2;
+
+
+var MIN_LOCAL_FRACTION =
+  5 / 9;
+
+
+var MIN_VALID_NEIGHBOURS =
+  5;
+
+
+var EPSILON =
+  1e-6;
+
+
+// ================================================================
+// 3. LOAD INPUTS
+// ================================================================
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  );
+
+
+var qa05A =
+  ee.FeatureCollection(
+    QA_05A_ASSET
+  );
+
+
+var stackProjection =
+  stack2010
+    .select('blue')
+    .projection();
+
+
+// ================================================================
+// 4. SPLIT 05A INTO STABLE + UNCERTAIN
+// ================================================================
+
+var stableAnchors =
+  qa05A.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'STABLE'
+    )
+  );
+
+
+var uncertainAnchors =
+  qa05A.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'UNCERTAIN'
+    )
+  );
+
+
+// ================================================================
+// 5. SAMPLE CORRECT 2010 VALUES AT STABLE ANCHORS
+// ================================================================
+
+var nativeSeeds =
+  stack2010
+    .select(
+      PREDICTORS
+    )
+    .sampleRegions({
+
+      collection:
+        stableAnchors,
+
+      properties: [
+        'class_id',
+        'class_name',
+        'poly_id'
+      ],
+
+      scale:
+        SCALE,
+
+      projection:
+        stackProjection,
+
+      geometries:
+        true,
+
+      tileScale:
+        4
+    });
+
+
+// ================================================================
+// 6. BUILD 2010-NATIVE CLASS SIGNATURES
+// ================================================================
+
+function buildSignature(classId) {
+
+  var classSamples =
+    nativeSeeds.filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    );
+
+
+  var means =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_mean(
+            band
+          )
+        );
+
+      }
+    );
+
+
+  var sds =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_sample_sd(
+            band
+          )
+        )
+        .max(
+          EPSILON
+        );
+
+      }
+    );
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      class_name:
+        CLASS_NAMES[
+          classId - 1
+        ],
+
+      n_seed:
+        classSamples.size(),
+
+      means:
+        ee.List(
+          means
+        ),
+
+      sds:
+        ee.List(
+          sds
+        )
+    }
+  );
+}
+
+
+var nativeSignatures =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      buildSignature
+    )
+  );
+
+
+// ================================================================
+// 7. DISTANCE FUNCTION
+// ================================================================
+
+function distanceToClass(
+  image,
+  classId
+) {
+
+  var signature =
+    ee.Feature(
+      nativeSignatures
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+        .first()
+    );
+
+
+  var meanImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'means'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    );
+
+
+  var sdImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'sds'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    )
+    .max(
+      EPSILON
+    );
+
+
+  return image
+    .select(
+      PREDICTORS
+    )
+    .subtract(
+      meanImage
+    )
+    .divide(
+      sdImage
+    )
+    .pow(2)
+    .reduce(
+      ee.Reducer.mean()
+    )
+    .sqrt()
+    .rename(
+      'd' + classId
+    );
+}
+
+
+// ================================================================
+// 8. FIVE DISTANCE IMAGES
+// ================================================================
+
+var d1 =
+  distanceToClass(
+    stack2010,
+    1
+  );
+
+
+var d2 =
+  distanceToClass(
+    stack2010,
+    2
+  );
+
+
+var d3 =
+  distanceToClass(
+    stack2010,
+    3
+  );
+
+
+var d4 =
+  distanceToClass(
+    stack2010,
+    4
+  );
+
+
+var d5 =
+  distanceToClass(
+    stack2010,
+    5
+  );
+
+
+var distanceImages = [
+
+  d1,
+  d2,
+  d3,
+  d4,
+  d5
+
+];
+
+
+var distanceStack =
+  ee.Image.cat(
+    distanceImages
+  );
+
+
+// ================================================================
+// 9. BEST + SECOND-BEST CLASS
+// ================================================================
+
+var bestDist =
+  d1.rename(
+    'best_dist'
+  );
+
+
+var bestClass =
+  ee.Image.constant(
+    1
+  )
+  .rename(
+    'best_class'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+var secondDist =
+  ee.Image.constant(
+    9999
+  )
+  .rename(
+    'second_dist'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+for (
+  var i = 1;
+  i < CLASS_IDS.length;
+  i++
+) {
+
+  var currentClass =
+    CLASS_IDS[i];
+
+
+  var currentDistance =
+    distanceImages[i];
+
+
+  var better =
+    currentDistance.lt(
+      bestDist
+    );
+
+
+  var previousBest =
+    bestDist;
+
+
+  var updatedSecond =
+    secondDist.where(
+      better,
+      previousBest
+    );
+
+
+  var currentAsSecond =
+    currentDistance.where(
+      better,
+      9999
+    );
+
+
+  updatedSecond =
+    updatedSecond.min(
+      currentAsSecond
+    );
+
+
+  bestDist =
+    previousBest
+      .where(
+        better,
+        currentDistance
+      )
+      .rename(
+        'best_dist'
+      );
+
+
+  bestClass =
+    bestClass
+      .where(
+        better,
+        currentClass
+      )
+      .rename(
+        'best_class'
+      );
+
+
+  secondDist =
+    updatedSecond.rename(
+      'second_dist'
+    );
+
+}
+
+
+// ================================================================
+// 10. MARGIN
+// ================================================================
+
+var margin =
+  secondDist
+    .subtract(
+      bestDist
+    )
+    .rename(
+      'margin'
+    );
+
+
+// ================================================================
+// 11. LOCAL CONSISTENCY
+// ================================================================
+
+var kernel3x3 =
+  ee.Kernel.square({
+
+    radius:
+      1,
+
+    units:
+      'pixels',
+
+    normalize:
+      false
+
+  });
+
+
+var localValidN =
+  bestClass
+    .reduceNeighborhood({
+
+      reducer:
+        ee.Reducer.count(),
+
+      kernel:
+        kernel3x3,
+
+      skipMasked:
+        true
+
+    })
+    .rename(
+      'local_valid_n'
+    );
+
+
+var localSameN =
+  ee.Image.constant(
+    0
+  )
+  .rename(
+    'local_same_n'
+  )
+  .updateMask(
+    bestClass.mask()
+  );
+
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var neighbourCount =
+      bestClass
+        .eq(
+          classId
+        )
+        .reduceNeighborhood({
+
+          reducer:
+            ee.Reducer.sum(),
+
+          kernel:
+            kernel3x3,
+
+          skipMasked:
+            true
+
+        });
+
+
+    localSameN =
+      localSameN.where(
+
+        bestClass.eq(
+          classId
+        ),
+
+        neighbourCount
+
+      );
+
+  }
+);
+
+
+var localFraction =
+  localSameN
+    .divide(
+      localValidN.max(
+        1
+      )
+    )
+    .rename(
+      'local_fraction'
+    );
+
+
+// ================================================================
+// 12. AUTHORITATIVE PIXEL COORDINATES
+// ================================================================
+
+var pixelXY =
+  ee.Image.pixelCoordinates(
+    stackProjection
+  )
+  .rename(
+    [
+      'auth_px',
+      'auth_py'
+    ]
+  );
+
+
+// ================================================================
+// 13. SCREENING IMAGE
+// ================================================================
+
+var screeningImage =
+  stack2010
+    .select(
+      PREDICTORS
+    )
+
+    .addBands(
+      distanceStack
+    )
+
+    .addBands(
+      bestClass
+    )
+
+    .addBands(
+      bestDist
+    )
+
+    .addBands(
+      secondDist
+    )
+
+    .addBands(
+      margin
+    )
+
+    .addBands(
+      stack2010.select(
+        'clear_count'
+      )
+    )
+
+    .addBands(
+      localValidN
+    )
+
+    .addBands(
+      localFraction
+    )
+
+    .addBands(
+      pixelXY
+    );
+
+
+// ================================================================
+// 14. SAMPLE ONLY 05A UNCERTAIN LOCATIONS
+// ================================================================
+
+var uncertainSamples =
+  screeningImage.sampleRegions({
+
+    collection:
+      uncertainAnchors,
+
+    properties: [
+      'class_id',
+      'class_name',
+      'poly_id',
+      'transfer_status'
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      stackProjection,
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+
+  });
+
+
+// ================================================================
+// 15. AUTHORITATIVE PIXEL KEY
+// ================================================================
+
+uncertainSamples =
+  uncertainSamples.map(
+    function(feature) {
+
+      var px =
+        ee.Number(
+          feature.get(
+            'auth_px'
+          )
+        );
+
+
+      var py =
+        ee.Number(
+          feature.get(
+            'auth_py'
+          )
+        );
+
+
+      var key =
+        px.format(
+          '%.0f'
+        )
+        .cat(
+          '_'
+        )
+        .cat(
+          py.format(
+            '%.0f'
+          )
+        );
+
+
+      return feature.set(
+        'auth_pixel_key',
+        key
+      );
+
+    }
+  );
+
+
+// ================================================================
+// 16. OWN-CLASS DISTANCE
+// ================================================================
+
+function ownClassDistance(
+  feature,
+  classId
+) {
+
+  return ee.Number(
+
+    ee.Algorithms.If(
+      classId.eq(1),
+
+      feature.get(
+        'd1'
+      ),
+
+      ee.Algorithms.If(
+        classId.eq(2),
+
+        feature.get(
+          'd2'
+        ),
+
+        ee.Algorithms.If(
+          classId.eq(3),
+
+          feature.get(
+            'd3'
+          ),
+
+          ee.Algorithms.If(
+            classId.eq(4),
+
+            feature.get(
+              'd4'
+            ),
+
+            feature.get(
+              'd5'
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
+
+// ================================================================
+// 17. RESCUE TEST
+// ================================================================
+
+var evaluatedUncertain =
+  uncertainSamples.map(
+    function(feature) {
+
+      var sourceClass =
+        ee.Number(
+          feature.get(
+            'class_id'
+          )
+        );
+
+
+      var predictedClass =
+        ee.Number(
+          feature.get(
+            'best_class'
+          )
+        );
+
+
+      var ownDistance =
+        ownClassDistance(
+          feature,
+          sourceClass
+        );
+
+
+      var classMargin =
+        ee.Number(
+          feature.get(
+            'margin'
+          )
+        );
+
+
+      var clearCount =
+        ee.Number(
+          feature.get(
+            'clear_count'
+          )
+        );
+
+
+      var localN =
+        ee.Number(
+          feature.get(
+            'local_valid_n'
+          )
+        );
+
+
+      var localFrac =
+        ee.Number(
+          feature.get(
+            'local_fraction'
+          )
+        );
+
+
+      var accepted =
+        clearCount
+          .gte(
+            MIN_CLEAR_FOR_AUTO
+          )
+
+          .and(
+            predictedClass.eq(
+              sourceClass
+            )
+          )
+
+          .and(
+            ownDistance.lte(
+              DISTANCE_THRESHOLD
+            )
+          )
+
+          .and(
+            classMargin.gte(
+              MARGIN_THRESHOLD
+            )
+          )
+
+          .and(
+            localN.gte(
+              MIN_VALID_NEIGHBOURS
+            )
+          )
+
+          .and(
+            localFrac.gte(
+              MIN_LOCAL_FRACTION
+            )
+          );
+
+
+      return feature.set({
+
+        rescue_original_class:
+          sourceClass,
+
+        rescue_predicted_class:
+          predictedClass,
+
+        rescue_distance:
+          ownDistance,
+
+        rescue_margin:
+          classMargin,
+
+        rescue_accept:
+          ee.Number(
+            ee.Algorithms.If(
+              accepted,
+              1,
+              0
+            )
+          ),
+
+        rescue_method:
+          '05A_uncertain_to_2010_native',
+
+        target_year:
+          2010
+
+      });
+
+    }
+  );
+
+
+// ================================================================
+// 18. KEEP RESCUED POINTS
+// ================================================================
+
+var rescuedRaw =
+  evaluatedUncertain.filter(
+    ee.Filter.eq(
+      'rescue_accept',
+      1
+    )
+  );
+
+
+var rescuedFinal =
+  rescuedRaw.distinct(
+    [
+      'auth_pixel_key'
+    ]
+  );
+
+
+// ================================================================
+// 19. MINIMAL QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05C2A — RESCUE 05A UNCERTAIN ANCHORS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.String(
+    '05A uncertain input = '
+  )
+  .cat(
+    uncertainAnchors.size()
+      .format('%d')
+  )
+);
+
+
+print(
+  ee.String(
+    'Successfully sampled = '
+  )
+  .cat(
+    uncertainSamples.size()
+      .format('%d')
+  )
+);
+
+
+print(
+  ee.String(
+    'Rescued after dedup = '
+  )
+  .cat(
+    rescuedFinal.size()
+      .format('%d')
+  )
+);
+
+
+print(
+  'Rescued class histogram'
+);
+
+print(
+  rescuedFinal.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ================================================================
+// 20. SOURCE-GROUP QA
+// ================================================================
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var fc =
+      rescuedFinal.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        rescued_n:
+          fc.size(),
+
+        distinct_poly_id_n:
+          ee.List(
+            fc.aggregate_array(
+              'poly_id'
+            )
+          )
+          .distinct()
+          .size(),
+
+        poly_id_histogram:
+          fc.aggregate_histogram(
+            'poly_id'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 21. EXPORT TASK
+// ================================================================
+//
+// DO NOT START THE TASK UNTIL THE CONSOLE RESULTS ARE REVIEWED.
+//
+// ================================================================
+
+Export.table.toAsset({
+
+  collection:
+    rescuedFinal,
+
+  description:
+    'chennai_2010_rescued_uncertain_05C2A',
+
+  assetId:
+    OUTPUT_ASSET
+
+});
+
+
+print(
+  '========================================'
+);
+
+print(
+  '05C2A SCRIPT FINISHED'
+);
+
+print(
+  'DO NOT RUN AGAIN.'
+);
+
+print(
+  'Send rescued histogram + poly_id summaries for review.'
+);
+
+print(
+  '========================================'
+);

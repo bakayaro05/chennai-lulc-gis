@@ -1,0 +1,1341 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05C1
+//
+// RE-QA EXISTING 05B CANDIDATES USING THE AUTHORITATIVE
+// MATERIALIZED 2010 PREDICTOR STACK
+//
+// INPUTS
+// ------
+// 1. Correct materialized 2010 predictor stack
+// 2. Existing 05A transfer QA table
+// 3. Existing materialized 05B candidate table
+//
+// PURPOSE
+// -------
+// Rebuild 2010-native signatures using the CORRECT predictor stack,
+// then re-score the already-generated 05B candidate LOCATIONS.
+//
+// IMPORTANT
+// ---------
+// 05B candidate metrics are NOT trusted here.
+// Only their locations / class labels / poly_id are reused.
+//
+// NO:
+// - Landsat reconstruction
+// - validation
+// - MLC
+// - final training export
+// - map layers
+//
+// OUTPUT:
+// chennai_2010_passB_reQA_05C1
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSET PATHS
+// ================================================================
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var QA_05A_ASSET =
+  'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A';
+
+
+var PASSB_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_candidates_05B';
+
+
+var OUTPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+
+// ================================================================
+// 2. LOCKED SETTINGS
+// ================================================================
+
+var SCALE =
+  30;
+
+
+var PREDICTORS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+var CLASS_PROPERTY =
+  'class_id';
+
+
+var CLASS_IDS =
+  [1, 2, 3, 4, 5];
+
+
+var CLASS_NAMES = [
+
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+
+];
+
+
+// ------------------------------------------------
+// Existing screening thresholds.
+//
+// We are NOT changing thresholds during this correction.
+// ------------------------------------------------
+
+var DISTANCE_THRESHOLD =
+  1.25;
+
+
+var MARGIN_THRESHOLD =
+  0.25;
+
+
+var MIN_CLEAR_FOR_AUTO =
+  2;
+
+
+// ------------------------------------------------
+// Local 3 × 3 consistency
+// ------------------------------------------------
+
+var MIN_LOCAL_FRACTION =
+  5 / 9;
+
+
+var MIN_VALID_NEIGHBOURS =
+  5;
+
+
+var EPSILON =
+  1e-6;
+
+
+var TARGET_PER_CLASS =
+  120;
+
+
+// ================================================================
+// 3. LOAD MATERIALIZED INPUTS
+// ================================================================
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  );
+
+
+var qa05A =
+  ee.FeatureCollection(
+    QA_05A_ASSET
+  );
+
+
+var passBCandidates =
+  ee.FeatureCollection(
+    PASSB_ASSET
+  );
+
+
+// ------------------------------------------------
+// Use the exact projection of the saved authoritative raster.
+// ------------------------------------------------
+
+var stackProjection =
+  stack2010
+    .select('blue')
+    .projection();
+
+
+// ================================================================
+// 4. LOAD 05A STABLE ANCHORS
+// ================================================================
+//
+// These are used ONLY as conservative labelled anchors from which
+// to reconstruct target-year-native 2010 signatures.
+//
+// All predictor values are freshly sampled from the authoritative
+// 2010 raster.
+//
+// ================================================================
+
+var stableAnchors =
+  qa05A.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'STABLE'
+    )
+  );
+
+
+// ================================================================
+// 5. SAMPLE CORRECT 2010 PREDICTORS AT STABLE ANCHORS
+// ================================================================
+//
+// Only metadata is copied from the old asset.
+//
+// Nine predictor values come exclusively from stack2010.
+//
+// ================================================================
+
+var nativeSeeds =
+  stack2010
+    .select(
+      PREDICTORS
+    )
+    .sampleRegions({
+
+      collection:
+        stableAnchors,
+
+      properties: [
+        'class_id',
+        'class_name',
+        'poly_id'
+      ],
+
+      scale:
+        SCALE,
+
+      projection:
+        stackProjection,
+
+      geometries:
+        true,
+
+      tileScale:
+        4
+    });
+
+
+// ================================================================
+// 6. BUILD 2010-NATIVE CLASS SIGNATURES
+// ================================================================
+
+function buildSignature(classId) {
+
+  var classSamples =
+    nativeSeeds.filter(
+      ee.Filter.eq(
+        CLASS_PROPERTY,
+        classId
+      )
+    );
+
+
+  var means =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_mean(
+            band
+          )
+        );
+
+      }
+    );
+
+
+  var sds =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_sample_sd(
+            band
+          )
+        )
+        .max(
+          EPSILON
+        );
+
+      }
+    );
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      class_name:
+        CLASS_NAMES[
+          classId - 1
+        ],
+
+      n_seed:
+        classSamples.size(),
+
+      means:
+        ee.List(
+          means
+        ),
+
+      sds:
+        ee.List(
+          sds
+        )
+    }
+  );
+}
+
+
+var nativeSignatures =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      buildSignature
+    )
+  );
+
+
+// ================================================================
+// 7. DISTANCE TO A 2010-NATIVE CLASS
+// ================================================================
+//
+// Standardized RMS distance:
+//
+// sqrt(
+//   mean(
+//     ((x - classMean) / classSD)^2
+//   )
+// )
+//
+// ================================================================
+
+function distanceToClass(
+  image,
+  classId
+) {
+
+  var signature =
+    ee.Feature(
+      nativeSignatures
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+        .first()
+    );
+
+
+  var meanImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'means'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    );
+
+
+  var sdImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'sds'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    )
+    .max(
+      EPSILON
+    );
+
+
+  return image
+    .select(
+      PREDICTORS
+    )
+    .subtract(
+      meanImage
+    )
+    .divide(
+      sdImage
+    )
+    .pow(2)
+    .reduce(
+      ee.Reducer.mean()
+    )
+    .sqrt()
+    .rename(
+      'd' + classId
+    );
+}
+
+
+// ================================================================
+// 8. BUILD FIVE DISTANCE IMAGES
+// ================================================================
+
+var d1 =
+  distanceToClass(
+    stack2010,
+    1
+  );
+
+
+var d2 =
+  distanceToClass(
+    stack2010,
+    2
+  );
+
+
+var d3 =
+  distanceToClass(
+    stack2010,
+    3
+  );
+
+
+var d4 =
+  distanceToClass(
+    stack2010,
+    4
+  );
+
+
+var d5 =
+  distanceToClass(
+    stack2010,
+    5
+  );
+
+
+var distanceImages = [
+
+  d1,
+  d2,
+  d3,
+  d4,
+  d5
+
+];
+
+
+var distanceStack =
+  ee.Image.cat(
+    distanceImages
+  );
+
+
+// ================================================================
+// 9. FIND BEST + SECOND-BEST CLASS
+// ================================================================
+
+var bestDist =
+  d1.rename(
+    'best_dist'
+  );
+
+
+var bestClass =
+  ee.Image.constant(
+    1
+  )
+  .rename(
+    'best_class'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+var secondDist =
+  ee.Image.constant(
+    9999
+  )
+  .rename(
+    'second_dist'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+for (
+  var i = 1;
+  i < CLASS_IDS.length;
+  i++
+) {
+
+  var currentClass =
+    CLASS_IDS[i];
+
+
+  var currentDistance =
+    distanceImages[i];
+
+
+  var better =
+    currentDistance.lt(
+      bestDist
+    );
+
+
+  var previousBest =
+    bestDist;
+
+
+  var updatedSecond =
+    secondDist.where(
+      better,
+      previousBest
+    );
+
+
+  var currentAsSecond =
+    currentDistance.where(
+      better,
+      9999
+    );
+
+
+  updatedSecond =
+    updatedSecond.min(
+      currentAsSecond
+    );
+
+
+  bestDist =
+    previousBest
+      .where(
+        better,
+        currentDistance
+      )
+      .rename(
+        'best_dist'
+      );
+
+
+  bestClass =
+    bestClass
+      .where(
+        better,
+        currentClass
+      )
+      .rename(
+        'best_class'
+      );
+
+
+  secondDist =
+    updatedSecond
+      .rename(
+        'second_dist'
+      );
+
+}
+
+
+// ================================================================
+// 10. CLASS-SEPARATION MARGIN
+// ================================================================
+
+var margin =
+  secondDist
+    .subtract(
+      bestDist
+    )
+    .rename(
+      'margin'
+    );
+
+
+// ================================================================
+// 11. LOCAL 3 × 3 CONSISTENCY
+// ================================================================
+
+var kernel3x3 =
+  ee.Kernel.square({
+
+    radius:
+      1,
+
+    units:
+      'pixels',
+
+    normalize:
+      false
+
+  });
+
+
+// ------------------------------------------------
+// Number of valid pixels in neighborhood.
+// ------------------------------------------------
+
+var localValidN =
+  bestClass
+    .reduceNeighborhood({
+
+      reducer:
+        ee.Reducer.count(),
+
+      kernel:
+        kernel3x3,
+
+      skipMasked:
+        true
+
+    })
+    .rename(
+      'local_valid_n'
+    );
+
+
+// ------------------------------------------------
+// Number of neighbors matching centre predicted class.
+// ------------------------------------------------
+
+var localSameN =
+  ee.Image.constant(
+    0
+  )
+  .rename(
+    'local_same_n'
+  )
+  .updateMask(
+    bestClass.mask()
+  );
+
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var classNeighbourCount =
+      bestClass
+        .eq(
+          classId
+        )
+        .reduceNeighborhood({
+
+          reducer:
+            ee.Reducer.sum(),
+
+          kernel:
+            kernel3x3,
+
+          skipMasked:
+            true
+
+        });
+
+
+    localSameN =
+      localSameN.where(
+
+        bestClass.eq(
+          classId
+        ),
+
+        classNeighbourCount
+
+      );
+
+  }
+);
+
+
+var localFraction =
+  localSameN
+    .divide(
+      localValidN.max(
+        1
+      )
+    )
+    .rename(
+      'local_fraction'
+    );
+
+
+// ================================================================
+// 12. AUTHORITATIVE PIXEL COORDINATES
+// ================================================================
+//
+// This creates a fresh pixel ID using the grid of the saved
+// authoritative 2010 raster.
+//
+// It prevents duplicates caused by old candidate-grid alignment.
+//
+// ================================================================
+
+var pixelXY =
+  ee.Image.pixelCoordinates(
+    stackProjection
+  )
+  .rename(
+    [
+      'auth_px',
+      'auth_py'
+    ]
+  );
+
+
+// ================================================================
+// 13. CREATE RE-QA IMAGE
+// ================================================================
+
+var reQaImage =
+  stack2010
+    .select(
+      PREDICTORS
+    )
+
+    .addBands(
+      distanceStack
+    )
+
+    .addBands(
+      bestClass
+    )
+
+    .addBands(
+      bestDist
+    )
+
+    .addBands(
+      secondDist
+    )
+
+    .addBands(
+      margin
+    )
+
+    .addBands(
+      stack2010.select(
+        'clear_count'
+      )
+    )
+
+    .addBands(
+      localValidN
+    )
+
+    .addBands(
+      localFraction
+    )
+
+    .addBands(
+      pixelXY
+    );
+
+
+// ================================================================
+// 14. SAMPLE THE EXISTING 05B CANDIDATE LOCATIONS
+// ================================================================
+//
+// IMPORTANT:
+//
+// We DO NOT trust their old d1/d2/... metrics.
+//
+// We copy only:
+// class
+// class_name
+// poly_id
+// previous pixel_key
+//
+// Everything spectral / QA-related is recalculated.
+//
+// ================================================================
+
+var rescoredCandidates =
+  reQaImage.sampleRegions({
+
+    collection:
+      passBCandidates,
+
+    properties: [
+      'class_id',
+      'class_name',
+      'poly_id',
+      'pixel_key'
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      stackProjection,
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+
+  });
+
+
+// ================================================================
+// 15. CREATE AUTHORITATIVE PIXEL KEY
+// ================================================================
+
+rescoredCandidates =
+  rescoredCandidates.map(
+    function(feature) {
+
+      var px =
+        ee.Number(
+          feature.get(
+            'auth_px'
+          )
+        );
+
+
+      var py =
+        ee.Number(
+          feature.get(
+            'auth_py'
+          )
+        );
+
+
+      var key =
+        px.format(
+          '%.0f'
+        )
+        .cat(
+          '_'
+        )
+        .cat(
+          py.format(
+            '%.0f'
+          )
+        );
+
+
+      return feature.set(
+        'auth_pixel_key',
+        key
+      );
+
+    }
+  );
+
+
+// ================================================================
+// 16. OWN-CLASS DISTANCE
+// ================================================================
+
+function ownClassDistance(
+  feature,
+  classId
+) {
+
+  return ee.Number(
+
+    ee.Algorithms.If(
+      classId.eq(1),
+
+      feature.get(
+        'd1'
+      ),
+
+      ee.Algorithms.If(
+        classId.eq(2),
+
+        feature.get(
+          'd2'
+        ),
+
+        ee.Algorithms.If(
+          classId.eq(3),
+
+          feature.get(
+            'd3'
+          ),
+
+          ee.Algorithms.If(
+            classId.eq(4),
+
+            feature.get(
+              'd4'
+            ),
+
+            feature.get(
+              'd5'
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
+
+// ================================================================
+// 17. RE-QA EVERY CANDIDATE
+// ================================================================
+
+var evaluatedCandidates =
+  rescoredCandidates.map(
+    function(feature) {
+
+      var sourceClass =
+        ee.Number(
+          feature.get(
+            CLASS_PROPERTY
+          )
+        );
+
+
+      var predictedClass =
+        ee.Number(
+          feature.get(
+            'best_class'
+          )
+        );
+
+
+      var ownDistance =
+        ownClassDistance(
+          feature,
+          sourceClass
+        );
+
+
+      var classMargin =
+        ee.Number(
+          feature.get(
+            'margin'
+          )
+        );
+
+
+      var clearCount =
+        ee.Number(
+          feature.get(
+            'clear_count'
+          )
+        );
+
+
+      var localN =
+        ee.Number(
+          feature.get(
+            'local_valid_n'
+          )
+        );
+
+
+      var localFrac =
+        ee.Number(
+          feature.get(
+            'local_fraction'
+          )
+        );
+
+
+      var passClear =
+        clearCount.gte(
+          MIN_CLEAR_FOR_AUTO
+        );
+
+
+      var passClass =
+        predictedClass.eq(
+          sourceClass
+        );
+
+
+      var passDistance =
+        ownDistance.lte(
+          DISTANCE_THRESHOLD
+        );
+
+
+      var passMargin =
+        classMargin.gte(
+          MARGIN_THRESHOLD
+        );
+
+
+      var passLocal =
+        localN
+          .gte(
+            MIN_VALID_NEIGHBOURS
+          )
+          .and(
+            localFrac.gte(
+              MIN_LOCAL_FRACTION
+            )
+          );
+
+
+      var accepted =
+        passClear
+
+          .and(
+            passClass
+          )
+
+          .and(
+            passDistance
+          )
+
+          .and(
+            passMargin
+          )
+
+          .and(
+            passLocal
+          );
+
+
+      return feature.set({
+
+        reQA_source_class:
+          sourceClass,
+
+        reQA_predicted_class:
+          predictedClass,
+
+        reQA_distance:
+          ownDistance,
+
+        reQA_margin:
+          classMargin,
+
+        reQA_clear_ok:
+          passClear,
+
+        reQA_class_ok:
+          passClass,
+
+        reQA_distance_ok:
+          passDistance,
+
+        reQA_margin_ok:
+          passMargin,
+
+        reQA_local_ok:
+          passLocal,
+
+        reQA_accept:
+          ee.Number(
+            ee.Algorithms.If(
+              accepted,
+              1,
+              0
+            )
+          ),
+
+        reQA_method:
+          'authoritative_2010_stack',
+
+        target_year:
+          2010
+
+      });
+
+    }
+  );
+
+
+// ================================================================
+// 18. KEEP ACCEPTED + DEDUPLICATE ON AUTHORITATIVE GRID
+// ================================================================
+
+var acceptedRaw =
+  evaluatedCandidates.filter(
+    ee.Filter.eq(
+      'reQA_accept',
+      1
+    )
+  );
+
+
+var acceptedFinal =
+  acceptedRaw.distinct(
+    [
+      'auth_pixel_key'
+    ]
+  );
+
+
+// ================================================================
+// 19. CLASS-WISE SUMMARY
+// ================================================================
+
+function summarizeClass(
+  classId
+) {
+
+  var fc =
+    acceptedFinal.filter(
+      ee.Filter.eq(
+        CLASS_PROPERTY,
+        classId
+      )
+    );
+
+
+  var n =
+    fc.size();
+
+
+  var distinctPolyIds =
+    ee.List(
+      fc.aggregate_array(
+        'poly_id'
+      )
+    )
+    .distinct();
+
+
+  var deficit =
+    ee.Number(
+      TARGET_PER_CLASS
+    )
+    .subtract(
+      n
+    )
+    .max(
+      0
+    );
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      class_name:
+        CLASS_NAMES[
+          classId - 1
+        ],
+
+      accepted_n:
+        n,
+
+      target_n:
+        TARGET_PER_CLASS,
+
+      deficit:
+        deficit,
+
+      sufficient_120:
+        n.gte(
+          TARGET_PER_CLASS
+        ),
+
+      distinct_poly_id_n:
+        distinctPolyIds.size(),
+
+      mean_distance:
+        fc.aggregate_mean(
+          'reQA_distance'
+        ),
+
+      mean_margin:
+        fc.aggregate_mean(
+          'reQA_margin'
+        ),
+
+      mean_clear_count:
+        fc.aggregate_mean(
+          'clear_count'
+        ),
+
+      mean_local_fraction:
+        fc.aggregate_mean(
+          'local_fraction'
+        )
+
+    }
+  );
+}
+
+
+var classSummary =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      summarizeClass
+    )
+  );
+
+
+// ================================================================
+// 20. MINIMAL CONSOLE QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05C1 — AUTHORITATIVE 2010 RE-QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.String(
+    '05A stable anchors = '
+  )
+  .cat(
+    stableAnchors.size()
+      .format('%d')
+  )
+);
+
+
+print(
+  'Correct-stack seed histogram'
+);
+
+print(
+  nativeSeeds.aggregate_histogram(
+    CLASS_PROPERTY
+  )
+);
+
+
+print(
+  ee.String(
+    '05B input candidates = '
+  )
+  .cat(
+    passBCandidates.size()
+      .format('%d')
+  )
+);
+
+
+print(
+  ee.String(
+    'Candidates successfully sampled = '
+  )
+  .cat(
+    rescoredCandidates.size()
+      .format('%d')
+  )
+);
+
+
+print(
+  ee.String(
+    'Accepted before authoritative-grid dedup = '
+  )
+  .cat(
+    acceptedRaw.size()
+      .format('%d')
+  )
+);
+
+
+print(
+  ee.String(
+    'Accepted after authoritative-grid dedup = '
+  )
+  .cat(
+    acceptedFinal.size()
+      .format('%d')
+  )
+);
+
+
+print(
+  'Accepted class histogram'
+);
+
+print(
+  acceptedFinal.aggregate_histogram(
+    CLASS_PROPERTY
+  )
+);
+
+
+print(
+  'CLASS-WISE RE-QA SUMMARY'
+);
+
+print(
+  classSummary
+);
+
+
+// ================================================================
+// 21. EXPORT TASK
+// ================================================================
+//
+// IMPORTANT:
+//
+// Clicking RUN creates the task.
+//
+// FIRST inspect the console.
+//
+// If the results are sensible, go to Tasks and START the export.
+//
+// DO NOT press RUN again.
+//
+// ================================================================
+
+Export.table.toAsset({
+
+  collection:
+    acceptedFinal,
+
+  description:
+    'chennai_2010_passB_reQA_05C1',
+
+  assetId:
+    OUTPUT_ASSET
+
+});
+
+
+print(
+  '========================================'
+);
+
+print(
+  '05C1 SCRIPT FINISHED'
+);
+
+print(
+  'DO NOT RUN THIS SCRIPT AGAIN.'
+);
+
+print(
+  'Inspect the summary, then start the ONE export task.'
+);
+
+print(
+  '========================================'
+);

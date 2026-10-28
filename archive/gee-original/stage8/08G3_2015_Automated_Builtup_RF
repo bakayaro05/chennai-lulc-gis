@@ -1,0 +1,402 @@
+
+ // =============================================================
+ // CHENNAI LULC — STAGE 08G-3
+ // AUTOMATED GAIA-ASSISTED FIVE-CLASS RANDOM FOREST | YEAR 2015
+ // EXPERIMENTAL ONLY. No edits to the locked original assets.
+ // No manual point verification and no SNIC recalculation.
+ // =============================================================
+
+ var ROOT = 'projects/assignment-482806/assets/';
+ var roiFC = ee.FeatureCollection(ROOT + 'chennai_admin_study_area_clean');
+ var roi = roiFC.geometry();
+ var originalTraining = ee.FeatureCollection(ROOT + 'chennai_training_2015_final');
+ var originalValidation = ee.FeatureCollection(ROOT + 'chennai_validation_2015_final');
+ var originalMap = ee.Image(ROOT + 'chennai_mlc_lulc_2015')
+   .select(0).rename('baseline');
+ var grid = originalMap.projection();
+
+ var ORIGINAL = [
+   'blue', 'green', 'red', 'nir', 'swir1', 'swir2',
+   'NDVI', 'NDWI', 'NDBI'
+ ];
+ var PREDICTORS = ORIGINAL.concat(['BSI', 'NDBI_mean5']);
+ var GAIA_SEED = 20261022;
+ var RF_SEED = 20261022;
+ var AUTO_PER_GROUP = 150; // Fixed once: 4 groups x 150
+ var OUTPUT = ROOT + 'chennai_2015_08G3_gaia_assisted_RF_experimental_v1';
+
+ // =============================================================
+ // 1. ORIGINAL FULL-YEAR LANDSAT 8 PROCESSING
+ // =============================================================
+
+ function preprocess(im) {
+   var clear = im.select('QA_PIXEL').bitwiseAnd(63).eq(0)
+     .and(im.select('QA_RADSAT').eq(0));
+   return im.select(
+     ['SR_B2','SR_B3','SR_B4','SR_B5','SR_B6','SR_B7'],
+     ['blue','green','red','nir','swir1','swir2']
+   ).multiply(0.0000275).subtract(0.2)
+     .updateMask(clear)
+     .copyProperties(im, ['system:time_start']);
+ }
+
+ var scenes = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+   .filterBounds(roi).filterDate('2015-01-01', '2016-01-01')
+   .map(preprocess);
+
+ var median = scenes.median();
+ var red = median.select('red');
+ var green = median.select('green');
+ var blue = median.select('blue');
+ var nir = median.select('nir');
+ var swir1 = median.select('swir1');
+
+ var spectral = median.addBands([
+   nir.subtract(red).divide(nir.add(red)).rename('NDVI'),
+   green.subtract(nir).divide(green.add(nir)).rename('NDWI'),
+   swir1.subtract(nir).divide(swir1.add(nir)).rename('NDBI'),
+   swir1.add(red).subtract(nir).subtract(blue)
+     .divide(swir1.add(red).add(nir).add(blue)).rename('BSI')
+ ]).reproject(grid);
+
+ var localNDBI = spectral.select('NDBI').reduceNeighborhood({
+   reducer: ee.Reducer.mean(),
+   kernel: ee.Kernel.square({radius:2,units:'pixels',normalize:false}),
+   skipMasked: true
+ }).rename('NDBI_mean5');
+
+ var stack = spectral.addBands(localNDBI)
+   .select(PREDICTORS).clip(roi);
+
+ // =============================================================
+ // 2. AUTOMATED REFERENCE MINING (GAIA USED ONLY FOR LABELS)
+ // =============================================================
+
+ var gaia = ee.Image('Tsinghua/FROM-GLC/GAIA/v10')
+   .select('change_year_index').unmask(0).reproject(grid);
+
+ var imperviousBy2010 = gaia.gte(9).and(gaia.lte(34));
+ var imperviousBy2015 = gaia.gte(4).and(gaia.lte(34));
+
+ // Avoid mining near ANY original 2015 training/validation point.
+ // This protects the fixed validation points from direct proximity
+ // to automatically generated reference labels.
+
+ var excludedFeatures = originalTraining.merge(originalValidation)
+   .map(function(f) {
+     return ee.Feature(f.geometry().buffer(90));
+   });
+
+ var excludeMask = ee.Image.constant(0).toByte()
+   .paint(excludedFeatures, 1).reproject(grid);
+
+ var eligible = excludeMask.eq(0);
+
+ // Group 1: GAIA impervious by 2010, MLC class 4 -> Built-up.
+ // Group 2: GAIA impervious by 2010, MLC class 5 -> Built-up.
+ // Group 3: GAIA not impervious by 2015, MLC class 4 -> class 4.
+ // Group 4: GAIA not impervious by 2015, MLC class 5 -> class 5.
+ //
+ // These are documented GAIA-assisted pseudo-labels,
+ // NOT independently verified ground-truth labels.
+
+ var pos4 = imperviousBy2010.and(originalMap.eq(4));
+ var pos5 = imperviousBy2010.and(originalMap.eq(5));
+ var neg4 = imperviousBy2015.not().and(originalMap.eq(4));
+ var neg5 = imperviousBy2015.not().and(originalMap.eq(5));
+
+ var strata = ee.Image.constant(0).toByte()
+   .where(pos4, 1).where(pos5, 2)
+   .where(neg4, 3).where(neg5, 4)
+   .rename('stratum');
+
+ strata = strata.updateMask(strata.gt(0))
+   .updateMask(eligible).clip(roi);
+
+ var autoSamples = strata.addBands(stack).stratifiedSample({
+   numPoints: 0,
+   classBand: 'stratum',
+   region: roi,
+   projection: grid,
+   classValues: [1,2,3,4],
+   classPoints: [
+     AUTO_PER_GROUP,
+     AUTO_PER_GROUP,
+     AUTO_PER_GROUP,
+     AUTO_PER_GROUP
+   ],
+   seed: GAIA_SEED,
+   tileScale: 8,
+   geometries: false
+ }).map(function(f) {
+
+   var group = ee.Number(f.get('stratum'));
+
+   var classId = ee.Number(ee.Algorithms.If(
+     group.lte(2), 1,
+     ee.Algorithms.If(group.eq(3), 4, 5)
+   ));
+
+   return f.set({
+     'class_id': classId,
+     'rf_label': classId.subtract(1),
+     'reference_source': 'GAIA_assisted_pseudo'
+   });
+
+ });
+
+ // Preserve all manually checked original points.
+
+ var markedManual = originalTraining.map(function(f) {
+   return f.set({
+     archive_red: f.get('red'),
+     archive_NDBI: f.get('NDBI')
+   });
+ });
+
+ var manualSamples = stack.sampleRegions({
+   collection: markedManual,
+   properties: [
+     'class_id',
+     'poly_id',
+     'archive_red',
+     'archive_NDBI'
+   ],
+   projection: grid,
+   tileScale: 8,
+   geometries: false
+ }).map(function(f) {
+
+   return f.set({
+     'rf_label': ee.Number(f.get('class_id')).subtract(1),
+     'reference_source': 'original_manual'
+   });
+
+ });
+
+ var combinedTraining = manualSamples.merge(autoSamples);
+
+ // =============================================================
+ // 3. DIFFERENT ALGORITHM: FIVE-CLASS RANDOM FOREST
+ // =============================================================
+
+ var forest = ee.Classifier.smileRandomForest({
+   numberOfTrees: 160,
+   minLeafPopulation: 3,
+   bagFraction: 0.7,
+   seed: RF_SEED
+ }).train({
+   features: combinedTraining,
+   classProperty: 'rf_label',
+   inputProperties: PREDICTORS
+ });
+
+ // 0..4 -> original IDs 1..5. No monotonicity constraints.
+ // Unlike an override, RF may both gain and lose Built-up pixels.
+
+ var candidate = stack.classify(forest)
+   .add(1).rename('candidate').toByte()
+   .updateMask(originalMap.mask()).clip(roi);
+
+ // =============================================================
+ // 4. SAME ORIGINAL VALIDATION DATA: EXPLORATORY COMPARISON
+ // =============================================================
+
+ var checked = originalMap.addBands(candidate)
+   .sampleRegions({
+     collection: originalValidation,
+     properties: ['class_id'],
+     projection: grid,
+     geometries: false,
+     tileScale: 8
+   }).map(function(f) {
+
+     var actual = ee.Number(f.get('class_id'));
+     var oldLabel = ee.Number(f.get('baseline'));
+     var newLabel = ee.Number(f.get('candidate'));
+
+     return f.set(
+       'correctness_delta',
+       newLabel.eq(actual).subtract(oldLabel.eq(actual))
+     );
+
+   });
+
+ var order = [1,2,3,4,5];
+
+ var originalCM = checked.errorMatrix(
+   'class_id','baseline',order
+ );
+
+ var newCM = checked.errorMatrix(
+   'class_id','candidate',order
+ );
+
+ var buTruth = checked.filter(ee.Filter.eq('class_id',1));
+ var nonBU = checked.filter(ee.Filter.neq('class_id',1));
+
+ var manualQA = manualSamples.map(function(f) {
+   return f.set({
+     red_difference: ee.Number(f.get('red'))
+       .subtract(ee.Number(f.get('archive_red'))).abs(),
+     NDBI_difference: ee.Number(f.get('NDBI'))
+       .subtract(ee.Number(f.get('archive_NDBI'))).abs()
+   });
+ });
+
+ // =============================================================
+ // 5. QA AND OBJECTIVE OUTPUTS
+ // =============================================================
+
+ print('==================== STAGE 08G-3 ====================');
+ print('AUTOMATED GAIA-ASSISTED 5-CLASS RANDOM FOREST');
+ print('Year: 2015. No manual new reference points.');
+
+ print('Original projection:');
+ print(grid);
+
+ print('Landsat scenes (expect 19):');
+ print(scenes.size());
+
+ print('Original manual samples (expect 600):');
+ print(manualSamples.size());
+
+ print('Manual class balance:');
+ print(manualSamples.aggregate_histogram('class_id'));
+
+ print('Original red mismatch (expect 0):');
+ print(manualQA.aggregate_max('red_difference'));
+
+ print('Original NDBI mismatch (expect 0):');
+ print(manualQA.aggregate_max('NDBI_difference'));
+
+ print('Automatic pseudo-reference strata (target 150 each):');
+ print(autoSamples.aggregate_histogram('stratum'));
+
+ print('Combined training totals by class ID:');
+ print(combinedTraining.aggregate_histogram('class_id'));
+
+ print('Validation sample count (expect 300):');
+ print(checked.size());
+
+ print('ORIGINAL confusion matrix:');
+ print(originalCM);
+
+ print('NEW Random Forest confusion matrix:');
+ print(newCM);
+
+ print('Original overall accuracy:');
+ print(originalCM.accuracy());
+
+ print('RF overall accuracy:');
+ print(newCM.accuracy());
+
+ print('Overall accuracy difference, percentage points:');
+ print(
+   ee.Number(newCM.accuracy())
+     .subtract(originalCM.accuracy())
+     .multiply(100)
+ );
+
+ print('Original Built-up recall:');
+ print(originalCM.producersAccuracy().get([0,0]));
+
+ print('RF Built-up recall:');
+ print(newCM.producersAccuracy().get([0,0]));
+
+ print('Built-up true positives, old and RF:');
+ print(ee.Dictionary({
+   original: buTruth.filter(ee.Filter.eq('baseline',1)).size(),
+   RF: buTruth.filter(ee.Filter.eq('candidate',1)).size()
+ }));
+
+ print('Built-up false positives, old and RF:');
+ print(ee.Dictionary({
+   original: nonBU.filter(ee.Filter.eq('baseline',1)).size(),
+   RF: nonBU.filter(ee.Filter.eq('candidate',1)).size()
+ }));
+
+ print('Validation gains and regressions:');
+ print(ee.Dictionary({
+   improved: checked.filter(
+     ee.Filter.eq('correctness_delta',1)
+   ).size(),
+   worsened: checked.filter(
+     ee.Filter.eq('correctness_delta',-1)
+   ).size()
+ }));
+
+ print('GAIA is pseudo-label evidence, not independent validation.');
+ print('NO original classification, training or validation was modified.');
+
+ // =============================================================
+ // 6. MAP PREVIEW — NO HEAVY INTERACTIVE AREA REDUCER
+ // =============================================================
+
+ var palette = [
+   'ff0000',
+   '008000',
+   '0000ff',
+   'ffff00',
+   'd2b48c'
+ ];
+
+ Map.layers().reset();
+ Map.setOptions('SATELLITE');
+
+ Map.addLayer(
+   originalMap,
+   {min:1,max:5,palette:palette},
+   '2015 ORIGINAL MLC',
+   true
+ );
+
+ Map.addLayer(
+   candidate,
+   {min:1,max:5,palette:palette},
+   '2015 NEW GAIA-assisted RF',
+   false
+ );
+
+ Map.addLayer(
+   originalMap.neq(1)
+     .and(candidate.eq(1))
+     .selfMask(),
+   {palette:['00ffff']},
+   'NEW RF Built-up compared with original',
+   false
+ );
+
+ Map.addLayer(
+   originalMap.eq(1)
+     .and(candidate.neq(1))
+     .selfMask(),
+   {palette:['ff00ff']},
+   'Original Built-up lost by RF',
+   false
+ );
+
+ Map.centerObject(roi,10);
+
+ // =============================================================
+ // 7. OPTIONAL NEW EXPERIMENTAL CLASSIFICATION EXPORT
+ // =============================================================
+
+ // First inspect the Console QA. Then manually start this task
+ // ONLY if 600 manual samples, all pseudo groups, and all 300
+ // validation samples have been confirmed.
+ //
+ // Do not reuse an existing output ID; never overwrite originals.
+
+ Export.image.toAsset({
+   image: candidate,
+   description: 'Chennai_2015_08G3_GAIA_RF_experimental_v1',
+   assetId: OUTPUT,
+   region: roi,
+   crs: 'EPSG:32644',
+   crsTransform: [30,0,399060,0,-30,1463250],
+   maxPixels: 1e9,
+   pyramidingPolicy: {'.default':'mode'}
+ });
+
+ // END STAGE 08G-3

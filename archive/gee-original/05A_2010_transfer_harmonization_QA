@@ -1,0 +1,2039 @@
+// ================================================================
+// 05A_2010_transfer_harmonization_QA
+// Chennai Multi-Temporal LULC Project
+//
+// PURPOSE
+// -------
+// First automated/semi-automated historical transfer experiment:
+//
+//          2015 Landsat 8 OLI
+//                   ↓
+//          2010 Landsat 5 TM
+//
+// This script DOES NOT:
+//   - create final 2010 training
+//   - create final 2010 validation
+//   - train Gaussian MLC
+//   - calculate final class areas
+//
+// This script DOES:
+//   1. Rebuild locked 2015 and 2010 predictor stacks
+//   2. Perform within-year robust normalization
+//   3. Build normalized 2015 class signatures
+//   4. Screen the final 2015 training pixels against 2010
+//   5. Assign:
+//        STABLE
+//        UNCERTAIN
+//        CHANGED
+//        NO_DATA
+//   6. Apply 2010 clear-observation QA
+//   7. Apply local spatial-consistency QA
+//   8. Print class-wise automation feasibility
+//
+// IMPORTANT
+// ---------
+// The normalized images are ONLY for temporal-transfer screening.
+//
+// Final 2010 Gaussian MLC will later use the ORIGINAL 2010
+// Landsat-5 SR + NDVI/NDWI/NDBI predictor stack.
+//
+// ================================================================
+
+
+// ================================================================
+// 1. LOCKED PROJECT CONSTANTS
+// ================================================================
+
+var ROI_ASSET =
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean';
+
+var TRAIN_2015_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2015_final';
+
+var ROI = ee.FeatureCollection(ROI_ASSET);
+
+var training2015 =
+  ee.FeatureCollection(TRAIN_2015_ASSET);
+
+
+// ------------------------------------------------
+// Locked spatial settings
+// ------------------------------------------------
+
+var CRS = 'EPSG:32644';
+var SCALE = 30;
+
+
+// ------------------------------------------------
+// Locked predictor bands
+// ------------------------------------------------
+
+var PREDICTORS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+
+// ------------------------------------------------
+// Locked class schema
+// ------------------------------------------------
+
+var CLASS_PROPERTY = 'class_id';
+
+var CLASS_IDS = [1, 2, 3, 4, 5];
+
+var CLASS_NAMES = [
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+];
+
+
+// ------------------------------------------------
+// Initial transfer-screening thresholds
+//
+// These are NOT being used to tune against validation.
+// They are the starting thresholds inherited from the
+// preceding temporal-transfer framework.
+// ------------------------------------------------
+
+var DISTANCE_THRESHOLD = 1.25;
+
+var MARGIN_THRESHOLD = 0.25;
+
+
+// ------------------------------------------------
+// 2010 clear-observation rule
+// ------------------------------------------------
+//
+// 0 observations = NO_DATA
+// 1 observation  = usable only as UNCERTAIN
+// >=2            = eligible for automatic acceptance
+//
+
+var MIN_CLEAR_FOR_AUTO = 2;
+
+
+// ------------------------------------------------
+// Local spatial consistency
+// ------------------------------------------------
+//
+// Candidate class must occupy at least 5 pixels
+// of the valid 3x3 neighbourhood.
+//
+// 5 / 9 = majority.
+//
+// This is QA for training-candidate purity only.
+// It does NOT smooth the eventual classified map.
+// ------------------------------------------------
+
+var MIN_LOCAL_FRACTION = 5 / 9;
+
+var MIN_VALID_NEIGHBOURS = 5;
+
+
+// Numerical protection only.
+// This is NOT a scientific distance threshold.
+
+var EPSILON = 1e-6;
+
+
+// ================================================================
+// 2. LANDSAT 5 TM PREPROCESSING — LOCKED METHOD
+// ================================================================
+
+function preprocessL5(image) {
+
+  var qa = image.select('QA_PIXEL');
+
+  // Locked L5 QA_PIXEL rejection bits:
+  //
+  // bit 0 = Fill
+  // bit 1 = Dilated cloud
+  // bit 3 = Cloud
+  // bit 4 = Cloud shadow
+  // bit 5 = Snow
+
+  var qaMask = qa.bitwiseAnd(1 << 0).eq(0)
+    .and(qa.bitwiseAnd(1 << 1).eq(0))
+    .and(qa.bitwiseAnd(1 << 3).eq(0))
+    .and(qa.bitwiseAnd(1 << 4).eq(0))
+    .and(qa.bitwiseAnd(1 << 5).eq(0));
+
+  var radsatMask =
+    image.select('QA_RADSAT').eq(0);
+
+
+  // Landsat Collection 2 Level 2 SR scaling
+  //
+  // SR = DN * 0.0000275 - 0.2
+
+  var optical = image
+    .select(
+      [
+        'SR_B1',
+        'SR_B2',
+        'SR_B3',
+        'SR_B4',
+        'SR_B5',
+        'SR_B7'
+      ],
+      [
+        'blue',
+        'green',
+        'red',
+        'nir',
+        'swir1',
+        'swir2'
+      ]
+    )
+    .multiply(0.0000275)
+    .add(-0.2)
+    .updateMask(qaMask)
+    .updateMask(radsatMask);
+
+
+  // ------------------------------------------------
+  // Explicit index arithmetic
+  // ------------------------------------------------
+
+  var ndvi = optical.select('nir')
+    .subtract(optical.select('red'))
+    .divide(
+      optical.select('nir')
+        .add(optical.select('red'))
+    )
+    .rename('NDVI');
+
+
+  var ndwi = optical.select('green')
+    .subtract(optical.select('nir'))
+    .divide(
+      optical.select('green')
+        .add(optical.select('nir'))
+    )
+    .rename('NDWI');
+
+
+  var ndbi = optical.select('swir1')
+    .subtract(optical.select('nir'))
+    .divide(
+      optical.select('swir1')
+        .add(optical.select('nir'))
+    )
+    .rename('NDBI');
+
+
+  return optical
+    .addBands(ndvi)
+    .addBands(ndwi)
+    .addBands(ndbi)
+    .select(PREDICTORS)
+    .copyProperties(
+      image,
+      ['system:time_start']
+    );
+}
+
+
+// ================================================================
+// 3. LANDSAT 8 OLI PREPROCESSING — LOCKED METHOD
+// ================================================================
+
+function preprocessL8(image) {
+
+  var qa = image.select('QA_PIXEL');
+
+  // Locked L8 QA_PIXEL rejection bits:
+  //
+  // bit 0 = Fill
+  // bit 1 = Dilated cloud
+  // bit 2 = Cirrus
+  // bit 3 = Cloud
+  // bit 4 = Cloud shadow
+  // bit 5 = Snow
+
+  var qaMask = qa.bitwiseAnd(1 << 0).eq(0)
+    .and(qa.bitwiseAnd(1 << 1).eq(0))
+    .and(qa.bitwiseAnd(1 << 2).eq(0))
+    .and(qa.bitwiseAnd(1 << 3).eq(0))
+    .and(qa.bitwiseAnd(1 << 4).eq(0))
+    .and(qa.bitwiseAnd(1 << 5).eq(0));
+
+  var radsatMask =
+    image.select('QA_RADSAT').eq(0);
+
+
+  // Landsat Collection 2 Level 2 SR scaling
+
+  var optical = image
+    .select(
+      [
+        'SR_B2',
+        'SR_B3',
+        'SR_B4',
+        'SR_B5',
+        'SR_B6',
+        'SR_B7'
+      ],
+      [
+        'blue',
+        'green',
+        'red',
+        'nir',
+        'swir1',
+        'swir2'
+      ]
+    )
+    .multiply(0.0000275)
+    .add(-0.2)
+    .updateMask(qaMask)
+    .updateMask(radsatMask);
+
+
+  // ------------------------------------------------
+  // Explicit index arithmetic
+  // ------------------------------------------------
+
+  var ndvi = optical.select('nir')
+    .subtract(optical.select('red'))
+    .divide(
+      optical.select('nir')
+        .add(optical.select('red'))
+    )
+    .rename('NDVI');
+
+
+  var ndwi = optical.select('green')
+    .subtract(optical.select('nir'))
+    .divide(
+      optical.select('green')
+        .add(optical.select('nir'))
+    )
+    .rename('NDWI');
+
+
+  var ndbi = optical.select('swir1')
+    .subtract(optical.select('nir'))
+    .divide(
+      optical.select('swir1')
+        .add(optical.select('nir'))
+    )
+    .rename('NDBI');
+
+
+  return optical
+    .addBands(ndvi)
+    .addBands(ndwi)
+    .addBands(ndbi)
+    .select(PREDICTORS)
+    .copyProperties(
+      image,
+      ['system:time_start']
+    );
+}
+
+
+// ================================================================
+// 4. BUILD LOCKED FULL-YEAR COLLECTIONS
+// ================================================================
+
+
+// ------------------------------------------------
+// 2010 — Landsat 5 TM
+// ------------------------------------------------
+
+var collection2010 = ee.ImageCollection(
+  'LANDSAT/LT05/C02/T1_L2'
+)
+  .filterBounds(ROI)
+  .filterDate(
+    '2010-01-01',
+    '2011-01-01'
+  )
+  .map(preprocessL5);
+
+
+// ------------------------------------------------
+// 2015 — Landsat 8 OLI
+// ------------------------------------------------
+
+var collection2015 = ee.ImageCollection(
+  'LANDSAT/LC08/C02/T1_L2'
+)
+  .filterBounds(ROI)
+  .filterDate(
+    '2015-01-01',
+    '2016-01-01'
+  )
+  .map(preprocessL8);
+
+
+// ================================================================
+// 5. BASIC INVENTORY QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05A — 2015 → 2010 AUTOMATED TRANSFER QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  '2010 Landsat-5 full-year scene count:',
+  collection2010.size()
+);
+
+print(
+  'Expected from locked inventory: 7'
+);
+
+
+print(
+  '2015 Landsat-8 full-year scene count:',
+  collection2015.size()
+);
+
+print(
+  'Expected from locked inventory: 19'
+);
+
+
+// ================================================================
+// 6. ANNUAL MEDIAN COMPOSITES
+// ================================================================
+
+var image2010 = collection2010
+  .median()
+  .select(PREDICTORS)
+  .clip(ROI);
+
+
+var image2015 = collection2015
+  .median()
+  .select(PREDICTORS)
+  .clip(ROI);
+
+
+// ================================================================
+// 7. CLEAR-OBSERVATION COUNTS
+// ================================================================
+//
+// Number of valid observations contributing to each pixel.
+//
+// This is QA only.
+// It is NOT one of the nine MLC predictors.
+// ================================================================
+
+var clear2010 = collection2010
+  .select('red')
+  .count()
+  .rename('clear_count')
+  .clip(ROI);
+
+
+var clear2015 = collection2015
+  .select('red')
+  .count()
+  .rename('clear_count_2015')
+  .clip(ROI);
+
+
+// ================================================================
+// 8. ROBUST WITHIN-YEAR NORMALIZATION
+// ================================================================
+//
+// For each band:
+//
+// robustZ =
+//      (pixel - median)
+//      ----------------
+//        IQR / 1.349
+//
+// IQR = P75 - P25
+//
+// IMPORTANT:
+//
+// 2015 statistics are calculated from 2015.
+//
+// 2010 statistics are calculated independently from 2010.
+//
+// Therefore raw Landsat-8 reflectance is NOT directly
+// subtracted from raw Landsat-5 reflectance.
+// ================================================================
+
+function robustNormalize(image, yearLabel) {
+
+  var stats = image
+    .select(PREDICTORS)
+    .reduceRegion({
+
+      reducer: ee.Reducer.percentile(
+        [25, 50, 75],
+        ['p25', 'p50', 'p75']
+      ),
+
+      geometry: ROI.geometry(),
+
+      scale: SCALE,
+
+      crs: CRS,
+
+      maxPixels: 1e9,
+
+      tileScale: 4
+    });
+
+
+  var normalizedBands =
+    PREDICTORS.map(function (band) {
+
+      var p25 = ee.Number(
+        stats.get(band + '_p25')
+      );
+
+      var p50 = ee.Number(
+        stats.get(band + '_p50')
+      );
+
+      var p75 = ee.Number(
+        stats.get(band + '_p75')
+      );
+
+
+      var iqr = p75.subtract(p25);
+
+
+      // IQR / 1.349 approximates SD for a normal distribution.
+      // EPSILON only prevents division by zero.
+
+      var robustScale = iqr
+        .divide(1.349)
+        .max(EPSILON);
+
+
+      return image
+        .select(band)
+        .subtract(p50)
+        .divide(robustScale)
+        .rename(band);
+
+    });
+
+
+  var normalized =
+    ee.Image.cat(normalizedBands)
+      .select(PREDICTORS);
+
+
+  print(
+    yearLabel +
+    ' robust-normalization statistics:',
+    stats
+  );
+
+
+  return normalized;
+}
+
+
+// ------------------------------------------------
+// Calculate independently
+// ------------------------------------------------
+
+var z2015 =
+  robustNormalize(
+    image2015,
+    '2015'
+  );
+
+
+var z2010 =
+  robustNormalize(
+    image2010,
+    '2010'
+  );
+
+
+// ================================================================
+// 9. CHECK FINAL 2015 TRAINING ASSET
+// ================================================================
+
+print(
+  '----------------------------------------'
+);
+
+print(
+  'REFERENCE 2015 TRAINING CHECK'
+);
+
+print(
+  '----------------------------------------'
+);
+
+
+print(
+  '2015 final training total:',
+  training2015.size()
+);
+
+
+print(
+  '2015 training class histogram:',
+  training2015.aggregate_histogram(
+    CLASS_PROPERTY
+  )
+);
+
+
+print(
+  'First 2015 training feature:',
+  training2015.first()
+);
+
+
+print(
+  '2015 training property names:',
+  training2015.first()
+    .propertyNames()
+);
+
+
+// ================================================================
+// 10. SAMPLE NORMALIZED 2015 VALUES
+// ================================================================
+//
+// IMPORTANT:
+// The original 2015 training asset already contains properties
+// named blue, green, red, nir, swir1, swir2, NDVI, NDWI and NDBI.
+//
+// Therefore we must NOT copy all source properties into
+// sampleRegions(), otherwise those old raw values can collide with
+// the normalized-image band names.
+//
+// Only identification/class metadata are copied.
+// The nine predictor properties below will therefore come ONLY
+// from z2015.
+// ================================================================
+
+var referenceSamples2015 =
+  z2015.sampleRegions({
+
+    collection: training2015,
+
+    properties: [
+      'class_id',
+      'class_name',
+      'poly_id'
+    ],
+
+    scale: SCALE,
+
+    projection: ee.Projection(CRS),
+
+    geometries: true,
+
+    tileScale: 4
+  });
+
+
+print(
+  'Normalized 2015 reference sample count:',
+  referenceSamples2015.size()
+);
+
+
+print(
+  'Normalized 2015 reference class histogram:',
+  referenceSamples2015
+    .aggregate_histogram(
+      CLASS_PROPERTY
+    )
+);
+
+
+// Critical sanity check:
+//
+// These predictor values MUST now be standardized values,
+// NOT the old reflectance values such as blue ≈ 0.05–0.10.
+
+print(
+  'SANITY CHECK — first normalized 2015 reference sample:',
+  referenceSamples2015.first()
+);
+
+// ================================================================
+// 11. BUILD NORMALIZED 2015 CLASS SIGNATURES
+// ================================================================
+//
+// Each class signature contains:
+//
+// - 9-band mean vector
+// - 9-band sample standard-deviation vector
+//
+// Distance is later calculated as:
+//
+// sqrt(
+//     mean(
+//        ((pixel - classMean) / classSD)^2
+//     )
+// )
+//
+// This gives a class-standardized RMS distance.
+// ================================================================
+
+function buildClassSignature(classId) {
+
+  var classSamples =
+    referenceSamples2015.filter(
+      ee.Filter.eq(
+        CLASS_PROPERTY,
+        classId
+      )
+    );
+
+
+  var means =
+    PREDICTORS.map(function (band) {
+
+      return ee.Number(
+        classSamples.aggregate_mean(
+          band
+        )
+      );
+
+    });
+
+
+  var sds =
+    PREDICTORS.map(function (band) {
+
+      return ee.Number(
+        classSamples.aggregate_sample_sd(
+          band
+        )
+      ).max(EPSILON);
+
+    });
+
+
+  return ee.Feature(
+    null,
+    {
+      class_id: classId,
+      class_name:
+        CLASS_NAMES[classId - 1],
+
+      n_reference:
+        classSamples.size(),
+
+      means:
+        ee.List(means),
+
+      sds:
+        ee.List(sds)
+    }
+  );
+}
+
+
+var signatures2015 =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      buildClassSignature
+    )
+  );
+
+
+print(
+  '----------------------------------------'
+);
+
+print(
+  '2015 NORMALIZED CLASS SIGNATURES'
+);
+
+print(
+  '----------------------------------------'
+);
+
+print(
+  signatures2015
+);
+
+
+// ================================================================
+// 12. DISTANCE FROM 2010 PIXEL TO EACH 2015 CLASS SIGNATURE
+// ================================================================
+
+function distanceToClass(
+  normalizedImage,
+  classId
+) {
+
+  var signature =
+    ee.Feature(
+      signatures2015
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+        .first()
+    );
+
+
+  var meanImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get('means')
+      )
+    )
+    .rename(PREDICTORS);
+
+
+  var sdImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get('sds')
+      )
+    )
+    .rename(PREDICTORS)
+    .max(EPSILON);
+
+
+  var standardizedDifference =
+    normalizedImage
+      .select(PREDICTORS)
+      .subtract(meanImage)
+      .divide(sdImage);
+
+
+  var distance =
+    standardizedDifference
+      .pow(2)
+      .reduce(
+        ee.Reducer.mean()
+      )
+      .sqrt()
+      .rename(
+        'd' + classId
+      );
+
+
+  return distance;
+}
+
+
+// ------------------------------------------------
+// Create five distance images
+// ------------------------------------------------
+
+var d1 =
+  distanceToClass(
+    z2010,
+    1
+  );
+
+
+var d2 =
+  distanceToClass(
+    z2010,
+    2
+  );
+
+
+var d3 =
+  distanceToClass(
+    z2010,
+    3
+  );
+
+
+var d4 =
+  distanceToClass(
+    z2010,
+    4
+  );
+
+
+var d5 =
+  distanceToClass(
+    z2010,
+    5
+  );
+
+
+var distanceStack =
+  ee.Image.cat(
+    [
+      d1,
+      d2,
+      d3,
+      d4,
+      d5
+    ]
+  );
+
+
+// ================================================================
+// 13. FIND BEST AND SECOND-BEST CLASS
+// ================================================================
+
+var distanceImages =
+  [
+    d1,
+    d2,
+    d3,
+    d4,
+    d5
+  ];
+
+
+// Start with class 1
+
+var bestDist =
+  d1.rename('best_dist');
+
+
+var bestClass =
+  ee.Image.constant(1)
+    .rename('best_class')
+    .updateMask(
+      d1.mask()
+    );
+
+
+var secondDist =
+  ee.Image.constant(9999)
+    .rename('second_dist')
+    .updateMask(
+      d1.mask()
+    );
+
+
+// Compare classes 2–5
+
+for (
+  var i = 1;
+  i < CLASS_IDS.length;
+  i++
+) {
+
+  var currentClass =
+    CLASS_IDS[i];
+
+  var currentDistance =
+    distanceImages[i];
+
+
+  var better =
+    currentDistance.lt(
+      bestDist
+    );
+
+
+  // Save current best BEFORE replacing it.
+
+  var previousBest =
+    bestDist;
+
+
+  // If current class becomes best,
+  // previous best becomes candidate second-best.
+
+  var updatedSecond =
+    secondDist.where(
+      better,
+      previousBest
+    );
+
+
+  // If current class is not best,
+  // it may still be second best.
+
+  var currentAsSecond =
+    currentDistance.where(
+      better,
+      9999
+    );
+
+
+  updatedSecond =
+    updatedSecond.min(
+      currentAsSecond
+    );
+
+
+  // Update best distance and class.
+
+  bestDist =
+    previousBest
+      .where(
+        better,
+        currentDistance
+      )
+      .rename(
+        'best_dist'
+      );
+
+
+  bestClass =
+    bestClass
+      .where(
+        better,
+        currentClass
+      )
+      .rename(
+        'best_class'
+      );
+
+
+  secondDist =
+    updatedSecond.rename(
+      'second_dist'
+    );
+}
+
+
+// ------------------------------------------------
+// Separation margin
+// ------------------------------------------------
+//
+// Larger = better separation from competing class.
+//
+
+var margin =
+  secondDist
+    .subtract(bestDist)
+    .rename('margin');
+
+
+// ================================================================
+// 14. LOCAL 3x3 SPATIAL CONSISTENCY
+// ================================================================
+//
+// This does NOT alter classification.
+//
+// It simply asks:
+//
+// "Does the automatically selected class agree with
+//  most nearby pixels?"
+//
+// ================================================================
+
+var kernel3x3 =
+  ee.Kernel.square({
+    radius: 1,
+    units: 'pixels',
+    normalize: false
+  });
+
+
+// Number of valid neighbours
+
+var localValidN =
+  bestClass.reduceNeighborhood({
+
+    reducer:
+      ee.Reducer.count(),
+
+    kernel:
+      kernel3x3,
+
+    skipMasked:
+      true
+  })
+  .rename(
+    'local_valid_n'
+  );
+
+
+// ------------------------------------------------
+// Count neighbouring pixels belonging to the
+// centre pixel's predicted class.
+// ------------------------------------------------
+
+var localSameN =
+  ee.Image.constant(0)
+    .rename('local_same_n')
+    .updateMask(
+      bestClass.mask()
+    );
+
+
+CLASS_IDS.forEach(
+  function (classId) {
+
+    var classNeighbourCount =
+      bestClass
+        .eq(classId)
+        .reduceNeighborhood({
+
+          reducer:
+            ee.Reducer.sum(),
+
+          kernel:
+            kernel3x3,
+
+          skipMasked:
+            true
+        });
+
+
+    localSameN =
+      localSameN.where(
+        bestClass.eq(classId),
+        classNeighbourCount
+      );
+
+  }
+);
+
+
+// ------------------------------------------------
+// Local agreement fraction
+// ------------------------------------------------
+
+var localFraction =
+  localSameN
+    .divide(
+      localValidN.max(1)
+    )
+    .rename(
+      'local_fraction'
+    );
+
+
+// ================================================================
+// 15. BUILD QA IMAGE FOR POINT SCREENING
+// ================================================================
+//
+// Unmask with explicit sentinel values so that
+// NO_DATA reference points are not silently dropped.
+// ================================================================
+
+var qaImage =
+  distanceStack
+    .unmask(9999)
+
+    .addBands(
+      bestClass.unmask(0)
+    )
+
+    .addBands(
+      bestDist.unmask(9999)
+    )
+
+    .addBands(
+      secondDist.unmask(9999)
+    )
+
+    .addBands(
+      margin.unmask(-9999)
+    )
+
+    .addBands(
+      clear2010
+        .rename('clear_count')
+        .unmask(0)
+    )
+
+    .addBands(
+      localValidN
+        .unmask(0)
+    )
+
+    .addBands(
+      localFraction
+        .unmask(0)
+    );
+
+
+// ================================================================
+// 16. SAMPLE QA IMAGE AT FINAL 2015 TRAINING LOCATIONS
+// ================================================================
+
+var screenedSamples =
+  qaImage.sampleRegions({
+
+    collection:
+      training2015,
+
+    properties: [
+      'class_id',
+      'class_name',
+      'poly_id'
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      ee.Projection(CRS),
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+  });
+
+
+// ================================================================
+// 17. GET ORIGINAL-CLASS DISTANCE
+// ================================================================
+
+function getOwnClassDistance(
+  feature,
+  classId
+) {
+
+  return ee.Number(
+
+    ee.Algorithms.If(
+      classId.eq(1),
+
+      feature.get('d1'),
+
+      ee.Algorithms.If(
+        classId.eq(2),
+
+        feature.get('d2'),
+
+        ee.Algorithms.If(
+          classId.eq(3),
+
+          feature.get('d3'),
+
+          ee.Algorithms.If(
+            classId.eq(4),
+
+            feature.get('d4'),
+
+            feature.get('d5')
+          )
+        )
+      )
+    )
+  );
+}
+
+
+// ================================================================
+// 18. ASSIGN TRANSFER STATUS
+// ================================================================
+
+var screened2010 =
+  screenedSamples.map(
+    function (feature) {
+
+      var originalClass =
+        ee.Number(
+          feature.get(
+            CLASS_PROPERTY
+          )
+        );
+
+
+      var predictedClass =
+        ee.Number(
+          feature.get(
+            'best_class'
+          )
+        );
+
+
+      var bestDistance =
+        ee.Number(
+          feature.get(
+            'best_dist'
+          )
+        );
+
+
+      var ownDistance =
+        getOwnClassDistance(
+          feature,
+          originalClass
+        );
+
+
+      var classMargin =
+        ee.Number(
+          feature.get(
+            'margin'
+          )
+        );
+
+
+      var clearCount =
+        ee.Number(
+          feature.get(
+            'clear_count'
+          )
+        );
+
+
+      var localFrac =
+        ee.Number(
+          feature.get(
+            'local_fraction'
+          )
+        );
+
+
+      var localN =
+        ee.Number(
+          feature.get(
+            'local_valid_n'
+          )
+        );
+
+
+      // ------------------------------------------------
+      // NO DATA
+      // ------------------------------------------------
+
+      var noData =
+        clearCount.lte(0)
+          .or(
+            predictedClass.eq(0)
+          )
+          .or(
+            ownDistance.gte(9000)
+          );
+
+
+      // ------------------------------------------------
+      // Local spatial QA
+      // ------------------------------------------------
+
+      var localGood =
+        localN
+          .gte(
+            MIN_VALID_NEIGHBOURS
+          )
+          .and(
+            localFrac.gte(
+              MIN_LOCAL_FRACTION
+            )
+          );
+
+
+      // ------------------------------------------------
+      // AUTO-STABLE
+      //
+      // Must:
+      //   - have >=2 clear observations
+      //   - retain original class
+      //   - be close enough to class signature
+      //   - have sufficient class separation
+      //   - pass local spatial QA
+      // ------------------------------------------------
+
+      var stable =
+        clearCount
+          .gte(
+            MIN_CLEAR_FOR_AUTO
+          )
+
+          .and(
+            predictedClass.eq(
+              originalClass
+            )
+          )
+
+          .and(
+            ownDistance.lte(
+              DISTANCE_THRESHOLD
+            )
+          )
+
+          .and(
+            classMargin.gte(
+              MARGIN_THRESHOLD
+            )
+          )
+
+          .and(
+            localGood
+          );
+
+
+      // ------------------------------------------------
+      // CONFIDENT CHANGE
+      //
+      // 2010 confidently resembles another class.
+      // ------------------------------------------------
+
+      var changed =
+        clearCount
+          .gte(
+            MIN_CLEAR_FOR_AUTO
+          )
+
+          .and(
+            predictedClass.neq(
+              originalClass
+            )
+          )
+
+          .and(
+            bestDistance.lte(
+              DISTANCE_THRESHOLD
+            )
+          )
+
+          .and(
+            classMargin.gte(
+              MARGIN_THRESHOLD
+            )
+          )
+
+          .and(
+            localGood
+          );
+
+
+      // ------------------------------------------------
+      // Final status
+      // ------------------------------------------------
+
+      var status =
+        ee.String(
+
+          ee.Algorithms.If(
+            noData,
+
+            'NO_DATA',
+
+            ee.Algorithms.If(
+              stable,
+
+              'STABLE',
+
+              ee.Algorithms.If(
+                changed,
+
+                'CHANGED',
+
+                'UNCERTAIN'
+              )
+            )
+          )
+        );
+
+
+      var autoAccept =
+        ee.Number(
+          ee.Algorithms.If(
+            stable,
+            1,
+            0
+          )
+        );
+
+
+      return feature.set({
+
+        original_class:
+          originalClass,
+
+        predicted_class_2010:
+          predictedClass,
+
+        own_distance:
+          ownDistance,
+
+        transfer_margin:
+          classMargin,
+
+        transfer_status:
+          status,
+
+        auto_accept:
+          autoAccept,
+
+        source_year:
+          2015,
+
+        target_year:
+          2010,
+
+        transfer_method:
+          'robustZ_L8_to_L5_passA'
+      });
+
+    }
+  );
+
+
+// ================================================================
+// 19. GLOBAL QA OUTPUT
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  'GLOBAL 2015 → 2010 TRANSFER RESULTS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'Input candidate count:',
+  screened2010.size()
+);
+
+
+print(
+  'Transfer-status histogram:',
+  screened2010
+    .aggregate_histogram(
+      'transfer_status'
+    )
+);
+
+
+print(
+  'Predicted 2010 class histogram:',
+  screened2010
+    .aggregate_histogram(
+      'predicted_class_2010'
+    )
+);
+
+
+print(
+  '2010 clear-count histogram at reference points:',
+  screened2010
+    .aggregate_histogram(
+      'clear_count'
+    )
+);
+
+
+// ================================================================
+// 20. CLASS-WISE SUMMARY
+// ================================================================
+
+function medianProperty(
+  collection,
+  propertyName
+) {
+
+  return collection
+    .reduceColumns(
+      ee.Reducer.median(),
+      [propertyName]
+    )
+    .get('median');
+}
+
+
+function summarizeClass(
+  classId
+) {
+
+  var fc =
+    screened2010.filter(
+      ee.Filter.eq(
+        CLASS_PROPERTY,
+        classId
+      )
+    );
+
+
+  var total =
+    fc.size();
+
+
+  var stable =
+    fc.filter(
+      ee.Filter.eq(
+        'transfer_status',
+        'STABLE'
+      )
+    ).size();
+
+
+  var uncertain =
+    fc.filter(
+      ee.Filter.eq(
+        'transfer_status',
+        'UNCERTAIN'
+      )
+    ).size();
+
+
+  var changed =
+    fc.filter(
+      ee.Filter.eq(
+        'transfer_status',
+        'CHANGED'
+      )
+    ).size();
+
+
+  var noData =
+    fc.filter(
+      ee.Filter.eq(
+        'transfer_status',
+        'NO_DATA'
+      )
+    ).size();
+
+
+  var stablePct =
+    ee.Number(stable)
+      .divide(total)
+      .multiply(100);
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      class_name:
+        CLASS_NAMES[classId - 1],
+
+      input_n:
+        total,
+
+      stable_n:
+        stable,
+
+      stable_pct:
+        stablePct,
+
+      uncertain_n:
+        uncertain,
+
+      changed_n:
+        changed,
+
+      no_data_n:
+        noData,
+
+      median_own_distance:
+        medianProperty(
+          fc,
+          'own_distance'
+        ),
+
+      median_margin:
+        medianProperty(
+          fc,
+          'transfer_margin'
+        ),
+
+      mean_clear_count_2010:
+        fc.aggregate_mean(
+          'clear_count'
+        ),
+
+      mean_local_fraction:
+        fc.aggregate_mean(
+          'local_fraction'
+        )
+    }
+  );
+}
+
+
+var classSummary =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      summarizeClass
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  'CLASS-WISE 2010 TRANSFER QA SUMMARY'
+);
+
+print(
+  '========================================'
+);
+
+print(
+  classSummary
+);
+
+
+// ================================================================
+// 21. SEPARATE STATUS COLLECTIONS
+// ================================================================
+
+var stablePoints =
+  screened2010.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'STABLE'
+    )
+  );
+
+
+var uncertainPoints =
+  screened2010.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'UNCERTAIN'
+    )
+  );
+
+
+var changedPoints =
+  screened2010.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'CHANGED'
+    )
+  );
+
+
+var noDataPoints =
+  screened2010.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'NO_DATA'
+    )
+  );
+
+
+// ================================================================
+// 22. PRINT CLASS-SPECIFIC STATUS COUNTS
+// ================================================================
+//
+// Single-object print calls are used here to avoid
+// Code Editor lint warnings about print() arguments.
+// ================================================================
+
+CLASS_IDS.forEach(function (classId) {
+
+  var classPoints =
+    screened2010.filter(
+      ee.Filter.eq(
+        CLASS_PROPERTY,
+        classId
+      )
+    );
+
+
+  var statusSummary =
+    ee.Dictionary({
+
+      class_id:
+        classId,
+
+      class_name:
+        CLASS_NAMES[classId - 1],
+
+      TOTAL:
+        classPoints.size(),
+
+      STABLE:
+        classPoints
+          .filter(
+            ee.Filter.eq(
+              'transfer_status',
+              'STABLE'
+            )
+          )
+          .size(),
+
+      UNCERTAIN:
+        classPoints
+          .filter(
+            ee.Filter.eq(
+              'transfer_status',
+              'UNCERTAIN'
+            )
+          )
+          .size(),
+
+      CHANGED:
+        classPoints
+          .filter(
+            ee.Filter.eq(
+              'transfer_status',
+              'CHANGED'
+            )
+          )
+          .size(),
+
+      NO_DATA:
+        classPoints
+          .filter(
+            ee.Filter.eq(
+              'transfer_status',
+              'NO_DATA'
+            )
+          )
+          .size()
+    });
+
+
+  print(statusSummary);
+
+});
+
+// ================================================================
+// 23. MAP DISPLAY
+// ================================================================
+
+Map.centerObject(
+  ROI,
+  10
+);
+
+
+// ------------------------------------------------
+// ROI
+// ------------------------------------------------
+
+Map.addLayer(
+  ROI.style({
+    color: 'FFFFFF',
+    fillColor: '00000000',
+    width: 2
+  }),
+  {},
+  'Chennai Urban Study Area',
+  true
+);
+
+
+// ------------------------------------------------
+// 2010 Landsat true colour
+// ------------------------------------------------
+
+Map.addLayer(
+  image2010,
+  {
+    bands:
+      ['red', 'green', 'blue'],
+
+    min:
+      0.0,
+
+    max:
+      0.30,
+
+    gamma:
+      1.2
+  },
+  '2010 Landsat-5 median — TRUE COLOR',
+  true
+);
+
+
+// ------------------------------------------------
+// 2010 NDVI
+// ------------------------------------------------
+
+Map.addLayer(
+  image2010.select('NDVI'),
+  {
+    min: -0.4,
+    max: 0.8,
+    palette: [
+      '8B4513',
+      'D2B48C',
+      'FFFFCC',
+      '90EE90',
+      '006400'
+    ]
+  },
+  '2010 NDVI',
+  false
+);
+
+
+// ------------------------------------------------
+// 2010 clear count
+// ------------------------------------------------
+
+Map.addLayer(
+  clear2010,
+  {
+    min: 0,
+    max: 7,
+    palette: [
+      '000000',
+      '8B0000',
+      'FF4500',
+      'FFD700',
+      '7FFF00',
+      '00FFFF',
+      '0000FF'
+    ]
+  },
+  '2010 clear observation count',
+  false
+);
+
+
+// ------------------------------------------------
+// QA-only nearest-class image
+//
+// IMPORTANT:
+// This is NOT the final 2010 classification.
+// ------------------------------------------------
+
+Map.addLayer(
+  bestClass,
+  {
+    min: 1,
+    max: 5,
+    palette: [
+      'FF0000',   // Built-up
+      '00A000',   // Vegetation
+      '0000FF',   // Water
+      'FFFF00',   // Agricultural/Open
+      'A0522D'    // Barren/Fallow
+    ]
+  },
+  'QA ONLY — nearest normalized 2015 class',
+  false
+);
+
+
+// ------------------------------------------------
+// STABLE
+// ------------------------------------------------
+
+Map.addLayer(
+  stablePoints.style({
+    color: '00FF00',
+    fillColor: '00FF00',
+    pointSize: 5,
+    width: 1
+  }),
+  {},
+  'AUTO STABLE',
+  true
+);
+
+
+// ------------------------------------------------
+// UNCERTAIN
+// ------------------------------------------------
+
+Map.addLayer(
+  uncertainPoints.style({
+    color: 'FFA500',
+    fillColor: 'FFA500',
+    pointSize: 5,
+    width: 1
+  }),
+  {},
+  'UNCERTAIN',
+  true
+);
+
+
+// ------------------------------------------------
+// CHANGED
+// ------------------------------------------------
+
+Map.addLayer(
+  changedPoints.style({
+    color: 'FF0000',
+    fillColor: 'FF0000',
+    pointSize: 5,
+    width: 1
+  }),
+  {},
+  'CHANGED',
+  true
+);
+
+
+// ------------------------------------------------
+// NO DATA
+// ------------------------------------------------
+
+Map.addLayer(
+  noDataPoints.style({
+    color: '808080',
+    fillColor: '808080',
+    pointSize: 5,
+    width: 1
+  }),
+  {},
+  'NO DATA',
+  true
+);
+
+
+// ================================================================
+// 24. DO NOT EXPORT YET
+// ================================================================
+
+// After we inspect the QA results together, we can export
+// the approved 05A screening table and use the STABLE
+// points as the conservative seed set for 05B.
+
+// DO NOT uncomment this yet.
+
+Export.table.toAsset({
+  collection: screened2010,
+  description: '05A_2015_to_2010_transfer_QA',
+  assetId:
+    'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A'
+});
+
+// ================================================================
+
+
+print(
+  '========================================'
+);
+
+print(
+  '05A COMPLETE — QA ONLY'
+);
+
+print(
+  'DO NOT EXPORT OR BUILD FINAL TRAINING YET.'
+);
+
+print(
+  'Send the CLASS-WISE 2010 TRANSFER QA SUMMARY back for review.'
+);
+
+print(
+  '========================================'
+);

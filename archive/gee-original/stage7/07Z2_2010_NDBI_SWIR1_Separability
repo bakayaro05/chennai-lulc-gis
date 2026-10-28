@@ -1,0 +1,455 @@
+
+ // =====================================================================
+ // CHENNAI LULC — STAGE 07Z2
+ // 2010 CLASS 4 vs CLASS 5 SPECTRAL SEPARABILITY TEST
+ //
+ // CLASS 4: Recognizable agricultural land / fields.
+ // CLASS 5: Unused open land, INCLUDING green/weedy/shrubby plots.
+ //          NOT necessarily dry soil, and NOT farmland.
+ //
+ // Existing 2010 Landsat 5+7 nine-band stack.
+ // Read-only; no exports, training changes or relabelling.
+ // =====================================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var GRID = ee.Projection(
+  'EPSG:32644',
+  [30, 0, 399060, 0, -30, 1463250]
+);
+
+var BANDS9 = [
+  'blue', 'green', 'red',
+  'nir', 'swir1', 'swir2',
+  'NDVI', 'NDWI', 'NDBI'
+];
+
+var trainingAll = ee.FeatureCollection(
+  ROOT + 'chennai_training_2010_L5L7_manual_exp_v1'
+);
+
+var validationAll = ee.FeatureCollection(
+  ROOT + 'chennai_validation_2010_final'
+);
+
+var stack = ee.Image(
+  ROOT + 'chennai_predictor_stack_2010_L5L7_exp_v1'
+).select(BANDS9);
+
+var originalMLC = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2010_L5L7_manual_exp_v1'
+).select('classification');
+
+var train45 = trainingAll.filter(
+  ee.Filter.inList('class_id', [4, 5])
+);
+
+var val45 = validationAll.filter(
+  ee.Filter.inList('class_id', [4, 5])
+);
+
+var valSpectra = stack.sampleRegions({
+  collection: val45,
+  properties: ['class_id'],
+  projection: GRID,
+  scale: 30,
+  geometries: false,
+  tileScale: 8
+});
+
+// =============================================================
+// A. SPECTRAL PROFILES
+// =============================================================
+
+function summaryFor(data, classId, source) {
+
+  var sub = data.filter(
+    ee.Filter.eq('class_id', classId)
+  );
+
+  var fields = ['NDVI', 'NDBI', 'swir1'];
+
+  var output = ee.Dictionary({
+    source: source,
+    class_id: classId,
+    count: sub.size()
+  });
+
+  fields.forEach(function(b) {
+
+    var percentiles = sub.reduceColumns({
+      reducer: ee.Reducer.percentile([25, 50, 75]),
+      selectors: [b]
+    });
+
+    output = output
+      .set(b + '_mean', sub.aggregate_mean(b))
+      .set(b + '_sd', sub.aggregate_total_sd(b))
+      .set(b + '_p25', percentiles.get('p25'))
+      .set(b + '_median', percentiles.get('p50'))
+      .set(b + '_p75', percentiles.get('p75'));
+
+  });
+
+  return ee.Feature(null, output);
+}
+
+var profiles = ee.FeatureCollection([
+  summaryFor(train45, 4, 'training'),
+  summaryFor(train45, 5, 'training'),
+  summaryFor(valSpectra, 4, 'validation'),
+  summaryFor(valSpectra, 5, 'validation')
+]);
+
+// Standardized difference between class means.
+// Larger values suggest greater univariate separation,
+// but do not guarantee distinguishable individual pixels.
+
+function standardizedDifference(b) {
+
+  var a = train45.filter(
+    ee.Filter.eq('class_id', 4)
+  );
+
+  var v = train45.filter(
+    ee.Filter.eq('class_id', 5)
+  );
+
+  var ma = ee.Number(a.aggregate_mean(b));
+  var mv = ee.Number(v.aggregate_mean(b));
+
+  var sa = ee.Number(a.aggregate_total_sd(b));
+  var sv = ee.Number(v.aggregate_total_sd(b));
+
+  var pooled = sa.pow(2)
+    .add(sv.pow(2))
+    .divide(2)
+    .sqrt();
+
+  return ee.Feature(null, {
+    band: b,
+    mean_4: ma,
+    mean_5: mv,
+    pooled_sd: pooled,
+    absolute_standardized_difference:
+      ma.subtract(mv).abs()
+        .divide(pooled.max(1e-12))
+  });
+}
+
+var separability = ee.FeatureCollection([
+  standardizedDifference('NDVI'),
+  standardizedDifference('NDBI'),
+  standardizedDifference('swir1')
+]);
+
+// =============================================================
+// B. GAUSSIAN PARAMETERS FOR TWO CLASSES
+// =============================================================
+
+function params(classId, bands) {
+
+  var subset = train45.filter(
+    ee.Filter.eq('class_id', classId)
+  );
+
+  var mu = ee.Array([
+    bands.map(function(b) {
+      return subset.aggregate_mean(b);
+    })
+  ]).transpose();
+
+  var cov = ee.Array(
+
+    subset.makeArray(bands, 'values')
+      .reduceColumns({
+        reducer: ee.Reducer.covariance()
+          .setOutputs(['covariance']),
+        selectors: ['values']
+      })
+      .get('covariance')
+
+  ).add(
+    ee.Array.identity(bands.length)
+      .multiply(1e-6)
+  );
+
+  return ee.Dictionary({
+    mu: mu,
+    inverse: cov.matrixInverse(),
+    determinant: cov.matrixDeterminant()
+  });
+
+}
+
+// =============================================================
+// C. GAUSSIAN LOG-LIKELIHOOD
+// =============================================================
+
+function gaussianScore(x, p) {
+
+  p = ee.Dictionary(p);
+
+  var mu = ee.Image.constant(
+    ee.Array(p.get('mu'))
+  );
+
+  var inv = ee.Image.constant(
+    ee.Array(p.get('inverse'))
+  );
+
+  var determinant = ee.Number(
+    p.get('determinant')
+  ).max(1e-300);
+
+  var delta = x.subtract(mu);
+
+  var d2 = delta
+    .arrayTranspose()
+    .matrixMultiply(inv)
+    .matrixMultiply(delta)
+    .arrayGet([0, 0]);
+
+  return d2.multiply(-0.5)
+    .subtract(
+      ee.Image.constant(
+        determinant.log()
+      ).multiply(0.5)
+    );
+
+}
+
+// =============================================================
+// D. BINARY CLASS 4 / CLASS 5 GAUSSIAN MLC
+// =============================================================
+
+function binaryMLC(bands, outputBand) {
+
+  var x = stack.select(bands)
+    .toArray()
+    .toArray(1);
+
+  var score4 = gaussianScore(
+    x, params(4, bands)
+  );
+
+  var score5 = gaussianScore(
+    x, params(5, bands)
+  );
+
+  var valid = stack.select(bands)
+    .mask()
+    .reduce(ee.Reducer.min());
+
+  return ee.Image.constant(5)
+    .where(score4.gte(score5), 4)
+    .updateMask(valid)
+    .rename(outputBand)
+    .toByte();
+
+}
+
+// Predefined diagnostic configurations.
+// No automatic hyperparameter tuning.
+
+var tests = [
+  {
+    name: 'NDVI_only',
+    bands: ['NDVI']
+  },
+  {
+    name: 'NDBI_SWIR1',
+    bands: ['NDBI', 'swir1']
+  },
+  {
+    name: 'NDVI_NDBI_SWIR1',
+    bands: ['NDVI', 'NDBI', 'swir1']
+  }
+];
+
+// =============================================================
+// E. PREFLIGHT AND SPECTRAL SUMMARY
+// =============================================================
+
+print('====================================================');
+print('07Z2 — 2010 AGRICULTURAL vs VACANT/UNUSED OPEN');
+print('====================================================');
+
+print('Class 4 = Agricultural fields.');
+print('Class 5 = Unused Open, including GREEN plots.');
+
+print('Training counts (expected 120 each):');
+print(train45.aggregate_histogram('class_id'));
+
+print('Validation counts (expected 60 each):');
+print(val45.aggregate_histogram('class_id'));
+
+print('Re-extracted validation spectra count (expected 120):');
+print(valSpectra.size());
+
+print('Training sites in Class 4:');
+print(
+  train45.filter(
+    ee.Filter.eq('class_id', 4)
+  ).aggregate_histogram('site_id')
+);
+
+print('Training sites in Class 5:');
+print(
+  train45.filter(
+    ee.Filter.eq('class_id', 5)
+  ).aggregate_histogram('site_id')
+);
+
+print('=============================================');
+print('SPECTRAL DISTRIBUTIONS');
+print('=============================================');
+
+print('Training and validation spectral summaries:');
+print(profiles);
+
+print('Training standardized differences:');
+print(separability);
+
+// =============================================================
+// F. EXISTING FIVE-CLASS MODEL FOR CONTEXT
+// =============================================================
+
+var baseline45 = originalMLC.sampleRegions({
+  collection: val45,
+  properties: ['class_id'],
+  projection: GRID,
+  scale: 30,
+  geometries: false,
+  tileScale: 8
+});
+
+print('=============================================');
+print('EXISTING FIVE-CLASS MLC');
+print('=============================================');
+
+print('Existing predictions for actual Classes 4 and 5:');
+
+print(
+  baseline45.errorMatrix(
+    'class_id',
+    'classification',
+    [1, 2, 3, 4, 5]
+  )
+);
+
+print('Class 4 reference -> predicted classes:');
+print(
+  baseline45.filter(
+    ee.Filter.eq('class_id', 4)
+  ).aggregate_histogram('classification')
+);
+
+print('Class 5 reference -> predicted classes:');
+print(
+  baseline45.filter(
+    ee.Filter.eq('class_id', 5)
+  ).aggregate_histogram('classification')
+);
+
+// =============================================================
+// G. TEST THE THREE FEATURE CONFIGURATIONS
+// =============================================================
+
+// IMPORTANT:
+// Binary accuracy is CONDITIONAL on actual class being 4 or 5.
+// This does not estimate accuracy across all five classes.
+
+tests.forEach(function(t) {
+
+  var pred = binaryMLC(
+    t.bands,
+    t.name
+  ).sampleRegions({
+    collection: val45,
+    properties: ['class_id'],
+    projection: GRID,
+    scale: 30,
+    geometries: false,
+    tileScale: 8
+  });
+
+  var cm = pred.errorMatrix(
+    'class_id',
+    t.name,
+    [4, 5]
+  );
+
+  print('------------------------------------------------');
+
+  print('BINARY GAUSSIAN MLC — ' + t.name);
+
+  print('Predictors: ' + t.bands.join(', '));
+
+  print('Evaluated points (expected 120):');
+  print(pred.size());
+
+  print('Confusion matrix [4,5]:');
+  print(cm);
+
+  print('Two-class accuracy (%):');
+  print(
+    ee.Number(cm.accuracy())
+      .multiply(100)
+  );
+
+  print('Class 4 and Class 5 producer accuracies:');
+  print(cm.producersAccuracy());
+
+});
+
+// =============================================================
+// H. SCATTERPLOTS
+// =============================================================
+
+print('=============================================');
+print('NDBI vs SWIR1 — TRAINING SCATTERPLOT');
+print('=============================================');
+
+print(
+  ui.Chart.feature.groups(
+    train45,
+    'NDBI',
+    'swir1',
+    'class_id'
+  )
+  .setChartType('ScatterChart')
+  .setOptions({
+    title: '2010 Training: Agricultural vs Unused Open',
+    hAxis: {title: 'NDBI'},
+    vAxis: {title: 'SWIR1'},
+    pointSize: 4
+  })
+);
+
+print('=============================================');
+print('NDBI vs SWIR1 — VALIDATION SCATTERPLOT');
+print('=============================================');
+
+print(
+  ui.Chart.feature.groups(
+    valSpectra,
+    'NDBI',
+    'swir1',
+    'class_id'
+  )
+  .setChartType('ScatterChart')
+  .setOptions({
+    title: '2010 Validation: Agricultural vs Unused Open',
+    hAxis: {title: 'NDBI'},
+    vAxis: {title: 'SWIR1'},
+    pointSize: 4
+  })
+);
+
+print('====================================================');
+print('END 07Z2 — DIAGNOSTIC ONLY');
+print('No new raster exported.');
+print('No training or validation labels modified.');
+print('Validation was previously examined during development.');
+print('====================================================');

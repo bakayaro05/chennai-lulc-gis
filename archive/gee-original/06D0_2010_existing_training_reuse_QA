@@ -1,0 +1,1383 @@
+// ============================================================================
+// 06D0_2010_existing_training_reuse_QA
+// ============================================================================
+//
+// PURPOSE
+// -------
+// Before drawing any NEW 2010 training polygons, recover and QA legitimate
+// TRAINING-SIDE material that already exists from the earlier automated /
+// semi-automated 2010 workflow.
+//
+// IMPORTANT
+// ---------
+// This script:
+//
+// 1. Reconstructs the authoritative 06C2 manually-reviewed ACCEPTED pool
+//    directly from the materialized 05A transfer QA asset.
+//
+// 2. Does NOT include:
+//      Built-up poly_id 11  -> PARTIAL
+//      Barren poly_id 62    -> PARTIAL
+//      Barren poly_id 61    -> REJECT
+//
+// 3. Reuses only TRAINING-SIDE historical assets:
+//      05C1 re-QA Pass-B candidates
+//      05C2A rescued uncertain candidates
+//      05C3A targeted expansion candidates
+//      05C4E manual Barren training addition
+//
+// 4. Does NOT use validation data.
+//
+// 5. Re-samples every location against the authoritative materialized
+//    2010 predictor stack.
+//
+// 6. Requires clear_count >= 2.
+//
+// 7. Snaps everything to the authoritative 30 m EPSG:32644 grid.
+//
+// 8. Removes:
+//      same-class duplicates
+//      reuse pixels already represented in 06C2
+//      cross-class conflicts
+//
+// 9. Reports what genuine training deficits remain.
+//
+// 10. CREATES NO EXPORT.
+//
+// DO NOT BALANCE TO 120/CLASS IN THIS SCRIPT.
+// DO NOT START DRAWING NEW POLYGONS UNTIL THIS QA IS REVIEWED.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 1. LOCKED CONSTANTS
+// ============================================================================
+
+var CRS =
+  'EPSG:32644';
+
+var SCALE =
+  30;
+
+var TARGET_PER_CLASS =
+  120;
+
+var PROJ =
+  ee.Projection(CRS)
+    .atScale(SCALE);
+
+var PREDICTORS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+var CLASS_IDS =
+  ee.List.sequence(1, 5);
+
+var CLASS_NAMES =
+  ee.Dictionary({
+    '1': 'Built-up',
+    '2': 'Vegetation',
+    '3': 'Water',
+    '4': 'Agricultural/Open',
+    '5': 'Barren/Fallow'
+  });
+
+
+// ============================================================================
+// 2. ASSETS
+// ============================================================================
+
+var ROI_ASSET =
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean';
+
+var STACK_2010_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+var QA05A_ASSET =
+  'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A';
+
+var PASSB_05C1_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+var RESCUED_05C2A_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_rescued_uncertain_05C2A';
+
+var EXPANSION_05C3A_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_targeted_expansion_05C3A';
+
+var MANUAL_BARREN_05C4E_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_manual_barren_05C4E';
+
+
+// ============================================================================
+// 3. LOAD MATERIALIZED DATA
+// ============================================================================
+
+var studyArea =
+  ee.FeatureCollection(
+    ROI_ASSET
+  );
+
+var roi =
+  studyArea.geometry();
+
+var stack2010 =
+  ee.Image(
+    STACK_2010_ASSET
+  );
+
+var qa05A =
+  ee.FeatureCollection(
+    QA05A_ASSET
+  );
+
+var passB05C1 =
+  ee.FeatureCollection(
+    PASSB_05C1_ASSET
+  );
+
+var rescued05C2A =
+  ee.FeatureCollection(
+    RESCUED_05C2A_ASSET
+  );
+
+var expansion05C3A =
+  ee.FeatureCollection(
+    EXPANSION_05C3A_ASSET
+  );
+
+var manualBarren05C4E =
+  ee.FeatureCollection(
+    MANUAL_BARREN_05C4E_ASSET
+  );
+
+
+// ============================================================================
+// 4. AUTHORITATIVE GRID COORDINATES
+// ============================================================================
+//
+// These x/y coordinates define the exact analytical 30 m pixel.
+// We use them to generate an authoritative pixel key.
+//
+// ============================================================================
+
+var pixelCoords =
+  ee.Image.pixelCoordinates(
+    PROJ
+  )
+  .rename([
+    'px',
+    'py'
+  ]);
+
+var sampleImage =
+  stack2010
+    .select(
+      PREDICTORS.concat([
+        'clear_count'
+      ])
+    )
+    .addBands(
+      pixelCoords
+    );
+
+
+// ============================================================================
+// 5. HELPERS
+// ============================================================================
+
+function classNameFromId(classId) {
+
+  return ee.String(
+    CLASS_NAMES.get(
+      ee.Number(classId)
+        .format('%d')
+    )
+  );
+
+}
+
+
+function addSourceKey(feature) {
+
+  feature =
+    ee.Feature(feature);
+
+  var classId =
+    ee.Number(
+      feature.get('class_id')
+    )
+    .int();
+
+  var polyId =
+    ee.Number(
+      feature.get('poly_id')
+    )
+    .int();
+
+  var key =
+    classId
+      .format('%d')
+      .cat('_')
+      .cat(
+        polyId.format('%d')
+      );
+
+  return feature.set({
+    class_id:
+      classId,
+
+    class_name:
+      classNameFromId(classId),
+
+    poly_id:
+      polyId,
+
+    class_poly_key:
+      key
+  });
+
+}
+
+
+function addPixelKeys(feature) {
+
+  feature =
+    ee.Feature(feature);
+
+  var px =
+    ee.Number(
+      feature.get('px')
+    );
+
+  var py =
+    ee.Number(
+      feature.get('py')
+    );
+
+  var classId =
+    ee.Number(
+      feature.get('class_id')
+    )
+    .int();
+
+  // ----------------------------------------------------------
+  // IMPORTANT:
+  //
+  // pixelCoordinates() can return floating coordinates such as
+  // 48117.5 on this 30 m analytical projection.
+  //
+  // Therefore DO NOT format px / py using %d.
+  //
+  // Preserve the authoritative grid coordinate as a decimal
+  // string. Six decimals is far more precision than required
+  // for distinguishing these grid cells.
+  // ----------------------------------------------------------
+
+  var pxString =
+    px.format('%.6f');
+
+  var pyString =
+    py.format('%.6f');
+
+  var classString =
+    classId.format('%d');
+
+  var pixelKey =
+    pxString
+      .cat('_')
+      .cat(
+        pyString
+      );
+
+  var pixelClassKey =
+    classString
+      .cat('_')
+      .cat(
+        pixelKey
+      );
+
+  return feature.set({
+    auth_pixel_key:
+      pixelKey,
+
+    pixel_class_key:
+      pixelClassKey
+  });
+
+}
+
+
+function normalizeTrainingAsset(
+  collection,
+  sourceLabel
+) {
+
+  return ee.FeatureCollection(
+    collection
+  )
+  .map(
+    function(feature) {
+
+      feature =
+        addSourceKey(feature);
+
+      return feature.set(
+        'reuse_asset',
+        sourceLabel
+      );
+
+    }
+  );
+
+}
+
+
+function sampleOnAuthoritativeStack(
+  collection
+) {
+
+  var sampled =
+    sampleImage.sampleRegions({
+
+      collection:
+        collection,
+
+      properties: [
+        'class_id',
+        'class_name',
+        'poly_id',
+        'class_poly_key',
+        'reuse_asset'
+      ],
+
+      scale:
+        SCALE,
+
+      projection:
+        PROJ,
+
+      geometries:
+        true,
+
+      tileScale:
+        8
+    });
+
+  return sampled
+    .filter(
+      ee.Filter.gte(
+        'clear_count',
+        2
+      )
+    )
+    .map(
+      addPixelKeys
+    );
+
+}
+
+
+// ============================================================================
+// 6. FINAL 06B / 06C2 MANUAL DECISION LEDGER
+// ============================================================================
+//
+// These are the CURRENT authoritative ACCEPT decisions.
+//
+// Built-up:
+// ACCEPT = 1,3,4,5,6,7,8,9,12
+// PARTIAL = 11
+//
+// Vegetation:
+// ACCEPT = 16,17,25,26
+//
+// Water:
+// ACCEPT = 31,32,35,38,39,201
+//
+// Agricultural/Open:
+// ACCEPT = 46,47,48,51,52,53,55,56,57,59,60,202
+//
+// Barren/Fallow:
+// ACCEPT = 63,64,65
+// PARTIAL = 62
+// REJECT  = 61
+//
+// ============================================================================
+
+var ACCEPTED_SOURCE_KEYS = [
+
+  // ----------------------------------------------------------
+  // BUILT-UP
+  // ----------------------------------------------------------
+
+  '1_1',
+  '1_3',
+  '1_4',
+  '1_5',
+  '1_6',
+  '1_7',
+  '1_8',
+  '1_9',
+  '1_12',
+
+  // ----------------------------------------------------------
+  // VEGETATION
+  // ----------------------------------------------------------
+
+  '2_16',
+  '2_17',
+  '2_25',
+  '2_26',
+
+  // ----------------------------------------------------------
+  // WATER
+  // ----------------------------------------------------------
+
+  '3_31',
+  '3_32',
+  '3_35',
+  '3_38',
+  '3_39',
+  '3_201',
+
+  // ----------------------------------------------------------
+  // AGRICULTURAL / OPEN
+  // ----------------------------------------------------------
+
+  '4_46',
+  '4_47',
+  '4_48',
+  '4_51',
+  '4_52',
+  '4_53',
+  '4_55',
+  '4_56',
+  '4_57',
+  '4_59',
+  '4_60',
+  '4_202',
+
+  // ----------------------------------------------------------
+  // BARREN / FALLOW
+  // ----------------------------------------------------------
+
+  '5_63',
+  '5_64',
+  '5_65'
+];
+
+
+// ============================================================================
+// 7. REBUILD THE AUTHORITATIVE 06C2 ACCEPTED POOL
+// ============================================================================
+//
+// 06C2 itself deliberately created no asset.
+//
+// Therefore we reconstruct it from 05A using the final manual decision
+// ledger, then sample the accepted locations from the authoritative
+// materialized 2010 stack.
+//
+// Expected after clear_count >= 2:
+//
+// Built-up          = 104
+// Vegetation        = 120
+// Water             = 46
+// Agricultural/Open = 120
+// Barren/Fallow     = 69
+//
+// TOTAL             = 459
+//
+// ============================================================================
+
+var qa05ANormalized =
+  qa05A.map(
+    addSourceKey
+  );
+
+var accepted06C2Source =
+  qa05ANormalized
+    .filter(
+      ee.Filter.inList(
+        'class_poly_key',
+        ACCEPTED_SOURCE_KEYS
+      )
+    )
+    .map(
+      function(feature) {
+
+        return ee.Feature(feature)
+          .set(
+            'reuse_asset',
+            '06C2_manual_review_accepted'
+          );
+
+      }
+    );
+
+var base06C2 =
+  sampleOnAuthoritativeStack(
+    accepted06C2Source
+  )
+  .distinct([
+    'pixel_class_key'
+  ]);
+
+
+// ============================================================================
+// 8. QA — REBUILT 06C2 BASE
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D0 — REBUILT 06C2 BASE CHECK'
+);
+
+print(
+  '========================================'
+);
+
+print(
+  ee.Dictionary({
+    accepted_source_rows:
+      accepted06C2Source.size(),
+
+    clean_unique_pixels:
+      base06C2.size(),
+
+    expected_source_rows:
+      533,
+
+    expected_clean_pixels:
+      459,
+
+    source_count_matches_expected:
+      accepted06C2Source
+        .size()
+        .eq(533),
+
+    clean_count_matches_expected:
+      base06C2
+        .size()
+        .eq(459)
+  })
+);
+
+print(
+  'Rebuilt 06C2 class histogram'
+);
+
+print(
+  base06C2.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ============================================================================
+// 9. NORMALIZE HISTORICAL TRAINING-SIDE AUTOMATED ASSETS
+// ============================================================================
+
+var normalized05C1 =
+  normalizeTrainingAsset(
+    passB05C1,
+    '05C1_passB_reQA'
+  );
+
+var normalized05C2A =
+  normalizeTrainingAsset(
+    rescued05C2A,
+    '05C2A_rescued_uncertain'
+  );
+
+var normalized05C3A =
+  normalizeTrainingAsset(
+    expansion05C3A,
+    '05C3A_targeted_expansion'
+  );
+
+
+// ============================================================================
+// 10. COMBINE AUTOMATED HISTORICAL TRAINING CANDIDATES
+// ============================================================================
+
+var automatedReuseRaw =
+  normalized05C1
+    .merge(
+      normalized05C2A
+    )
+    .merge(
+      normalized05C3A
+    );
+
+
+// ============================================================================
+// 11. APPLY NEW 06B MANUAL SOURCE-GROUP DECISIONS
+// ============================================================================
+//
+// Very important:
+//
+// A historically automated candidate is NOT automatically retained.
+//
+// It must belong to one of the source groups we now ACCEPTED.
+//
+// Therefore candidates originating from:
+//
+// Built-up poly 11 -> excluded
+// Barren poly 62   -> excluded
+//
+// Any rejected source groups are also excluded.
+//
+// ============================================================================
+
+var automatedReuseApprovedSources =
+  automatedReuseRaw.filter(
+    ee.Filter.inList(
+      'class_poly_key',
+      ACCEPTED_SOURCE_KEYS
+    )
+  );
+
+
+// ============================================================================
+// 12. RE-SAMPLE AUTOMATED REUSE LOCATIONS
+// ============================================================================
+
+var automatedReuseEligible =
+  sampleOnAuthoritativeStack(
+    automatedReuseApprovedSources
+  );
+
+
+// ============================================================================
+// 13. PREPARE 05C4E MANUAL BARREN TRAINING ADDITION
+// ============================================================================
+//
+// 05C4E is a TRAINING-SIDE manual addition.
+//
+// It is NOT one of the transferred 2015 source groups and therefore is
+// allowed independently of the 06B source poly_id ledger.
+//
+// We force:
+// class_id = 5
+// poly_id  = 304
+//
+// This keeps its provenance explicit.
+//
+// ============================================================================
+
+var manualBarrenPrepared =
+  manualBarren05C4E.map(
+    function(feature) {
+
+      return ee.Feature(feature).set({
+        class_id:
+          5,
+
+        class_name:
+          'Barren/Fallow',
+
+        poly_id:
+          304,
+
+        class_poly_key:
+          '5_304',
+
+        reuse_asset:
+          '05C4E_manual_barren_training'
+      });
+
+    }
+  );
+
+var manualBarrenEligible =
+  sampleOnAuthoritativeStack(
+    manualBarrenPrepared
+  );
+
+
+// ============================================================================
+// 14. MERGE ALL REUSE CANDIDATES
+// ============================================================================
+
+var reuseEligibleRaw =
+  automatedReuseEligible
+    .merge(
+      manualBarrenEligible
+    );
+
+
+// ============================================================================
+// 15. REMOVE SAME-CLASS DUPLICATES
+// ============================================================================
+
+var reuseDistinctClass =
+  reuseEligibleRaw.distinct([
+    'pixel_class_key'
+  ]);
+
+
+// ============================================================================
+// 16. REMOVE ANY REUSE PIXEL ALREADY PRESENT IN 06C2
+// ============================================================================
+//
+// 06C2 manual-review accepted data have priority.
+//
+// We remove reuse pixels that occupy the same authoritative pixel,
+// regardless of their historical source.
+//
+// ============================================================================
+
+var samePixelFilter =
+  ee.Filter.equals({
+    leftField:
+      'auth_pixel_key',
+
+    rightField:
+      'auth_pixel_key'
+  });
+
+var reuseNotAlreadyIn06C2 =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      reuseDistinctClass,
+
+      base06C2,
+
+      samePixelFilter
+    )
+
+  );
+
+
+// ============================================================================
+// 17. DETECT CROSS-CLASS CONFLICTS INSIDE REUSE POOL
+// ============================================================================
+
+var reusePixelKeys =
+  ee.List(
+    reuseNotAlreadyIn06C2
+      .aggregate_array(
+        'auth_pixel_key'
+      )
+  )
+  .distinct();
+
+var reuseConflictSummary =
+  ee.FeatureCollection(
+
+    reusePixelKeys.map(
+      function(pixelKey) {
+
+        pixelKey =
+          ee.String(pixelKey);
+
+        var atPixel =
+          reuseNotAlreadyIn06C2.filter(
+            ee.Filter.eq(
+              'auth_pixel_key',
+              pixelKey
+            )
+          );
+
+        var classes =
+          ee.List(
+            atPixel.aggregate_array(
+              'class_id'
+            )
+          )
+          .distinct();
+
+        return ee.Feature(
+          null,
+          {
+            auth_pixel_key:
+              pixelKey,
+
+            row_n:
+              atPixel.size(),
+
+            class_count:
+              classes.size(),
+
+            classes:
+              classes
+          }
+        );
+
+      }
+    )
+  );
+
+var reuseConflicts =
+  reuseConflictSummary.filter(
+    ee.Filter.gt(
+      'class_count',
+      1
+    )
+  );
+
+
+// ============================================================================
+// 18. REMOVE CROSS-CLASS CONFLICTING REUSE PIXELS
+// ============================================================================
+
+var reuseClean =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      reuseNotAlreadyIn06C2,
+
+      reuseConflicts,
+
+      samePixelFilter
+    )
+
+  );
+
+
+// ============================================================================
+// 19. BUILD COMPLETE TRAINING CANDIDATE POOL
+// ============================================================================
+//
+// Still NOT balanced.
+// Still NOT exported.
+//
+// ============================================================================
+
+var consolidatedCandidatePool =
+  base06C2
+    .merge(
+      reuseClean
+    )
+    .distinct([
+      'pixel_class_key'
+    ]);
+
+
+// ============================================================================
+// 20. FINAL CROSS-CLASS CONFLICT CHECK
+// ============================================================================
+
+var finalPixelKeys =
+  ee.List(
+    consolidatedCandidatePool
+      .aggregate_array(
+        'auth_pixel_key'
+      )
+  )
+  .distinct();
+
+var finalConflictSummary =
+  ee.FeatureCollection(
+
+    finalPixelKeys.map(
+      function(pixelKey) {
+
+        pixelKey =
+          ee.String(pixelKey);
+
+        var atPixel =
+          consolidatedCandidatePool.filter(
+            ee.Filter.eq(
+              'auth_pixel_key',
+              pixelKey
+            )
+          );
+
+        var classes =
+          ee.List(
+            atPixel.aggregate_array(
+              'class_id'
+            )
+          )
+          .distinct();
+
+        return ee.Feature(
+          null,
+          {
+            auth_pixel_key:
+              pixelKey,
+
+            class_count:
+              classes.size(),
+
+            classes:
+              classes,
+
+            row_n:
+              atPixel.size()
+          }
+        );
+
+      }
+    )
+  );
+
+var finalConflicts =
+  finalConflictSummary.filter(
+    ee.Filter.gt(
+      'class_count',
+      1
+    )
+  );
+
+
+// ============================================================================
+// 21. REUSE PIPELINE QA
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D0 — EXISTING TRAINING-SIDE REUSE QA'
+);
+
+print(
+  '========================================'
+);
+
+print(
+  ee.Dictionary({
+
+    input_05C1:
+      passB05C1.size(),
+
+    input_05C2A:
+      rescued05C2A.size(),
+
+    input_05C3A:
+      expansion05C3A.size(),
+
+    input_05C4E:
+      manualBarren05C4E.size(),
+
+    automated_rows_before_new_manual_filter:
+      automatedReuseRaw.size(),
+
+    automated_rows_after_new_manual_filter:
+      automatedReuseApprovedSources.size(),
+
+    automated_clear_ge_2_rows:
+      automatedReuseEligible.size(),
+
+    manual_barren_clear_ge_2_rows:
+      manualBarrenEligible.size(),
+
+    combined_reuse_clear_ge_2_rows:
+      reuseEligibleRaw.size(),
+
+    reuse_unique_class_pixels:
+      reuseDistinctClass.size(),
+
+    reuse_removed_because_already_in_06C2:
+      reuseDistinctClass
+        .size()
+        .subtract(
+          reuseNotAlreadyIn06C2.size()
+        ),
+
+    reuse_cross_class_conflict_pixels:
+      reuseConflicts.size(),
+
+    clean_genuinely_new_reuse_pixels:
+      reuseClean.size()
+  })
+);
+
+
+// ============================================================================
+// 22. REUSE BY SOURCE ASSET
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D0 — CLEAN REUSE BY HISTORICAL SOURCE'
+);
+
+print(
+  '========================================'
+);
+
+print(
+  reuseClean.aggregate_histogram(
+    'reuse_asset'
+  )
+);
+
+
+// ============================================================================
+// 23. REUSE BY CLASS
+// ============================================================================
+
+print(
+  'Clean genuinely-new reuse class histogram'
+);
+
+print(
+  reuseClean.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ============================================================================
+// 24. CLASS-WISE REUSE DETAILS
+// ============================================================================
+
+var reuseClassQA =
+  ee.FeatureCollection(
+
+    CLASS_IDS.map(
+      function(classId) {
+
+        classId =
+          ee.Number(classId);
+
+        var fc =
+          reuseClean.filter(
+            ee.Filter.eq(
+              'class_id',
+              classId
+            )
+          );
+
+        var polyIds =
+          ee.List(
+            fc.aggregate_array(
+              'poly_id'
+            )
+          )
+          .distinct()
+          .sort();
+
+        return ee.Feature(
+          null,
+          {
+            class_id:
+              classId,
+
+            class_name:
+              classNameFromId(
+                classId
+              ),
+
+            genuinely_new_reuse_n:
+              fc.size(),
+
+            distinct_poly_id_n:
+              polyIds.size(),
+
+            poly_ids:
+              polyIds,
+
+            poly_id_histogram:
+              fc.aggregate_histogram(
+                'poly_id'
+              ),
+
+            reuse_asset_histogram:
+              fc.aggregate_histogram(
+                'reuse_asset'
+              )
+          }
+        );
+
+      }
+    )
+  );
+
+print(
+  '========================================'
+);
+
+print(
+  '06D0 — CLASS-WISE CLEAN REUSE QA'
+);
+
+print(
+  '========================================'
+);
+
+print(
+  reuseClassQA
+);
+
+
+// ============================================================================
+// 25. FINAL CONSOLIDATED COUNTS
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D0 — CONSOLIDATED TRAINING CANDIDATE POOL'
+);
+
+print(
+  '========================================'
+);
+
+print(
+  ee.Dictionary({
+    base_06C2_pixels:
+      base06C2.size(),
+
+    genuinely_new_reuse_pixels:
+      reuseClean.size(),
+
+    consolidated_unique_pixels:
+      consolidatedCandidatePool.size(),
+
+    final_cross_class_conflict_pixels:
+      finalConflicts.size()
+  })
+);
+
+print(
+  'Consolidated class histogram'
+);
+
+print(
+  consolidatedCandidatePool
+    .aggregate_histogram(
+      'class_id'
+    )
+);
+
+
+// ============================================================================
+// 26. FINAL TRAINING FEASIBILITY
+// ============================================================================
+
+var finalFeasibility =
+  ee.FeatureCollection(
+
+    CLASS_IDS.map(
+      function(classId) {
+
+        classId =
+          ee.Number(classId);
+
+        var classPool =
+          consolidatedCandidatePool.filter(
+            ee.Filter.eq(
+              'class_id',
+              classId
+            )
+          );
+
+        var n =
+          classPool.size();
+
+        var deficit =
+          ee.Number(
+            TARGET_PER_CLASS
+          )
+          .subtract(n)
+          .max(0);
+
+        var surplus =
+          ee.Number(n)
+            .subtract(
+              TARGET_PER_CLASS
+            )
+            .max(0);
+
+        var polyIds =
+          ee.List(
+            classPool.aggregate_array(
+              'poly_id'
+            )
+          )
+          .distinct()
+          .sort();
+
+        return ee.Feature(
+          null,
+          {
+            class_id:
+              classId,
+
+            class_name:
+              classNameFromId(
+                classId
+              ),
+
+            available_unique_n:
+              n,
+
+            target_n:
+              TARGET_PER_CLASS,
+
+            deficit:
+              deficit,
+
+            surplus:
+              surplus,
+
+            sufficient:
+              n.gte(
+                TARGET_PER_CLASS
+              ),
+
+            distinct_poly_id_n:
+              polyIds.size(),
+
+            poly_ids:
+              polyIds,
+
+            poly_id_histogram:
+              classPool.aggregate_histogram(
+                'poly_id'
+              )
+          }
+        );
+
+      }
+    )
+  );
+
+print(
+  '========================================'
+);
+
+print(
+  '06D0 — FINAL FEASIBILITY AFTER SMART REUSE'
+);
+
+print(
+  '========================================'
+);
+
+print(
+  finalFeasibility
+);
+
+
+// ============================================================================
+// 27. OPTIONAL SOURCE-PROVENANCE CHECK
+// ============================================================================
+
+print(
+  'Consolidated provenance histogram'
+);
+
+print(
+  consolidatedCandidatePool
+    .aggregate_histogram(
+      'reuse_asset'
+    )
+);
+
+
+// ============================================================================
+// 28. MAP — LIGHTWEIGHT QA ONLY
+// ============================================================================
+//
+// No large imagery layers are turned on.
+// Candidate layers are OFF by default.
+//
+// ============================================================================
+
+Map.layers().reset();
+
+Map.addLayer(
+  base06C2,
+  {
+    color:
+      'ffffff',
+    pointSize:
+      3
+  },
+  '06C2 BASE — accepted',
+  false
+);
+
+Map.addLayer(
+  reuseClean,
+  {
+    color:
+      '00ffff',
+    pointSize:
+      4
+  },
+  '06D0 — genuinely new reused training',
+  false
+);
+
+Map.centerObject(
+  roi,
+  10
+);
+
+
+// ============================================================================
+// 29. FINAL MESSAGE
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D0 COMPLETE — QA ONLY'
+);
+
+print(
+  'NO EXPORT TASK CREATED.'
+);
+
+print(
+  'NO VALIDATION DATA USED.'
+);
+
+print(
+  'PARTIAL BUILT-UP 11 WAS NOT AUTOMATICALLY INCLUDED.'
+);
+
+print(
+  'PARTIAL BARREN 62 WAS NOT AUTOMATICALLY INCLUDED.'
+);
+
+print(
+  'REJECTED BARREN 61 WAS NOT INCLUDED.'
+);
+
+print(
+  'DO NOT BALANCE OR DRAW NEW POLYGONS YET.'
+);
+
+print(
+  'Send the requested QA sections back for review.'
+);
+
+print(
+  '========================================'
+);
+
+
+// ============================================================================
+// END 06D0
+// ============================================================================

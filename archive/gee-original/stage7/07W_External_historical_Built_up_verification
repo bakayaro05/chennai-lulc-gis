@@ -1,0 +1,325 @@
+
+ // ============================================================
+ // CHENNAI LULC — STAGE 07W
+ // HISTORICAL BUILT-UP CROSS-CHECK: 2010 VS 2015
+ //
+ // Uses GHSL and GAIA as external contextual evidence.
+ // READ ONLY — NO TRAINING, NO CLASSIFICATION, NO EXPORTS.
+ // ============================================================
+
+ var ROOT = 'projects/assignment-482806/assets/';
+ var CRS = 'EPSG:32644';
+
+ var GRID = [
+   30, 0, 399060,
+   0, -30, 1463250
+ ];
+
+ var roi = ee.FeatureCollection(
+   ROOT + 'chennai_admin_study_area_clean'
+ ).geometry();
+
+ var map2010 = ee.Image(
+   ROOT + 'chennai_mlc_lulc_2010_L5L7_manual_exp_v1'
+ ).select('classification');
+
+ var map2015 = ee.Image(
+   ROOT + 'chennai_mlc_lulc_2015'
+ ).select('classification');
+
+ // ------------------------------------------------------------
+ // 1. EXISTING PROJECT BUILT-UP MAPS
+ // ------------------------------------------------------------
+
+ var built2010 = map2010.eq(1);
+ var built2015 = map2015.eq(1);
+
+ var transition14 = built2010.and(map2015.eq(4));
+ var transition15 = built2010.and(map2015.eq(5));
+
+ var builtStable = built2010.and(built2015);
+
+ // ------------------------------------------------------------
+ // 2. GAIA — HISTORICAL IMPERVIOUS SURFACES
+ //
+ // GAIA index: 2018 = 1, 2015 = 4, 2010 = 9.
+ // A pixel established by the selected year has an index
+ // greater than or equal to 2019 - year.
+ // ------------------------------------------------------------
+
+ var gaia = ee.Image(
+   'Tsinghua/FROM-GLC/GAIA/v10'
+ ).select('change_year_index')
+  .unmask(0);
+
+ function gaiaAt(year) {
+
+   return gaia
+     .gte(2019 - year)
+     .and(gaia.lte(34))
+     .rename('impervious')
+     .clip(roi);
+
+ }
+
+ var gaia2005 = gaiaAt(2005);
+ var gaia2010 = gaiaAt(2010);
+ var gaia2015 = gaiaAt(2015);
+
+ // ------------------------------------------------------------
+ // 3. GHSL — HISTORICAL BUILT SURFACE
+ //
+ // Values represent built-up surface in m2 per 100m grid cell.
+ // They are NOT equivalent to a 30m binary LULC class.
+ // ------------------------------------------------------------
+
+ function ghslAt(year) {
+
+   return ee.Image(
+     'JRC/GHSL/P2023A/GHS_BUILT_S/' + year
+   ).select('built_surface').clip(roi);
+
+ }
+
+ var ghsl2005 = ghslAt(2005);
+ var ghsl2010 = ghslAt(2010);
+ var ghsl2015 = ghslAt(2015);
+
+ // ------------------------------------------------------------
+ // 4. AREA FUNCTIONS
+ // ------------------------------------------------------------
+
+ var areaImage = ee.Image.pixelArea()
+   .divide(1e6)
+   .rename('km2');
+
+ function area30(mask) {
+
+   return areaImage
+     .updateMask(mask)
+     .reduceRegion({
+       reducer: ee.Reducer.sum(),
+       geometry: roi,
+       crs: CRS,
+       crsTransform: GRID,
+       maxPixels: 1e9,
+       tileScale: 8
+     }).get('km2');
+
+ }
+
+ function ghslArea(image) {
+
+   return ee.Number(
+     image.reduceRegion({
+       reducer: ee.Reducer.sum(),
+       geometry: roi,
+       scale: 100,
+       maxPixels: 1e9,
+       tileScale: 8
+     }).get('built_surface')
+   ).divide(1e6);
+
+ }
+
+ function gaiaShare(gaiaYear, mask) {
+
+   return gaiaYear
+     .toFloat()
+     .updateMask(mask)
+     .reduceRegion({
+       reducer: ee.Reducer.mean(),
+       geometry: roi,
+       crs: CRS,
+       crsTransform: GRID,
+       maxPixels: 1e9,
+       tileScale: 8
+     }).get('impervious');
+
+ }
+
+ // ------------------------------------------------------------
+ // 5. COMPARE BUILT-UP AREA ACROSS PRODUCTS
+ // ------------------------------------------------------------
+
+ print('==============================================');
+ print('STAGE 07W — HISTORICAL BUILT-UP CROSS-CHECK');
+ print('==============================================');
+
+ print('PROJECT: 2010 MLC Built-up (km2):');
+ print(area30(built2010));
+
+ print('PROJECT: 2015 MLC Built-up (km2):');
+ print(area30(built2015));
+
+ print('GAIA: 2005 impervious area (km2):');
+ print(area30(gaia2005));
+
+ print('GAIA: 2010 impervious area (km2):');
+ print(area30(gaia2010));
+
+ print('GAIA: 2015 impervious area (km2):');
+ print(area30(gaia2015));
+
+ print('GHSL: 2005 built surface (km2, approximate):');
+ print(ghslArea(ghsl2005));
+
+ print('GHSL: 2010 built surface (km2, approximate):');
+ print(ghslArea(ghsl2010));
+
+ print('GHSL: 2015 built surface (km2, approximate):');
+ print(ghslArea(ghsl2015));
+
+ // ------------------------------------------------------------
+ // 6. INVESTIGATE THE SUSPICIOUS TRANSITIONS
+ // ------------------------------------------------------------
+
+ print('==============================================');
+ print('2010 -> 2015 DISAGREEMENT DIAGNOSTIC');
+ print('==============================================');
+
+ print('2010 Built -> 2015 Agricultural, km2:');
+ print(area30(transition14));
+
+ print('2010 Built -> 2015 Vacant/Open, km2:');
+ print(area30(transition15));
+
+ print('Stable Built-up in both MLC maps, km2:');
+ print(area30(builtStable));
+
+ print('GAIA 2010 impervious fraction within transition 14:');
+ print(gaiaShare(gaia2010, transition14));
+
+ print('GAIA 2015 impervious fraction within transition 14:');
+ print(gaiaShare(gaia2015, transition14));
+
+ print('GAIA 2010 impervious fraction within transition 15:');
+ print(gaiaShare(gaia2010, transition15));
+
+ print('GAIA 2015 impervious fraction within transition 15:');
+ print(gaiaShare(gaia2015, transition15));
+
+ print('GAIA 2010 impervious fraction in stable Built-up:');
+ print(gaiaShare(gaia2010, builtStable));
+
+ // Four possible GAIA states:
+ // 0 = non-impervious in both years
+ // 1 = new impervious by 2015
+ // 2 = impervious in 2010, not 2015 (not expected)
+ // 3 = impervious in both years
+
+ var gaiaState = gaia2010
+   .multiply(2)
+   .add(gaia2015)
+   .rename('GAIA_state');
+
+ print('GAIA states in transition 14 (pixel counts):');
+ print(
+   gaiaState.updateMask(transition14)
+     .reduceRegion({
+       reducer: ee.Reducer.frequencyHistogram(),
+       geometry: roi,
+       crs: CRS,
+       crsTransform: GRID,
+       maxPixels: 1e9,
+       tileScale: 8
+     })
+ );
+
+ print('GAIA states in transition 15 (pixel counts):');
+ print(
+   gaiaState.updateMask(transition15)
+     .reduceRegion({
+       reducer: ee.Reducer.frequencyHistogram(),
+       geometry: roi,
+       crs: CRS,
+       crsTransform: GRID,
+       maxPixels: 1e9,
+       tileScale: 8
+     })
+ );
+
+ // ------------------------------------------------------------
+ // 7. MAP OVERLAYS
+ // ------------------------------------------------------------
+
+ Map.layers().reset();
+ Map.centerObject(roi, 11);
+ Map.setOptions('SATELLITE');
+
+ var palette = [
+   'ff0000',
+   '008000',
+   '0000ff',
+   'ffff00',
+   'd2b48c'
+ ];
+
+ Map.addLayer(
+   map2010,
+   {min: 1, max: 5, palette: palette},
+   '2010 original MLC',
+   false
+ );
+
+ Map.addLayer(
+   map2015,
+   {min: 1, max: 5, palette: palette},
+   '2015 original MLC',
+   false
+ );
+
+ Map.addLayer(
+   gaia2010.selfMask(),
+   {palette: ['00ffff']},
+   'GAIA 2010 impervious',
+   false
+ );
+
+ Map.addLayer(
+   gaia2015.selfMask(),
+   {palette: ['ffffff']},
+   'GAIA 2015 impervious',
+   false
+ );
+
+ Map.addLayer(
+   ghsl2010,
+   {
+     min: 0,
+     max: 10000,
+     palette: ['000000', 'ffff00', 'ff0000']
+   },
+   'GHSL 2010 built surface',
+   false
+ );
+
+ Map.addLayer(
+   ghsl2015,
+   {
+     min: 0,
+     max: 10000,
+     palette: ['000000', 'ffff00', 'ff0000']
+   },
+   'GHSL 2015 built surface',
+   false
+ );
+
+ Map.addLayer(
+   transition14.selfMask(),
+   {palette: ['ff00ff']},
+   '2010 Built -> 2015 Agricultural',
+   true,
+   0.8
+ );
+
+ Map.addLayer(
+   transition15.selfMask(),
+   {palette: ['ffa500']},
+   '2010 Built -> 2015 Vacant/Open',
+   false
+ );
+
+ print('==============================================');
+ print('END 07W — NO ASSETS MODIFIED');
+ print('==============================================');

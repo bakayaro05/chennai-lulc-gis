@@ -1,0 +1,1074 @@
+// ============================================================================
+// 06D1_2010_training_validation_independence_QA
+// ============================================================================
+//
+// PURPOSE
+// -------
+// Rebuild the successful 06D0C consolidated 2010 training candidate pool,
+// then enforce the LOCKED validation-independence requirement:
+//
+//       every final training point must be >30 m from
+//       chennai_validation_2010_final
+//
+// IMPORTANT
+// ---------
+// - Uses NO validation accuracy / prediction results.
+// - Validation geometry is used ONLY for spatial independence.
+// - Keeps the 06B/06C2 manual ACCEPT/PARTIAL/REJECT decisions.
+// - Reuses legitimate training-side historical material.
+// - NO EXPORT.
+// - NO FINAL 120/class selection yet.
+//
+// If every class still has >=120 candidates after this exclusion,
+// the next stage will create the definitive 600-point training asset.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 1. CONSTANTS
+// ============================================================================
+
+var CRS = 'EPSG:32644';
+var SCALE = 30;
+var TARGET = 120;
+var VALIDATION_EXCLUSION_M = 30;
+
+var PROJ =
+  ee.Projection(CRS)
+    .atScale(SCALE);
+
+var PREDICTORS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+
+// ============================================================================
+// 2. ASSETS
+// ============================================================================
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+var QA05A_ASSET =
+  'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A';
+
+var C1_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+var C2A_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_rescued_uncertain_05C2A';
+
+var C3A_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_targeted_expansion_05C3A';
+
+var C4E_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_manual_barren_05C4E';
+
+var VALIDATION_ASSET =
+  'projects/assignment-482806/assets/chennai_validation_2010_final';
+
+
+// ============================================================================
+// 3. LOAD
+// ============================================================================
+
+var stack =
+  ee.Image(STACK_ASSET);
+
+var qa05A =
+  ee.FeatureCollection(QA05A_ASSET);
+
+var c1 =
+  ee.FeatureCollection(C1_ASSET);
+
+var c2a =
+  ee.FeatureCollection(C2A_ASSET);
+
+var c3a =
+  ee.FeatureCollection(C3A_ASSET);
+
+var c4e =
+  ee.FeatureCollection(C4E_ASSET);
+
+var validation2010 =
+  ee.FeatureCollection(VALIDATION_ASSET);
+
+
+// ============================================================================
+// 4. AUTHORITATIVE GRID
+// ============================================================================
+
+var coords =
+  ee.Image.pixelCoordinates(PROJ)
+    .rename([
+      'px',
+      'py'
+    ]);
+
+var samplingImage =
+  stack
+    .select(
+      PREDICTORS.concat([
+        'clear_count'
+      ])
+    )
+    .addBands(coords);
+
+
+// ============================================================================
+// 5. CANONICALIZE TRAINING PROPERTIES
+// ============================================================================
+
+function canonicalize(feature) {
+
+  feature =
+    ee.Feature(feature);
+
+  var classNum =
+    ee.Number.parse(
+      ee.String(
+        feature.get('class_id')
+      )
+    )
+    .int();
+
+  var polyNum =
+    ee.Number.parse(
+      ee.String(
+        feature.get('poly_id')
+      )
+    )
+    .int();
+
+  var classKey =
+    classNum.format('%d');
+
+  var polyKey =
+    polyNum.format('%d');
+
+  var classPolyKey =
+    classKey
+      .cat('_')
+      .cat(polyKey);
+
+  return feature.set({
+
+    class_num:
+      classNum,
+
+    class_key:
+      classKey,
+
+    poly_num:
+      polyNum,
+
+    poly_key:
+      polyKey,
+
+    class_poly_key:
+      classPolyKey
+
+  });
+
+}
+
+
+// ============================================================================
+// 6. PIXEL KEY
+// ============================================================================
+
+function addPixelKey(feature) {
+
+  feature =
+    ee.Feature(feature);
+
+  var px =
+    ee.Number(
+      feature.get('px')
+    )
+    .format('%.6f');
+
+  var py =
+    ee.Number(
+      feature.get('py')
+    )
+    .format('%.6f');
+
+  var classKey =
+    ee.String(
+      feature.get('class_key')
+    );
+
+  var pixelKey =
+    px
+      .cat('_')
+      .cat(py);
+
+  var pixelClassKey =
+    classKey
+      .cat('_')
+      .cat(pixelKey);
+
+  return feature.set({
+
+    auth_pixel_key:
+      pixelKey,
+
+    pixel_class_key:
+      pixelClassKey
+
+  });
+
+}
+
+
+// ============================================================================
+// 7. SAMPLE TRAINING LOCATIONS
+// ============================================================================
+//
+// geometries:true is intentional here.
+//
+// We need actual point geometry for the 30 m validation exclusion.
+//
+// ============================================================================
+
+function sampleCollection(collection) {
+
+  return samplingImage
+
+    .sampleRegions({
+
+      collection:
+        collection,
+
+      properties: [
+        'class_num',
+        'class_key',
+        'poly_num',
+        'poly_key',
+        'class_poly_key',
+        'reuse_asset',
+        'pool_origin'
+      ],
+
+      scale:
+        SCALE,
+
+      projection:
+        PROJ,
+
+      geometries:
+        true,
+
+      tileScale:
+        8
+
+    })
+
+    .filter(
+      ee.Filter.gte(
+        'clear_count',
+        2
+      )
+    )
+
+    .map(
+      addPixelKey
+    );
+
+}
+
+
+// ============================================================================
+// 8. LOCKED MANUAL ACCEPT LEDGER
+// ============================================================================
+
+var ACCEPT_KEYS = [
+
+  // Built-up
+  '1_1',
+  '1_3',
+  '1_4',
+  '1_5',
+  '1_6',
+  '1_7',
+  '1_8',
+  '1_9',
+  '1_12',
+
+  // Vegetation
+  '2_16',
+  '2_17',
+  '2_25',
+  '2_26',
+
+  // Water
+  '3_31',
+  '3_32',
+  '3_35',
+  '3_38',
+  '3_39',
+  '3_201',
+
+  // Agricultural / Open
+  '4_46',
+  '4_47',
+  '4_48',
+  '4_51',
+  '4_52',
+  '4_53',
+  '4_55',
+  '4_56',
+  '4_57',
+  '4_59',
+  '4_60',
+  '4_202',
+
+  // Barren / Fallow
+  '5_63',
+  '5_64',
+  '5_65'
+
+];
+
+
+// ============================================================================
+// 9. REBUILD 06C2 MANUAL BASE
+// ============================================================================
+
+var baseSource =
+  qa05A
+
+    .map(canonicalize)
+
+    .filter(
+      ee.Filter.inList(
+        'class_poly_key',
+        ACCEPT_KEYS
+      )
+    )
+
+    .map(
+      function(feature) {
+
+        return ee.Feature(feature).set({
+
+          reuse_asset:
+            '06C2_manual_accept',
+
+          pool_origin:
+            '06C2_manual_base'
+
+        });
+
+      }
+    );
+
+
+var base =
+  sampleCollection(
+    baseSource
+  )
+  .distinct([
+    'pixel_class_key'
+  ]);
+
+
+// ============================================================================
+// 10. PREPARE HISTORICAL TRAINING-SIDE MATERIAL
+// ============================================================================
+
+function prepareHistorical(
+  collection,
+  sourceName
+) {
+
+  return collection
+
+    .map(canonicalize)
+
+    .map(
+      function(feature) {
+
+        return ee.Feature(feature).set({
+
+          reuse_asset:
+            sourceName,
+
+          pool_origin:
+            'historical_training_reuse'
+
+        });
+
+      }
+    );
+
+}
+
+
+var c1Prepared =
+  prepareHistorical(
+    c1,
+    '05C1_passB'
+  );
+
+var c2aPrepared =
+  prepareHistorical(
+    c2a,
+    '05C2A_rescued'
+  );
+
+var c3aPrepared =
+  prepareHistorical(
+    c3a,
+    '05C3A_targeted60m'
+  );
+
+
+// ============================================================================
+// 11. FILTER AUTOMATED MATERIAL BY CURRENT MANUAL DECISIONS
+// ============================================================================
+
+var automatedRaw =
+  c1Prepared
+    .merge(c2aPrepared)
+    .merge(c3aPrepared);
+
+
+var automatedApproved =
+  automatedRaw.filter(
+    ee.Filter.inList(
+      'class_poly_key',
+      ACCEPT_KEYS
+    )
+  );
+
+
+// ============================================================================
+// 12. EXISTING MANUAL BARREN TRAINING ADDITION
+// ============================================================================
+
+var c4ePrepared =
+  c4e.map(
+    function(feature) {
+
+      return ee.Feature(feature).set({
+
+        class_num:
+          5,
+
+        class_key:
+          '5',
+
+        poly_num:
+          304,
+
+        poly_key:
+          '304',
+
+        class_poly_key:
+          '5_304',
+
+        reuse_asset:
+          '05C4E_manual_barren',
+
+        pool_origin:
+          'historical_training_reuse'
+
+      });
+
+    }
+  );
+
+
+// ============================================================================
+// 13. REBUILD GENUINELY NEW REUSE POOL
+// ============================================================================
+
+var reuseSource =
+  automatedApproved
+    .merge(
+      c4ePrepared
+    );
+
+
+var reuseSampled =
+  sampleCollection(
+    reuseSource
+  );
+
+
+var reuseClassUnique =
+  reuseSampled.distinct([
+    'pixel_class_key'
+  ]);
+
+
+var samePixelFilter =
+  ee.Filter.equals({
+
+    leftField:
+      'auth_pixel_key',
+
+    rightField:
+      'auth_pixel_key'
+
+  });
+
+
+var genuinelyNewReuse =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      reuseClassUnique,
+
+      base,
+
+      samePixelFilter
+
+    )
+
+  );
+
+
+// ============================================================================
+// 14. CONSOLIDATED PRE-VALIDATION-EXCLUSION POOL
+// ============================================================================
+
+var consolidated =
+  base
+    .merge(
+      genuinelyNewReuse
+    )
+    .distinct([
+      'pixel_class_key'
+    ]);
+
+
+// ============================================================================
+// 15. PRE-EXCLUSION QA
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D1 — PRE-EXCLUSION RECONSTRUCTION CHECK'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    base_n:
+      base.size(),
+
+    expected_base_n:
+      459,
+
+    reuse_n:
+      genuinelyNewReuse.size(),
+
+    expected_reuse_n:
+      536,
+
+    consolidated_n:
+      consolidated.size(),
+
+    expected_consolidated_n:
+      995
+
+  })
+);
+
+
+print(
+  'PRE-EXCLUSION CLASS HISTOGRAM — EXPECTED 210/273/156/202/154'
+);
+
+
+print(
+  consolidated.aggregate_histogram(
+    'class_key'
+  )
+);
+
+
+// ============================================================================
+// 16. VALIDATION INPUT QA
+// ============================================================================
+//
+// Create canonical STRING class key without touching poly_id because
+// some automatic validation rows may not have poly_id.
+//
+// ============================================================================
+
+var validationCanonical =
+  validation2010.map(
+    function(feature) {
+
+      feature =
+        ee.Feature(feature);
+
+      var classNum =
+        ee.Number.parse(
+          ee.String(
+            feature.get('class_id')
+          )
+        )
+        .int();
+
+      return feature.set({
+
+        validation_class_num:
+          classNum,
+
+        validation_class_key:
+          classNum.format('%d')
+
+      });
+
+    }
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D1 — LOCKED VALIDATION INPUT'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    validation_total:
+      validationCanonical.size(),
+
+    expected_validation_total:
+      300
+
+  })
+);
+
+
+print(
+  'Validation class histogram'
+);
+
+
+print(
+  validationCanonical.aggregate_histogram(
+    'validation_class_key'
+  )
+);
+
+
+// ============================================================================
+// 17. 30 m VALIDATION EXCLUSION
+// ============================================================================
+//
+// IMPORTANT:
+//
+// This is NOT accuracy-based tuning.
+//
+// We are using validation GEOMETRY ONLY to preserve independence between
+// training and validation.
+//
+// Candidate training point survives only if there is NO validation point
+// within 30 metres.
+//
+// ============================================================================
+
+var within30m =
+  ee.Filter.withinDistance({
+
+    distance:
+      VALIDATION_EXCLUSION_M,
+
+    leftField:
+      '.geo',
+
+    rightField:
+      '.geo',
+
+    maxError:
+      1
+
+  });
+
+
+var eligibleAfterValidationExclusion =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      consolidated,
+
+      validationCanonical,
+
+      within30m
+
+    )
+
+  );
+
+
+// ============================================================================
+// 18. OVERALL EXCLUSION QA
+// ============================================================================
+
+var removedByValidationExclusion =
+  ee.Number(
+    consolidated.size()
+  )
+  .subtract(
+    eligibleAfterValidationExclusion.size()
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D1 — 30 m VALIDATION EXCLUSION QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    candidate_pixels_before_exclusion:
+      consolidated.size(),
+
+    candidate_pixels_after_exclusion:
+      eligibleAfterValidationExclusion.size(),
+
+    removed_within_30m_of_validation:
+      removedByValidationExclusion,
+
+    exclusion_distance_m:
+      VALIDATION_EXCLUSION_M
+
+  })
+);
+
+
+print(
+  'POST-EXCLUSION CLASS HISTOGRAM'
+);
+
+
+print(
+  eligibleAfterValidationExclusion
+    .aggregate_histogram(
+      'class_key'
+    )
+);
+
+
+// ============================================================================
+// 19. CLASS-WISE INDEPENDENCE / FEASIBILITY QA
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D1 — CLASS-WISE POST-EXCLUSION FEASIBILITY'
+);
+
+print(
+  '========================================'
+);
+
+
+[1, 2, 3, 4, 5].forEach(
+  function(classId) {
+
+    var classKey =
+      String(classId);
+
+
+    var before =
+      consolidated.filter(
+        ee.Filter.eq(
+          'class_key',
+          classKey
+        )
+      );
+
+
+    var after =
+      eligibleAfterValidationExclusion.filter(
+        ee.Filter.eq(
+          'class_key',
+          classKey
+        )
+      );
+
+
+    var baseBefore =
+      before.filter(
+        ee.Filter.eq(
+          'pool_origin',
+          '06C2_manual_base'
+        )
+      );
+
+
+    var baseAfter =
+      after.filter(
+        ee.Filter.eq(
+          'pool_origin',
+          '06C2_manual_base'
+        )
+      );
+
+
+    var reuseBefore =
+      before.filter(
+        ee.Filter.eq(
+          'pool_origin',
+          'historical_training_reuse'
+        )
+      );
+
+
+    var reuseAfter =
+      after.filter(
+        ee.Filter.eq(
+          'pool_origin',
+          'historical_training_reuse'
+        )
+      );
+
+
+    var available =
+      after.size();
+
+
+    var deficit =
+      ee.Number(TARGET)
+        .subtract(
+          available
+        )
+        .max(0);
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        before_exclusion_n:
+          before.size(),
+
+        after_exclusion_n:
+          after.size(),
+
+        removed_total_n:
+          before
+            .size()
+            .subtract(
+              after.size()
+            ),
+
+        manual_base_before_n:
+          baseBefore.size(),
+
+        manual_base_after_n:
+          baseAfter.size(),
+
+        manual_base_removed_n:
+          baseBefore
+            .size()
+            .subtract(
+              baseAfter.size()
+            ),
+
+        reuse_before_n:
+          reuseBefore.size(),
+
+        reuse_after_n:
+          reuseAfter.size(),
+
+        reuse_removed_n:
+          reuseBefore
+            .size()
+            .subtract(
+              reuseAfter.size()
+            ),
+
+        target_n:
+          TARGET,
+
+        deficit_after_exclusion:
+          deficit,
+
+        sufficient_for_120:
+          available.gte(
+            TARGET
+          ),
+
+        poly_id_histogram_after:
+          after.aggregate_histogram(
+            'poly_key'
+          ),
+
+        origin_histogram_after:
+          after.aggregate_histogram(
+            'pool_origin'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ============================================================================
+// 20. FINAL DUPLICATE / CONFLICT CHECK
+// ============================================================================
+
+var classUniqueRows =
+  eligibleAfterValidationExclusion
+    .distinct([
+      'pixel_class_key'
+    ]);
+
+
+var spatialUniqueRows =
+  classUniqueRows
+    .distinct([
+      'auth_pixel_key'
+    ]);
+
+
+var conflictExcess =
+  ee.Number(
+    classUniqueRows.size()
+  )
+  .subtract(
+    spatialUniqueRows.size()
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D1 — FINAL CANDIDATE INTEGRITY QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    class_unique_rows:
+      classUniqueRows.size(),
+
+    spatial_unique_pixels:
+      spatialUniqueRows.size(),
+
+    cross_class_conflict_excess_rows:
+      conflictExcess,
+
+    duplicate_pixel_or_cross_class_problem:
+      conflictExcess.gt(0)
+
+  })
+);
+
+
+// ============================================================================
+// 21. OPTIONAL PROVENANCE QA
+// ============================================================================
+
+print(
+  'POST-EXCLUSION PROVENANCE HISTOGRAM'
+);
+
+
+print(
+  eligibleAfterValidationExclusion
+    .aggregate_histogram(
+      'reuse_asset'
+    )
+);
+
+
+// ============================================================================
+// 22. FINISH
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D1 COMPLETE — QA ONLY'
+);
+
+print(
+  'NO EXPORT TASK CREATED.'
+);
+
+print(
+  'VALIDATION WAS USED ONLY FOR 30 m SPATIAL EXCLUSION.'
+);
+
+print(
+  'VALIDATION ACCURACY/PREDICTIONS WERE NOT USED.'
+);
+
+print(
+  'DO NOT DRAW NEW POLYGONS YET.'
+);
+
+print(
+  'DO NOT FINALIZE 120/CLASS UNTIL THIS QA IS REVIEWED.'
+);
+
+print(
+  '========================================'
+);
+
+
+// ============================================================================
+// END 06D1
+// ============================================================================

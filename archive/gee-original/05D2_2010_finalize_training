@@ -1,0 +1,360 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05D2
+//
+// FINALIZE / PROMOTE 2010 TRAINING
+//
+// INPUT:
+// chennai_2010_training_candidate_05D1
+//
+// PURPOSE:
+// Perform final lightweight QA on the MATERIALIZED 600-point
+// training candidate and export it unchanged as:
+//
+// chennai_training_2010_final
+//
+// IMPORTANT:
+//
+// NO Landsat processing.
+// NO candidate generation.
+// NO sampling.
+// NO random selection.
+// NO validation.
+// NO MLC.
+// NO map layers.
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSETS
+// ================================================================
+
+var INPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_training_candidate_05D1';
+
+
+var OUTPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final';
+
+
+// ================================================================
+// 2. LOCKED EXPECTATIONS
+// ================================================================
+
+var EXPECTED_TOTAL =
+  600;
+
+
+var EXPECTED_PER_CLASS =
+  120;
+
+
+var CLASS_IDS =
+  [1, 2, 3, 4, 5];
+
+
+var CLASS_NAMES = [
+
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+
+];
+
+
+var PREDICTORS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+// ================================================================
+// 3. LOAD MATERIALIZED 05D1 CANDIDATE
+// ================================================================
+
+var trainingCandidate =
+  ee.FeatureCollection(
+    INPUT_ASSET
+  );
+
+
+// ================================================================
+// 4. BASIC QA
+// ================================================================
+
+var totalN =
+  trainingCandidate.size();
+
+
+var completePredictorN =
+  trainingCandidate
+    .filter(
+      ee.Filter.notNull(
+        PREDICTORS
+      )
+    )
+    .size();
+
+
+var distinctKeys =
+  ee.List(
+    trainingCandidate.aggregate_array(
+      'auth_pixel_key'
+    )
+  )
+  .distinct();
+
+
+var distinctKeyN =
+  distinctKeys.size();
+
+
+var duplicateN =
+  totalN.subtract(
+    distinctKeyN
+  );
+
+
+var keyMismatchN =
+  trainingCandidate
+    .filter(
+      ee.Filter.eq(
+        'pixel_key_match',
+        0
+      )
+    )
+    .size();
+
+
+// ================================================================
+// 5. VALID CLASS-ID QA
+// ================================================================
+
+var validClassN =
+  trainingCandidate
+    .filter(
+      ee.Filter.inList(
+        'class_id',
+        CLASS_IDS
+      )
+    )
+    .size();
+
+
+var invalidClassN =
+  totalN.subtract(
+    validClassN
+  );
+
+
+// ================================================================
+// 6. FINAL OVERALL QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05D2 — FINAL 2010 TRAINING QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    total_n:
+      totalN,
+
+    expected_total:
+      EXPECTED_TOTAL,
+
+    predictor_complete_n:
+      completePredictorN,
+
+    distinct_pixel_key_n:
+      distinctKeyN,
+
+    duplicate_pixel_n:
+      duplicateN,
+
+    pixel_key_mismatch_n:
+      keyMismatchN,
+
+    valid_class_n:
+      validClassN,
+
+    invalid_class_n:
+      invalidClassN,
+
+    minimum_clear_count:
+      trainingCandidate.aggregate_min(
+        'clear_count'
+      ),
+
+    maximum_clear_count:
+      trainingCandidate.aggregate_max(
+        'clear_count'
+      )
+
+  })
+);
+
+
+// ================================================================
+// 7. FINAL CLASS HISTOGRAM
+// ================================================================
+
+print(
+  'FINAL CLASS HISTOGRAM'
+);
+
+
+print(
+  trainingCandidate.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ================================================================
+// 8. CLASS-WISE FINAL QA
+// ================================================================
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var fc =
+      trainingCandidate.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        final_n:
+          fc.size(),
+
+        expected_n:
+          EXPECTED_PER_CLASS,
+
+        distinct_poly_id_n:
+          ee.List(
+            fc.aggregate_array(
+              'poly_id'
+            )
+          )
+          .distinct()
+          .size(),
+
+        poly_id_histogram:
+          fc.aggregate_histogram(
+            'poly_id'
+          ),
+
+        candidate_source_histogram:
+          fc.aggregate_histogram(
+            'candidate_source'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 9. FINAL TRAINING EXPORT
+// ================================================================
+//
+// IMPORTANT:
+//
+// Running this script creates the export task.
+//
+// REVIEW THE CONSOLE FIRST.
+//
+// Only START the task if:
+//
+// total_n = 600
+// predictor_complete_n = 600
+// distinct_pixel_key_n = 600
+// duplicate_pixel_n = 0
+// pixel_key_mismatch_n = 0
+// invalid_class_n = 0
+//
+// and:
+//
+// 1 = 120
+// 2 = 120
+// 3 = 120
+// 4 = 120
+// 5 = 120
+//
+// ================================================================
+
+Export.table.toAsset({
+
+  collection:
+    trainingCandidate,
+
+  description:
+    'chennai_training_2010_final',
+
+  assetId:
+    OUTPUT_ASSET
+
+});
+
+
+// ================================================================
+// 10. FINAL MESSAGE
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05D2 SCRIPT FINISHED'
+);
+
+print(
+  'DO NOT RUN THIS SCRIPT AGAIN.'
+);
+
+print(
+  'Review QA before starting the ONE final export task.'
+);
+
+print(
+  '========================================'
+);

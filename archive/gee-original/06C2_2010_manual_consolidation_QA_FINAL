@@ -1,0 +1,2170 @@
+// ============================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+//
+// SCRIPT 06C2
+// 2010 V2 MANUAL TRAINING CONSOLIDATION QA — FINAL CORRECTED LEDGER
+//
+// PURPOSE
+// -------
+// Consolidate the COMPLETE 2010 manual training review.
+//
+// CORRECTIONS FROM 06C
+// --------------------
+// 1. Vegetation poly_id 26 = ACCEPT
+// 2. Agricultural/Open poly_id 48 = ACCEPT
+// 3. Erroneous poly_id 58 removed completely
+// 4. Agricultural/Open macro-site A =
+//       47, 51, 52, 53, 55, 56, 60
+//
+// THIS SCRIPT:
+// ------------
+// - Uses the original 600 transferred training locations only as source points.
+// - Re-samples all points from the AUTHORITATIVE 2010 predictor stack.
+// - Applies manual ACCEPT / PARTIAL / REJECT decisions.
+// - Requires clear_count >= 2.
+// - Creates authoritative 30 m pixel keys.
+// - Detects duplicate and cross-class conflicts.
+// - Reports true available pixels per class.
+// - Keeps partial groups OUTSIDE the clean accepted pool.
+// - DOES NOT use validation.
+// - DOES NOT train classifier.
+// - DOES NOT export.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 1. ASSETS
+// ============================================================================
+
+var ROI_ASSET =
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean';
+
+var STACK_2010_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+var TRANSFER_05A_ASSET =
+  'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A';
+
+
+// ============================================================================
+// 2. LOAD LOCKED INPUTS
+// ============================================================================
+
+var roi =
+  ee.FeatureCollection(
+    ROI_ASSET
+  );
+
+var stack2010 =
+  ee.Image(
+    STACK_2010_ASSET
+  );
+
+var transfer05A =
+  ee.FeatureCollection(
+    TRANSFER_05A_ASSET
+  );
+
+
+// ============================================================================
+// 3. LOCKED PREDICTOR SET
+// ============================================================================
+
+var predictors = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+var projection2010 =
+  stack2010
+    .select('blue')
+    .projection();
+
+
+// ============================================================================
+// 4. FINAL MANUAL REVIEW LEDGER
+// ============================================================================
+//
+// CLASS 1 — BUILT-UP
+//
+// ACCEPT:
+// 1,3,4,5,6,7,8,9,12
+//
+// PARTIAL:
+// 11
+//
+// ---------------------------------------------------------------------------
+//
+// CLASS 2 — VEGETATION
+//
+// ACCEPT:
+// 16,17,25,26
+//
+// ---------------------------------------------------------------------------
+//
+// CLASS 3 — WATER
+//
+// ACCEPT:
+// 31,32,35,38,39,201
+//
+// ---------------------------------------------------------------------------
+//
+// CLASS 4 — AGRICULTURAL / OPEN
+//
+// ACCEPT:
+// 46,47,48,51,52,53,55,56,57,59,60,202
+//
+// MACRO-SITE A:
+// 47,51,52,53,55,56,60
+//
+// NOTE:
+// poly_id 58 DOES NOT EXIST in this source collection and is NOT USED.
+//
+// ---------------------------------------------------------------------------
+//
+// CLASS 5 — BARREN / FALLOW
+//
+// REJECT:
+// 61
+//
+// PARTIAL:
+// 62
+//
+// ACCEPT:
+// 63,64,65
+//
+// ============================================================================
+
+
+// ============================================================================
+// 5. FINAL SOURCE-ID LISTS
+// ============================================================================
+
+var BUILT_ACCEPT =
+  [1, 3, 4, 5, 6, 7, 8, 9, 12];
+
+var BUILT_PARTIAL =
+  [11];
+
+
+var VEG_ACCEPT =
+  [16, 17, 25, 26];
+
+
+var WATER_ACCEPT =
+  [31, 32, 35, 38, 39, 201];
+
+
+var AGRI_ACCEPT_MACRO_A =
+  [47, 51, 52, 53, 55, 56, 60];
+
+var AGRI_ACCEPT_OTHER =
+  [46, 48, 57, 59, 202];
+
+
+var BARREN_ACCEPT =
+  [63, 64, 65];
+
+var BARREN_PARTIAL =
+  [62];
+
+var BARREN_REJECT =
+  [61];
+
+
+// ============================================================================
+// 6. HELPER — SELECT SOURCE GROUPS
+// ============================================================================
+
+function selectGroups(
+  classId,
+  className,
+  polyIds,
+  reviewStatus,
+  macroSite
+) {
+
+  return transfer05A
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    )
+
+    .filter(
+      ee.Filter.inList(
+        'poly_id',
+        polyIds
+      )
+    )
+
+    .map(
+      function(feature) {
+
+        return feature.set({
+
+          class_id:
+            classId,
+
+          class_name:
+            className,
+
+          manual_review_status:
+            reviewStatus,
+
+          macro_site:
+            macroSite,
+
+          review_stage:
+            '06B_manual_training_review_V2_FINAL'
+
+        });
+
+      }
+    );
+
+}
+
+
+// ============================================================================
+// 7. ACCEPTED SOURCE COLLECTION
+// ============================================================================
+
+var builtAccepted =
+  selectGroups(
+    1,
+    'Built-up',
+    BUILT_ACCEPT,
+    'ACCEPT',
+    'NA'
+  );
+
+
+var vegAccepted =
+  selectGroups(
+    2,
+    'Vegetation',
+    VEG_ACCEPT,
+    'ACCEPT',
+    'NA'
+  );
+
+
+var waterAccepted =
+  selectGroups(
+    3,
+    'Water',
+    WATER_ACCEPT,
+    'ACCEPT',
+    'NA'
+  );
+
+
+var agriMacroAccepted =
+  selectGroups(
+    4,
+    'Agricultural/Open',
+    AGRI_ACCEPT_MACRO_A,
+    'ACCEPT',
+    'AGRI_MACRO_A'
+  );
+
+
+var agriOtherAccepted =
+  selectGroups(
+    4,
+    'Agricultural/Open',
+    AGRI_ACCEPT_OTHER,
+    'ACCEPT',
+    'INDEPENDENT_AGRI_SOURCE'
+  );
+
+
+var barrenAccepted =
+  selectGroups(
+    5,
+    'Barren/Fallow',
+    BARREN_ACCEPT,
+    'ACCEPT',
+    'NA'
+  );
+
+
+var acceptedSource =
+  builtAccepted
+    .merge(vegAccepted)
+    .merge(waterAccepted)
+    .merge(agriMacroAccepted)
+    .merge(agriOtherAccepted)
+    .merge(barrenAccepted);
+
+
+// ============================================================================
+// 8. PARTIAL SOURCE COLLECTION
+// ============================================================================
+//
+// IMPORTANT:
+// PARTIAL points are NOT part of the accepted training pool yet.
+//
+// ============================================================================
+
+var builtPartial =
+  selectGroups(
+    1,
+    'Built-up',
+    BUILT_PARTIAL,
+    'PARTIAL',
+    'NA'
+  );
+
+
+var barrenPartial =
+  selectGroups(
+    5,
+    'Barren/Fallow',
+    BARREN_PARTIAL,
+    'PARTIAL',
+    'NA'
+  );
+
+
+var partialSource =
+  builtPartial
+    .merge(barrenPartial);
+
+
+// ============================================================================
+// 9. REJECTED SOURCE COLLECTION
+// ============================================================================
+
+var rejectedSource =
+  selectGroups(
+    5,
+    'Barren/Fallow',
+    BARREN_REJECT,
+    'REJECT',
+    'NA'
+  );
+
+
+// ============================================================================
+// 10. ORIGINAL SOURCE QA
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06C2 — ORIGINAL SOURCE QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'Original 05A total'
+);
+
+print(
+  transfer05A.size()
+);
+
+
+print(
+  'Original 05A class histogram'
+);
+
+print(
+  transfer05A.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+[1, 2, 3, 4, 5].forEach(
+  function(classId) {
+
+    var classFC =
+      transfer05A.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        source_n:
+          classFC.size(),
+
+        poly_id_histogram:
+          classFC.aggregate_histogram(
+            'poly_id'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ============================================================================
+// 11. MANUAL REVIEW ACCOUNTING
+// ============================================================================
+
+var originalTotal =
+  transfer05A.size();
+
+var acceptedSourceN =
+  acceptedSource.size();
+
+var partialSourceN =
+  partialSource.size();
+
+var rejectedSourceN =
+  rejectedSource.size();
+
+var accountedTotal =
+  acceptedSourceN
+    .add(
+      partialSourceN
+    )
+    .add(
+      rejectedSourceN
+    );
+
+var unaccountedN =
+  originalTotal.subtract(
+    accountedTotal
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06C2 — FINAL MANUAL REVIEW ACCOUNTING'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    original_total:
+      originalTotal,
+
+    expected_original_total:
+      600,
+
+    accepted_source_rows:
+      acceptedSourceN,
+
+    expected_accepted_source_rows:
+      533,
+
+    partial_source_rows:
+      partialSourceN,
+
+    expected_partial_source_rows:
+      58,
+
+    rejected_source_rows:
+      rejectedSourceN,
+
+    expected_rejected_source_rows:
+      9,
+
+    accounted_total:
+      accountedTotal,
+
+    unaccounted_rows:
+      unaccountedN,
+
+    accounting_complete:
+      accountedTotal.eq(
+        originalTotal
+      )
+
+  })
+);
+
+
+print(
+  'Accepted source class histogram'
+);
+
+print(
+  acceptedSource.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+print(
+  'Partial source class histogram'
+);
+
+print(
+  partialSource.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+print(
+  'Rejected source class histogram'
+);
+
+print(
+  rejectedSource.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ============================================================================
+// 12. MANUAL STATUS BY CLASS
+// ============================================================================
+
+[1, 2, 3, 4, 5].forEach(
+  function(classId) {
+
+    var accepted =
+      acceptedSource.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    var partial =
+      partialSource.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    var rejected =
+      rejectedSource.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        accepted_source_rows:
+          accepted.size(),
+
+        partial_source_rows:
+          partial.size(),
+
+        rejected_source_rows:
+          rejected.size(),
+
+        total_accounted:
+          accepted
+            .size()
+            .add(
+              partial.size()
+            )
+            .add(
+              rejected.size()
+            ),
+
+        accepted_poly_histogram:
+          accepted.aggregate_histogram(
+            'poly_id'
+          ),
+
+        partial_poly_histogram:
+          partial.aggregate_histogram(
+            'poly_id'
+          ),
+
+        rejected_poly_histogram:
+          rejected.aggregate_histogram(
+            'poly_id'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ============================================================================
+// 13. AUTHORITATIVE PIXEL COORDINATES
+// ============================================================================
+
+var pixelCoordinates =
+  ee.Image
+    .pixelCoordinates(
+      projection2010
+    )
+    .rename([
+      'pixel_x',
+      'pixel_y'
+    ])
+    .toInt64();
+
+
+// ============================================================================
+// 14. SAMPLING IMAGE
+// ============================================================================
+//
+// The authoritative predictor stack is the ONLY source of predictor values.
+//
+// ============================================================================
+
+var samplingImage =
+  stack2010
+
+    .select(
+      predictors.concat([
+        'clear_count'
+      ])
+    )
+
+    .addBands(
+      pixelCoordinates
+    );
+
+
+// ============================================================================
+// 15. HELPER — SAMPLE REVIEWED POINTS
+// ============================================================================
+
+function sampleReviewedSources(sourceFC) {
+
+  var sampled =
+    samplingImage.sampleRegions({
+
+      collection:
+        sourceFC,
+
+      properties: [
+
+        'class_id',
+        'class_name',
+        'poly_id',
+
+        'transfer_status',
+
+        'manual_review_status',
+
+        'macro_site',
+
+        'review_stage'
+
+      ],
+
+      scale:
+        30,
+
+      projection:
+        projection2010,
+
+      geometries:
+        true,
+
+      tileScale:
+        4
+
+    });
+
+
+  return sampled.map(
+    function(feature) {
+
+      var x =
+        ee.Number(
+          feature.get(
+            'pixel_x'
+          )
+        )
+        .format(
+          '%.0f'
+        );
+
+
+      var y =
+        ee.Number(
+          feature.get(
+            'pixel_y'
+          )
+        )
+        .format(
+          '%.0f'
+        );
+
+
+      var pixelKey =
+        ee.String(x)
+          .cat('_')
+          .cat(y);
+
+
+      return feature.set({
+
+        auth_pixel_key:
+          pixelKey,
+
+        candidate_source:
+          '06C2_manual_review_V2'
+
+      });
+
+    }
+  );
+
+}
+
+
+// ============================================================================
+// 16. RESAMPLE ACCEPTED / PARTIAL / REJECTED
+// ============================================================================
+
+var acceptedSampledRaw =
+  sampleReviewedSources(
+    acceptedSource
+  );
+
+
+var partialSampledRaw =
+  sampleReviewedSources(
+    partialSource
+  );
+
+
+var rejectedSampledRaw =
+  sampleReviewedSources(
+    rejectedSource
+  );
+
+
+// ============================================================================
+// 17. CLEAR-COUNT SUPPORT
+// ============================================================================
+//
+// Locked minimum = 2 valid observations.
+//
+// ============================================================================
+
+var acceptedLowClear =
+  acceptedSampledRaw.filter(
+    ee.Filter.lt(
+      'clear_count',
+      2
+    )
+  );
+
+
+var acceptedEligible =
+  acceptedSampledRaw.filter(
+    ee.Filter.gte(
+      'clear_count',
+      2
+    )
+  );
+
+
+var partialLowClear =
+  partialSampledRaw.filter(
+    ee.Filter.lt(
+      'clear_count',
+      2
+    )
+  );
+
+
+var partialEligible =
+  partialSampledRaw.filter(
+    ee.Filter.gte(
+      'clear_count',
+      2
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06C2 — AUTHORITATIVE STACK RESAMPLING QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    accepted_source_rows:
+      acceptedSource.size(),
+
+    accepted_sampled_rows:
+      acceptedSampledRaw.size(),
+
+    accepted_missing_or_masked_rows:
+      acceptedSource
+        .size()
+        .subtract(
+          acceptedSampledRaw.size()
+        ),
+
+    accepted_clear_lt_2:
+      acceptedLowClear.size(),
+
+    accepted_clear_ge_2:
+      acceptedEligible.size(),
+
+    partial_source_rows:
+      partialSource.size(),
+
+    partial_sampled_rows:
+      partialSampledRaw.size(),
+
+    partial_missing_or_masked_rows:
+      partialSource
+        .size()
+        .subtract(
+          partialSampledRaw.size()
+        ),
+
+    partial_clear_lt_2:
+      partialLowClear.size(),
+
+    partial_clear_ge_2:
+      partialEligible.size()
+
+  })
+);
+
+
+// ============================================================================
+// 18. DEDUPLICATE ACCEPTED PIXELS
+// ============================================================================
+
+var acceptedUniqueClassPixel =
+  acceptedEligible.distinct([
+    'auth_pixel_key',
+    'class_id'
+  ]);
+
+
+var duplicateAcceptedRows =
+  acceptedEligible
+    .size()
+    .subtract(
+      acceptedUniqueClassPixel.size()
+    );
+
+
+// ============================================================================
+// 19. CROSS-CLASS CONFLICT CHECK
+// ============================================================================
+
+var uniqueAcceptedSpatialPixels =
+  acceptedEligible.distinct([
+    'auth_pixel_key'
+  ]);
+
+
+var pixelJoin =
+  ee.Join.saveAll(
+    'pixel_matches'
+  );
+
+
+var pixelJoinCondition =
+  ee.Filter.equals({
+
+    leftField:
+      'auth_pixel_key',
+
+    rightField:
+      'auth_pixel_key'
+
+  });
+
+
+var joinedPixels =
+  ee.FeatureCollection(
+
+    pixelJoin.apply(
+
+      uniqueAcceptedSpatialPixels,
+
+      acceptedEligible,
+
+      pixelJoinCondition
+
+    )
+
+  );
+
+
+var pixelConflictQA =
+  joinedPixels.map(
+    function(feature) {
+
+      var matches =
+        ee.FeatureCollection(
+          ee.List(
+            feature.get(
+              'pixel_matches'
+            )
+          )
+        );
+
+
+      var classes =
+        ee.List(
+          matches.aggregate_array(
+            'class_id'
+          )
+        )
+        .distinct()
+        .sort();
+
+
+      return ee.Feature(
+        null,
+        {
+
+          auth_pixel_key:
+            feature.get(
+              'auth_pixel_key'
+            ),
+
+          row_n:
+            matches.size(),
+
+          distinct_class_n:
+            classes.size(),
+
+          classes:
+            classes
+
+        }
+      );
+
+    }
+  );
+
+
+var crossClassConflictPixels =
+  pixelConflictQA.filter(
+    ee.Filter.gt(
+      'distinct_class_n',
+      1
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06C2 — DUPLICATE / CONFLICT QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    accepted_eligible_rows:
+      acceptedEligible.size(),
+
+    accepted_unique_class_pixels:
+      acceptedUniqueClassPixel.size(),
+
+    duplicate_same_class_rows_removed:
+      duplicateAcceptedRows,
+
+    unique_spatial_pixels:
+      uniqueAcceptedSpatialPixels.size(),
+
+    cross_class_conflict_pixel_n:
+      crossClassConflictPixels.size()
+
+  })
+);
+
+
+print(
+  'Cross-class conflict pixels — EXPECT 0'
+);
+
+print(
+  crossClassConflictPixels
+);
+
+
+// ============================================================================
+// 20. FINAL CLEAN ACCEPTED CANDIDATE POOL
+// ============================================================================
+//
+// PARTIAL groups are NOT included.
+//
+// ============================================================================
+
+var acceptedCandidatePool =
+  acceptedUniqueClassPixel;
+
+
+// ============================================================================
+// 21. CLEAN ACCEPTED CLASS COUNTS
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06C2 — CLEAN ACCEPTED V2 CANDIDATE POOL'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'Accepted candidate total'
+);
+
+print(
+  acceptedCandidatePool.size()
+);
+
+
+print(
+  'Accepted candidate class histogram'
+);
+
+print(
+  acceptedCandidatePool.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ============================================================================
+// 22. CLASS-WISE CLEAN ACCEPTED QA
+// ============================================================================
+
+var classNameJS = {
+  1: 'Built-up',
+  2: 'Vegetation',
+  3: 'Water',
+  4: 'Agricultural/Open',
+  5: 'Barren/Fallow'
+};
+
+
+[1, 2, 3, 4, 5].forEach(
+  function(classId) {
+
+    var classFC =
+      acceptedCandidatePool.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          classNameJS[classId],
+
+        accepted_unique_pixel_n:
+          classFC.size(),
+
+        distinct_poly_id_n:
+          ee.List(
+            classFC.aggregate_array(
+              'poly_id'
+            )
+          )
+          .distinct()
+          .size(),
+
+        accepted_poly_id_histogram:
+          classFC.aggregate_histogram(
+            'poly_id'
+          ),
+
+        mean_clear_count:
+          classFC.aggregate_mean(
+            'clear_count'
+          ),
+
+        min_clear_count:
+          classFC.aggregate_min(
+            'clear_count'
+          ),
+
+        max_clear_count:
+          classFC.aggregate_max(
+            'clear_count'
+          ),
+
+        transfer_status_histogram:
+          classFC.aggregate_histogram(
+            'transfer_status'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ============================================================================
+// 23. VEGETATION 26 CHECK
+// ============================================================================
+
+var veg26 =
+  acceptedCandidatePool
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        2
+      )
+    )
+
+    .filter(
+      ee.Filter.eq(
+        'poly_id',
+        26
+      )
+    );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06C2 — VEGETATION POLY 26 CHECK'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    poly_id:
+      26,
+
+    source_rows:
+      vegAccepted
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            26
+          )
+        )
+        .size(),
+
+    accepted_clear_ge_2_unique_pixels:
+      veg26.size(),
+
+    mean_clear_count:
+      veg26.aggregate_mean(
+        'clear_count'
+      ),
+
+    transfer_status_histogram:
+      veg26.aggregate_histogram(
+        'transfer_status'
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 24. AGRI POLY 48 CHECK
+// ============================================================================
+
+var agri48 =
+  acceptedCandidatePool
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        4
+      )
+    )
+
+    .filter(
+      ee.Filter.eq(
+        'poly_id',
+        48
+      )
+    );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06C2 — AGRICULTURAL/OPEN POLY 48 CHECK'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    poly_id:
+      48,
+
+    source_rows:
+      agriOtherAccepted
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            48
+          )
+        )
+        .size(),
+
+    accepted_clear_ge_2_unique_pixels:
+      agri48.size(),
+
+    mean_clear_count:
+      agri48.aggregate_mean(
+        'clear_count'
+      ),
+
+    transfer_status_histogram:
+      agri48.aggregate_histogram(
+        'transfer_status'
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 25. AGRICULTURAL / OPEN MACRO-SITE QA
+// ============================================================================
+
+var agriAcceptedCandidates =
+  acceptedCandidatePool.filter(
+    ee.Filter.eq(
+      'class_id',
+      4
+    )
+  );
+
+
+var agriMacroCandidates =
+  agriAcceptedCandidates.filter(
+    ee.Filter.eq(
+      'macro_site',
+      'AGRI_MACRO_A'
+    )
+  );
+
+
+var agriIndependentCandidates =
+  agriAcceptedCandidates.filter(
+    ee.Filter.eq(
+      'macro_site',
+      'INDEPENDENT_AGRI_SOURCE'
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06C2 — AGRICULTURAL/OPEN MACRO-SITE QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    total_agri_accepted_unique_pixels:
+      agriAcceptedCandidates.size(),
+
+    macro_site_A_unique_pixels:
+      agriMacroCandidates.size(),
+
+    independent_agri_unique_pixels:
+      agriIndependentCandidates.size(),
+
+    macro_site_A_poly_histogram:
+      agriMacroCandidates.aggregate_histogram(
+        'poly_id'
+      ),
+
+    independent_agri_poly_histogram:
+      agriIndependentCandidates.aggregate_histogram(
+        'poly_id'
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 26. PARTIAL BUILT-UP 11
+// ============================================================================
+
+var partialBuilt11 =
+  partialEligible
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        1
+      )
+    )
+
+    .filter(
+      ee.Filter.eq(
+        'poly_id',
+        11
+      )
+    )
+
+    .distinct([
+      'auth_pixel_key',
+      'class_id'
+    ]);
+
+
+// ============================================================================
+// 27. PARTIAL BARREN 62
+// ============================================================================
+
+var partialBarren62 =
+  partialEligible
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        5
+      )
+    )
+
+    .filter(
+      ee.Filter.eq(
+        'poly_id',
+        62
+      )
+    )
+
+    .distinct([
+      'auth_pixel_key',
+      'class_id'
+    ]);
+
+
+// ============================================================================
+// 28. PARTIAL GROUP QA
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06C2 — PARTIAL GROUP QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    class_id:
+      1,
+
+    class_name:
+      'Built-up',
+
+    poly_id:
+      11,
+
+    source_rows:
+      builtPartial.size(),
+
+    sampled_rows:
+      partialSampledRaw
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            1
+          )
+        )
+        .size(),
+
+    clear_ge_2_unique_pixels:
+      partialBuilt11.size(),
+
+    transfer_status_histogram:
+      partialBuilt11.aggregate_histogram(
+        'transfer_status'
+      )
+
+  })
+);
+
+
+print(
+  ee.Dictionary({
+
+    class_id:
+      5,
+
+    class_name:
+      'Barren/Fallow',
+
+    poly_id:
+      62,
+
+    source_rows:
+      barrenPartial.size(),
+
+    sampled_rows:
+      partialSampledRaw
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            5
+          )
+        )
+        .size(),
+
+    clear_ge_2_unique_pixels:
+      partialBarren62.size(),
+
+    transfer_status_histogram:
+      partialBarren62.aggregate_histogram(
+        'transfer_status'
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 29. TRAINING FEASIBILITY
+// ============================================================================
+
+var TARGET_PER_CLASS =
+  120;
+
+
+var classIds =
+  ee.List([
+    1,
+    2,
+    3,
+    4,
+    5
+  ]);
+
+
+var classNames =
+  ee.Dictionary({
+
+    '1':
+      'Built-up',
+
+    '2':
+      'Vegetation',
+
+    '3':
+      'Water',
+
+    '4':
+      'Agricultural/Open',
+
+    '5':
+      'Barren/Fallow'
+
+  });
+
+
+var feasibility =
+  ee.FeatureCollection(
+
+    classIds.map(
+      function(classId) {
+
+        classId =
+          ee.Number(
+            classId
+          );
+
+
+        var acceptedN =
+          acceptedCandidatePool
+
+            .filter(
+              ee.Filter.eq(
+                'class_id',
+                classId
+              )
+            )
+
+            .size();
+
+
+        var partialN =
+          partialEligible
+
+            .filter(
+              ee.Filter.eq(
+                'class_id',
+                classId
+              )
+            )
+
+            .distinct([
+              'auth_pixel_key',
+              'class_id'
+            ])
+
+            .size();
+
+
+        var deficitAcceptedOnly =
+          ee.Number(
+            TARGET_PER_CLASS
+          )
+          .subtract(
+            acceptedN
+          )
+          .max(
+            0
+          );
+
+
+        var theoreticalWithPartial =
+          ee.Number(
+            acceptedN
+          )
+          .add(
+            partialN
+          );
+
+
+        var residualDeficit =
+          ee.Number(
+            TARGET_PER_CLASS
+          )
+          .subtract(
+            theoreticalWithPartial
+          )
+          .max(
+            0
+          );
+
+
+        return ee.Feature(
+          null,
+          {
+
+            class_id:
+              classId,
+
+            class_name:
+              classNames.get(
+                classId.format()
+              ),
+
+            target_n:
+              TARGET_PER_CLASS,
+
+            accepted_clean_unique_n:
+              acceptedN,
+
+            deficit_using_accepted_only:
+              deficitAcceptedOnly,
+
+            partial_available_unique_n:
+              partialN,
+
+            theoretical_max_with_all_partial:
+              theoreticalWithPartial,
+
+            residual_deficit_if_all_partial_used:
+              residualDeficit
+
+          }
+        );
+
+      }
+    )
+
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06C2 — FINAL TRAINING FEASIBILITY'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  feasibility
+);
+
+
+// ============================================================================
+// 30. REJECTED BARREN 61 PROVENANCE
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06C2 — REJECTED SOURCE QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    class_id:
+      5,
+
+    poly_id:
+      61,
+
+    source_rows:
+      rejectedSource.size(),
+
+    sampled_rows:
+      rejectedSampledRaw.size(),
+
+    decision:
+      'REJECT',
+
+    included_in_training_pool:
+      0
+
+  })
+);
+
+
+// ============================================================================
+// 31. MAP SETUP
+// ============================================================================
+
+Map.layers().reset();
+
+Map.setOptions(
+  'SATELLITE'
+);
+
+
+// ============================================================================
+// 32. TRUE COLOUR
+// ============================================================================
+
+Map.addLayer(
+
+  stack2010.select([
+    'red',
+    'green',
+    'blue'
+  ]),
+
+  {
+
+    min:
+      0.02,
+
+    max:
+      0.30
+
+  },
+
+  '2010 TRUE COLOUR',
+
+  true
+
+);
+
+
+// ============================================================================
+// 33. ACCEPTED CLASS LAYERS
+// ============================================================================
+
+Map.addLayer(
+
+  acceptedCandidatePool
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        1
+      )
+    )
+    .style({
+      color:
+        'ff0000',
+      pointSize:
+        5,
+      width:
+        1
+    }),
+
+  {},
+
+  'ACCEPTED — Built-up',
+
+  false
+
+);
+
+
+Map.addLayer(
+
+  acceptedCandidatePool
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        2
+      )
+    )
+    .style({
+      color:
+        '00ff00',
+      pointSize:
+        5,
+      width:
+        1
+    }),
+
+  {},
+
+  'ACCEPTED — Vegetation',
+
+  false
+
+);
+
+
+Map.addLayer(
+
+  acceptedCandidatePool
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        3
+      )
+    )
+    .style({
+      color:
+        '00ffff',
+      pointSize:
+        5,
+      width:
+        1
+    }),
+
+  {},
+
+  'ACCEPTED — Water',
+
+  false
+
+);
+
+
+Map.addLayer(
+
+  acceptedCandidatePool
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        4
+      )
+    )
+    .style({
+      color:
+        'ffff00',
+      pointSize:
+        5,
+      width:
+        1
+    }),
+
+  {},
+
+  'ACCEPTED — Agricultural/Open',
+
+  false
+
+);
+
+
+Map.addLayer(
+
+  acceptedCandidatePool
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        5
+      )
+    )
+    .style({
+      color:
+        'ff00ff',
+      pointSize:
+        5,
+      width:
+        1
+    }),
+
+  {},
+
+  'ACCEPTED — Barren/Fallow',
+
+  false
+
+);
+
+
+// ============================================================================
+// 34. PARTIAL GROUPS
+// ============================================================================
+
+Map.addLayer(
+
+  partialBuilt11.style({
+
+    color:
+      'ff8800',
+
+    pointSize:
+      8,
+
+    width:
+      2
+
+  }),
+
+  {},
+
+  'PARTIAL — Built-up 11',
+
+  false
+
+);
+
+
+Map.addLayer(
+
+  partialBarren62.style({
+
+    color:
+      'aa00ff',
+
+    pointSize:
+      8,
+
+    width:
+      2
+
+  }),
+
+  {},
+
+  'PARTIAL — Barren 62',
+
+  false
+
+);
+
+
+// ============================================================================
+// 35. REJECTED BARREN 61
+// ============================================================================
+
+Map.addLayer(
+
+  rejectedSampledRaw.style({
+
+    color:
+      'ffffff',
+
+    pointSize:
+      7,
+
+    width:
+      2
+
+  }),
+
+  {},
+
+  'REJECTED — Barren 61',
+
+  false
+
+);
+
+
+// ============================================================================
+// 36. ROI
+// ============================================================================
+
+Map.addLayer(
+
+  roi.style({
+
+    color:
+      'ffffff',
+
+    fillColor:
+      '00000000',
+
+    width:
+      2
+
+  }),
+
+  {},
+
+  'Chennai ROI',
+
+  true
+
+);
+
+
+Map.centerObject(
+  roi,
+  10
+);
+
+
+// ============================================================================
+// 37. FINAL SUMMARY
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06C2 — FINAL QA SUMMARY'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    original_rows:
+      originalTotal,
+
+    accounted_rows:
+      accountedTotal,
+
+    unaccounted_rows:
+      unaccountedN,
+
+    accepted_source_rows:
+      acceptedSourceN,
+
+    partial_source_rows:
+      partialSourceN,
+
+    rejected_source_rows:
+      rejectedSourceN,
+
+    accepted_clean_unique_pixels:
+      acceptedCandidatePool.size(),
+
+    built_partial_11_available:
+      partialBuilt11.size(),
+
+    barren_partial_62_available:
+      partialBarren62.size(),
+
+    cross_class_conflict_pixels:
+      crossClassConflictPixels.size(),
+
+    target_per_class:
+      TARGET_PER_CLASS,
+
+    export_created:
+      'NO'
+
+  })
+);
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06C2 COMPLETE — QA ONLY'
+);
+
+print(
+  'NO EXPORT TASK CREATED.'
+);
+
+print(
+  'DO NOT BALANCE TO 120/CLASS YET.'
+);
+
+print(
+  'DO NOT AUTOMATICALLY INCLUDE PARTIAL 11 OR 62.'
+);
+
+print(
+  'DO NOT USE VALIDATION DATA.'
+);
+
+print(
+  'DO NOT RUN AGAIN AFTER SUCCESSFUL COMPLETION.'
+);
+
+print(
+  'Send back these sections:'
+);
+
+print(
+  '1. FINAL MANUAL REVIEW ACCOUNTING'
+);
+
+print(
+  '2. AUTHORITATIVE STACK RESAMPLING QA'
+);
+
+print(
+  '3. DUPLICATE / CONFLICT QA'
+);
+
+print(
+  '4. CLEAN ACCEPTED V2 CANDIDATE POOL'
+);
+
+print(
+  '5. CLASS-WISE CLEAN ACCEPTED QA'
+);
+
+print(
+  '6. VEGETATION POLY 26 CHECK'
+);
+
+print(
+  '7. AGRICULTURAL/OPEN POLY 48 CHECK'
+);
+
+print(
+  '8. AGRICULTURAL/OPEN MACRO-SITE QA'
+);
+
+print(
+  '9. PARTIAL GROUP QA'
+);
+
+print(
+  '10. FINAL TRAINING FEASIBILITY'
+);
+
+print(
+  '11. FINAL QA SUMMARY'
+);
+
+print(
+  '========================================'
+);

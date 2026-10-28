@@ -1,0 +1,485 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05E2D
+//
+// FINALIZE / PROMOTE 2010 INDEPENDENT VALIDATION
+//
+// INPUT:
+// chennai_2010_validation_candidate_05E2C
+//
+// PURPOSE:
+// Final lightweight verification of the MATERIALIZED
+// 300-point independent validation candidate.
+//
+// If all checks pass, export unchanged as:
+//
+// chennai_validation_2010_final
+//
+// NO candidate generation.
+// NO random selection.
+// NO classifier.
+// NO validation tuning.
+// NO map layers.
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSETS
+// ================================================================
+
+var VALIDATION_CANDIDATE_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_validation_candidate_05E2C';
+
+
+var TRAINING_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final';
+
+
+var OUTPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_validation_2010_final';
+
+
+// ================================================================
+// 2. EXPECTATIONS
+// ================================================================
+
+var EXPECTED_TOTAL =
+  300;
+
+
+var EXPECTED_PER_CLASS =
+  60;
+
+
+var EXPECTED_AUTO =
+  66;
+
+
+var EXPECTED_MANUAL =
+  234;
+
+
+var CLASS_IDS =
+  [1, 2, 3, 4, 5];
+
+
+var CLASS_NAMES = [
+
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+
+];
+
+
+var PREDICTORS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+// ================================================================
+// 3. LOAD MATERIALIZED DATA
+// ================================================================
+
+var validationCandidate =
+  ee.FeatureCollection(
+    VALIDATION_CANDIDATE_ASSET
+  );
+
+
+var training2010 =
+  ee.FeatureCollection(
+    TRAINING_ASSET
+  );
+
+
+// ================================================================
+// 4. BASIC VALIDATION QA
+// ================================================================
+
+var totalN =
+  validationCandidate.size();
+
+
+var predictorCompleteN =
+  validationCandidate
+    .filter(
+      ee.Filter.notNull(
+        PREDICTORS
+      )
+    )
+    .size();
+
+
+var uniqueKeys =
+  ee.List(
+    validationCandidate.aggregate_array(
+      'auth_pixel_key'
+    )
+  )
+  .distinct();
+
+
+var uniqueKeyN =
+  uniqueKeys.size();
+
+
+var duplicateN =
+  totalN.subtract(
+    uniqueKeyN
+  );
+
+
+var keyMismatchN =
+  validationCandidate
+    .filter(
+      ee.Filter.eq(
+        'pixel_key_match',
+        0
+      )
+    )
+    .size();
+
+
+// ================================================================
+// 5. VALID CLASS-ID CHECK
+// ================================================================
+
+var validClassN =
+  validationCandidate
+    .filter(
+      ee.Filter.inList(
+        'class_id',
+        CLASS_IDS
+      )
+    )
+    .size();
+
+
+var invalidClassN =
+  totalN.subtract(
+    validClassN
+  );
+
+
+// ================================================================
+// 6. RECHECK 30 m TRAINING EXCLUSION GEOMETRICALLY
+// ================================================================
+
+var trainingBuffers =
+  training2010.map(
+    function(feature) {
+
+      return ee.Feature(
+        feature
+          .geometry()
+          .buffer(
+            30
+          )
+      );
+
+    }
+  );
+
+
+var trainingExclusionGeometry =
+  trainingBuffers.geometry();
+
+
+var validationWithOverlapCheck =
+  validationCandidate.map(
+    function(feature) {
+
+      var overlap =
+        ee.Number(
+          ee.Algorithms.If(
+
+            trainingExclusionGeometry.intersects(
+              feature.geometry(),
+              1
+            ),
+
+            1,
+
+            0
+
+          )
+        );
+
+
+      return feature.set(
+        'final_30m_overlap_recheck',
+        overlap
+      );
+
+    }
+  );
+
+
+var overlapN =
+  validationWithOverlapCheck
+    .filter(
+      ee.Filter.eq(
+        'final_30m_overlap_recheck',
+        1
+      )
+    )
+    .size();
+
+
+// ================================================================
+// 7. SOURCE COUNTS
+// ================================================================
+
+var automaticN =
+  validationCandidate
+    .filter(
+      ee.Filter.eq(
+        'validation_source',
+        '05E1_automatic_transfer'
+      )
+    )
+    .size();
+
+
+var manualN =
+  totalN.subtract(
+    automaticN
+  );
+
+
+// ================================================================
+// 8. FINAL OVERALL QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05E2D — FINAL 2010 VALIDATION QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    total_n:
+      totalN,
+
+    expected_total:
+      EXPECTED_TOTAL,
+
+    predictor_complete_n:
+      predictorCompleteN,
+
+    distinct_pixel_key_n:
+      uniqueKeyN,
+
+    duplicate_pixel_n:
+      duplicateN,
+
+    pixel_key_mismatch_n:
+      keyMismatchN,
+
+    valid_class_n:
+      validClassN,
+
+    invalid_class_n:
+      invalidClassN,
+
+    training_overlap_30m_n:
+      overlapN,
+
+    minimum_clear_count:
+      validationCandidate.aggregate_min(
+        'clear_count'
+      ),
+
+    maximum_clear_count:
+      validationCandidate.aggregate_max(
+        'clear_count'
+      ),
+
+    automatic_validation_n:
+      automaticN,
+
+    expected_automatic_n:
+      EXPECTED_AUTO,
+
+    manual_validation_n:
+      manualN,
+
+    expected_manual_n:
+      EXPECTED_MANUAL
+
+  })
+);
+
+
+// ================================================================
+// 9. FINAL CLASS HISTOGRAM
+// ================================================================
+
+print(
+  'FINAL VALIDATION CLASS HISTOGRAM'
+);
+
+
+print(
+  validationCandidate.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ================================================================
+// 10. FINAL SOURCE HISTOGRAM
+// ================================================================
+
+print(
+  'FINAL VALIDATION SOURCE HISTOGRAM'
+);
+
+
+print(
+  validationCandidate.aggregate_histogram(
+    'validation_source'
+  )
+);
+
+
+// ================================================================
+// 11. CLASS-WISE FINAL QA
+// ================================================================
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var fc =
+      validationCandidate.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        final_n:
+          fc.size(),
+
+        expected_n:
+          EXPECTED_PER_CLASS,
+
+        validation_source_histogram:
+          fc.aggregate_histogram(
+            'validation_source'
+          ),
+
+        poly_id_histogram:
+          fc.aggregate_histogram(
+            'poly_id'
+          ),
+
+        mean_clear_count:
+          fc.aggregate_mean(
+            'clear_count'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 12. FINAL EXPORT
+// ================================================================
+//
+// REVIEW CONSOLE FIRST.
+//
+// Required:
+//
+// total_n = 300
+// predictor_complete_n = 300
+// distinct_pixel_key_n = 300
+// duplicate_pixel_n = 0
+// pixel_key_mismatch_n = 0
+// invalid_class_n = 0
+// training_overlap_30m_n = 0
+//
+// Class histogram:
+// 1 = 60
+// 2 = 60
+// 3 = 60
+// 4 = 60
+// 5 = 60
+//
+// ================================================================
+
+Export.table.toAsset({
+
+  collection:
+    validationWithOverlapCheck,
+
+  description:
+    'chennai_validation_2010_final',
+
+  assetId:
+    OUTPUT_ASSET
+
+});
+
+
+// ================================================================
+// 13. FINAL MESSAGE
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05E2D SCRIPT FINISHED'
+);
+
+print(
+  'DO NOT RUN AGAIN.'
+);
+
+print(
+  'Review QA before starting final validation export.'
+);
+
+print(
+  '========================================'
+);

@@ -1,0 +1,455 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var barrenAdd2010 = /* color: #d63000 */ee.Geometry.MultiPolygon(
+        [[[[80.09569267074758, 12.945813188014284],
+           [80.09726980964834, 12.945525644149265],
+           [80.09750584404165, 12.946916307764518],
+           [80.09572485725576, 12.947345007013539]]],
+         [[[80.07175366774163, 12.934504624258938],
+           [80.07218282118401, 12.931723150837758],
+           [80.07419984236321, 12.931911371821826],
+           [80.07516543760858, 12.934379144922861]]],
+         [[[80.27042243195926, 13.133568618438408],
+           [80.26807281686222, 13.134864192067507],
+           [80.26663515283023, 13.133234275747068],
+           [80.26918861581241, 13.13177152112039]]],
+         [[[80.27688708866364, 13.139527789019015],
+           [80.27421560848481, 13.140311383896911],
+           [80.27411904896027, 13.13732326201053],
+           [80.276050239451, 13.136696378677195]]],
+         [[[80.31640532719156, 13.19449951027295],
+           [80.3179985593464, 13.19425926127229],
+           [80.31835261093637, 13.195382162182337],
+           [80.31686666714212, 13.19566941507472]]],
+         [[[80.28358436588289, 13.13054427800792],
+           [80.28516150478364, 13.130194258681536],
+           [80.28544581893922, 13.131301780812425],
+           [80.28458214763643, 13.131510746692182],
+           [80.28446413043977, 13.131056245676515],
+           [80.28370774749757, 13.130706227079713]]]]);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05C4C
+//
+// MANUAL BARREN/FALLOW VISUAL REVIEW
+//
+// PURPOSE:
+// Show the six manually drawn polygons separately so we can use
+// polygon 304 as the reference for finding additional clean
+// Barren/Fallow locations.
+//
+// NO PROCESSING
+// NO SAMPLING
+// NO EXPORT
+// ================================================================
+
+
+// ================================================================
+// 1. REQUIRED IMPORT
+// ================================================================
+
+barrenAdd2010;
+
+
+// ================================================================
+// 2. ASSETS
+// ================================================================
+
+var ROI_ASSET =
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean';
+
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var PASSB_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+
+var RESCUED_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_rescued_uncertain_05C2A';
+
+
+var EXPANSION_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_targeted_expansion_05C3A';
+
+
+// ================================================================
+// 3. LOAD
+// ================================================================
+
+var roiFC =
+  ee.FeatureCollection(
+    ROI_ASSET
+  );
+
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  );
+
+
+var currentCandidates =
+  ee.FeatureCollection(
+    PASSB_ASSET
+  )
+
+  .merge(
+    ee.FeatureCollection(
+      RESCUED_ASSET
+    )
+  )
+
+  .merge(
+    ee.FeatureCollection(
+      EXPANSION_ASSET
+    )
+  )
+
+  .distinct(
+    [
+      'auth_pixel_key'
+    ]
+  );
+
+
+var currentBarren =
+  currentCandidates.filter(
+    ee.Filter.eq(
+      'class_id',
+      5
+    )
+  );
+
+
+// ================================================================
+// 4. SPLIT ORIGINAL SIX POLYGONS
+// ================================================================
+
+var parts =
+  ee.Geometry(
+    barrenAdd2010
+  )
+  .geometries();
+
+
+function getPolygon(index) {
+
+  return ee.FeatureCollection([
+    ee.Feature(
+      ee.Geometry(
+        parts.get(
+          index
+        )
+      )
+    )
+  ]);
+
+}
+
+
+var p301 = getPolygon(0);
+var p302 = getPolygon(1);
+var p303 = getPolygon(2);
+var p304 = getPolygon(3);
+var p305 = getPolygon(4);
+var p306 = getPolygon(5);
+
+
+// ================================================================
+// 5. MAP
+// ================================================================
+
+Map.layers().reset();
+
+Map.setOptions(
+  'SATELLITE'
+);
+
+
+// ------------------------------------------------
+// 2010 TRUE COLOUR
+// ------------------------------------------------
+
+Map.addLayer(
+
+  stack2010,
+
+  {
+    bands: [
+      'red',
+      'green',
+      'blue'
+    ],
+
+    min:
+      0.02,
+
+    max:
+      0.30
+  },
+
+  '2010 TRUE COLOUR',
+
+  true
+
+);
+
+
+// ------------------------------------------------
+// SUPPORTING NDVI
+// ------------------------------------------------
+
+Map.addLayer(
+
+  stack2010.select(
+    'NDVI'
+  ),
+
+  {
+    min:
+      -0.2,
+
+    max:
+      0.8,
+
+    palette: [
+      '8c510a',
+      'd8b365',
+      'f6e8c3',
+      'c7eae5',
+      '5ab4ac',
+      '01665e'
+    ]
+  },
+
+  '2010 NDVI',
+
+  false
+
+);
+
+
+// ------------------------------------------------
+// SUPPORTING NDBI
+// ------------------------------------------------
+
+Map.addLayer(
+
+  stack2010.select(
+    'NDBI'
+  ),
+
+  {
+    min:
+      -0.5,
+
+    max:
+      0.5,
+
+    palette: [
+      '2166ac',
+      'f7f7f7',
+      'b2182b'
+    ]
+  },
+
+  '2010 NDBI',
+
+  false
+
+);
+
+
+// ================================================================
+// 6. ORIGINAL MANUAL POLYGONS
+// ================================================================
+//
+// RED = reject as Barren training
+// GREEN = polygon 304, our useful reference patch
+//
+// ================================================================
+
+Map.addLayer(
+  p301.style({
+    color: 'ff0000',
+    fillColor: 'ff000033',
+    width: 3
+  }),
+  {},
+  '301 REJECT — Ag/Open',
+  true
+);
+
+
+Map.addLayer(
+  p302.style({
+    color: 'ff0000',
+    fillColor: 'ff000033',
+    width: 3
+  }),
+  {},
+  '302 REJECT — Water/Mixed',
+  true
+);
+
+
+Map.addLayer(
+  p303.style({
+    color: 'ff0000',
+    fillColor: 'ff000033',
+    width: 3
+  }),
+  {},
+  '303 REJECT — Built-up',
+  true
+);
+
+
+Map.addLayer(
+  p304.style({
+    color: '00ff00',
+    fillColor: '00ff0033',
+    width: 4
+  }),
+  {},
+  '304 KEEP — Barren Reference',
+  true
+);
+
+
+Map.addLayer(
+  p305.style({
+    color: 'ff0000',
+    fillColor: 'ff000033',
+    width: 3
+  }),
+  {},
+  '305 REJECT — Built-up',
+  true
+);
+
+
+Map.addLayer(
+  p306.style({
+    color: 'ff0000',
+    fillColor: 'ff000033',
+    width: 3
+  }),
+  {},
+  '306 REJECT — Mixed',
+  true
+);
+
+
+// ================================================================
+// 7. EXISTING AUTOMATED BARREN POINTS
+// ================================================================
+
+Map.addLayer(
+
+  currentBarren.style({
+
+    color:
+      'ff00ff',
+
+    pointSize:
+      4,
+
+    width:
+      1
+
+  }),
+
+  {},
+
+  'Existing Automated Barren Candidates',
+
+  true
+
+);
+
+
+// ================================================================
+// 8. ROI
+// ================================================================
+
+Map.addLayer(
+
+  roiFC.style({
+
+    color:
+      'ffff00',
+
+    fillColor:
+      '00000000',
+
+    width:
+      2
+
+  }),
+
+  {},
+
+  'Chennai ROI',
+
+  true
+
+);
+
+
+Map.centerObject(
+  roiFC,
+  10
+);
+
+
+// ================================================================
+// 9. INSTRUCTIONS
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05C4C — MANUAL BARREN VISUAL REVIEW'
+);
+
+print(
+  '========================================'
+);
+
+print(
+  'GREEN polygon 304 = useful Barren/Fallow reference.'
+);
+
+print(
+  'RED polygons 301,302,303,305,306 should NOT be used.'
+);
+
+print(
+  'Find several additional clearly bare/fallow locations.'
+);
+
+print(
+  'Prefer geographically separated areas.'
+);
+
+print(
+  'Draw them as ONE NEW geometry layer named barrenAdd2010_v2.'
+);
+
+print(
+  'Aim for about 4–6 new polygons.'
+);
+
+print(
+  'Do NOT draw around buildings, roads, water or green cropland.'
+);
+
+print(
+  '========================================'
+);

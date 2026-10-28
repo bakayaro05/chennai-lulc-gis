@@ -1,0 +1,241 @@
+
+ // ============================================================
+ // THANJAVUR 2020 - FROZEN GAUSSIAN MLC
+ // SCRIPT 02A - CLASS DISTRIBUTION AND COVERAGE QA
+ // ============================================================
+
+ var ROOT = 'projects/assignment-482806/assets/';
+
+ var roi = ee.FeatureCollection(
+   ROOT + 'tnj_city_trace_pilot_roi_2020'
+ ).geometry();
+
+ var mapped = ee.Image(
+   ROOT + 'thanjavur_mlc_transfer_2020_frozen_chennai'
+ ).select('mapped_class');
+
+ var CRS = 'EPSG:32644';
+ var SCALE = 30;
+
+ var names = ee.Dictionary({
+   '1': 'Built-up',
+   '2': 'Vegetation',
+   '3': 'Water',
+   '4': 'Agricultural/Open',
+   '5': 'Barren/Fallow'
+ });
+
+ // ============================================================
+ // 1. STUDY AREA
+ // ============================================================
+
+ var roiArea = roi.area(1);
+
+ print('====================================');
+ print('THANJAVUR CLASS DISTRIBUTION QA');
+ print('====================================');
+
+ print('Vector ROI area (km2):');
+ print(roiArea.divide(1e6));
+
+ // ============================================================
+ // 2. PIXEL COUNTS BY PREDICTED CLASS
+ // ============================================================
+
+ var histogram = ee.Dictionary(
+   mapped.reduceRegion({
+     reducer: ee.Reducer.frequencyHistogram(),
+     geometry: roi,
+     crs: CRS,
+     scale: SCALE,
+     maxPixels: 1e8,
+     tileScale: 4
+   }).get('mapped_class')
+ );
+
+ print('Mapped pixel frequency histogram:');
+ print(histogram);
+
+ // ============================================================
+ // 3. CLASS AREAS
+ // ============================================================
+
+ var areaImage = ee.Image.pixelArea()
+   .rename('area_m2')
+   .addBands(mapped);
+
+ var areaResult = areaImage.reduceRegion({
+   reducer: ee.Reducer.sum().group({
+     groupField: 1,
+     groupName: 'class_id'
+   }),
+   geometry: roi,
+   crs: CRS,
+   scale: SCALE,
+   maxPixels: 1e8,
+   tileScale: 4
+ });
+
+ var groups = ee.List(areaResult.get('groups'));
+
+ var areaByClass = ee.Dictionary.fromLists(
+   groups.map(function(g) {
+     return ee.Number(
+       ee.Dictionary(g).get('class_id')
+     ).format('%d');
+   }),
+   groups.map(function(g) {
+     return ee.Dictionary(g).get('sum');
+   })
+ );
+
+ var totalClassifiedArea = ee.Number(
+   groups.iterate(function(g, total) {
+     return ee.Number(total).add(
+       ee.Number(ee.Dictionary(g).get('sum'))
+     );
+   }, 0)
+ );
+
+ print('Valid classified area (km2):');
+ print(totalClassifiedArea.divide(1e6));
+
+ print('Classified coverage relative to vector ROI (%):');
+ print(
+   totalClassifiedArea.divide(roiArea).multiply(100)
+ );
+
+ // ============================================================
+ // 4. COMPLETE FIVE-CLASS QA TABLE
+ // ============================================================
+
+ var classTable = ee.FeatureCollection(
+   ee.List.sequence(1, 5).map(function(id) {
+
+     id = ee.Number(id);
+
+     var key = id.format('%d');
+
+     var pixelCount = ee.Number(
+       histogram.get(key, 0)
+     );
+
+     var classArea = ee.Number(
+       areaByClass.get(key, 0)
+     );
+
+     return ee.Feature(null, {
+       class_id: id,
+       class_name: names.get(key),
+       pixel_count: pixelCount,
+       area_km2: classArea.divide(1e6),
+       percent_of_classified_area:
+         classArea.divide(totalClassifiedArea)
+           .multiply(100)
+     });
+   })
+ );
+
+ print('FIVE CLASS DISTRIBUTION TABLE:');
+ print(classTable);
+
+ print('VEGETATION PIXEL COUNT:');
+ print(histogram.get('2', 0));
+
+ print('VEGETATION AREA (km2):');
+ print(
+   ee.Number(areaByClass.get('2', 0))
+     .divide(1e6)
+ );
+
+ // ============================================================
+ // 5. MAP VISUALISATION
+ // ============================================================
+
+ Map.layers().reset();
+ Map.setOptions('SATELLITE');
+ Map.centerObject(roi, 12);
+
+ Map.addLayer(
+   mapped,
+   {
+     min: 1,
+     max: 5,
+     palette: [
+       'e31a1c',
+       '33a02c',
+       '1f78b4',
+       'ffb000',
+       'b15928'
+     ]
+   },
+   'Thanjavur - All MLC Classes',
+   true
+ );
+
+ Map.addLayer(
+   mapped.eq(2).selfMask(),
+   {palette: ['00ff00']},
+   'Vegetation Predicted by Chennai MLC',
+   true
+ );
+
+ // ============================================================
+ // 6. OPTIONAL 2020 REFERENCE MAP OVERLAYS
+ // ESA WorldCover 2020
+ //
+ // These overlays are for visual diagnosis only.
+ // They are NOT independent ground-truth accuracy.
+ // ============================================================
+
+ var worldCover = ee.ImageCollection(
+   'ESA/WorldCover/v100'
+ ).first().select('Map').clip(roi);
+
+ // ESA 10 = Tree cover
+ // ESA 20 = Shrubland
+ // ESA 30 = Grassland
+ // ESA 40 = Cropland
+
+ var naturalVegetation = worldCover.eq(10)
+   .or(worldCover.eq(20))
+   .or(worldCover.eq(30));
+
+ Map.addLayer(
+   naturalVegetation.selfMask(),
+   {palette: ['70ff70']},
+   'ESA 2020 Tree/Shrub/Grass - Diagnostic',
+   false
+ );
+
+ Map.addLayer(
+   worldCover.eq(40).selfMask(),
+   {palette: ['ffcc00']},
+   'ESA 2020 Cropland - Diagnostic',
+   false
+ );
+
+ Map.addLayer(
+   ee.FeatureCollection(
+     ROOT + 'tnj_city_trace_pilot_roi_2020'
+   ).style({
+     color: 'ffffff',
+     fillColor: '00000000',
+     width: 2
+   }),
+   {},
+   'City ROI Boundary',
+   true
+ );
+
+ // ============================================================
+ // 7. END
+ // ============================================================
+
+ print('====================================');
+ print('QA COMPLETE');
+ print('====================================');
+ print('Check class areas and vegetation pixel count.');
+ print('Check valid classified coverage.');
+ print('Inspect vegetation and cropland overlays.');
+ print('Do not modify the frozen model based on this QA.');

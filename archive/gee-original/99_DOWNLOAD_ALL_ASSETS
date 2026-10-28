@@ -1,0 +1,174 @@
+// =============================================================
+// CHENNAI LULC PROJECT
+// EXPORT ALL CURRENT EARTH ENGINE ASSETS TO GOOGLE DRIVE
+// =============================================================
+//
+// RASTERS  -> GeoTIFF
+// VECTORS  -> GeoJSON
+//
+// Google Drive folder:
+// Chennai_LULC_GEE_ASSETS_BACKUP
+//
+// =============================================================
+
+var DRIVE_FOLDER = 'Chennai_LULC_GEE_ASSETS_BACKUP';
+
+var PROJECT = 'projects/assignment-482806/assets/';
+
+
+// =============================================================
+// 1. FINAL CLEAN ROI
+// Used as export region for classification rasters
+// =============================================================
+
+var cleanROI = ee.FeatureCollection(
+  PROJECT + 'chennai_admin_study_area_clean'
+);
+
+var region = cleanROI.geometry();
+
+
+// =============================================================
+// 2. RASTER ASSETS
+// =============================================================
+
+
+// --------------------
+// 2015 LULC raster
+// --------------------
+
+var lulc2015 = ee.Image(
+  PROJECT + 'chennai_mlc_lulc_2015'
+);
+
+Export.image.toDrive({
+  image: lulc2015,
+  description: 'EXPORT_chennai_mlc_lulc_2015',
+  folder: DRIVE_FOLDER,
+  fileNamePrefix: 'chennai_mlc_lulc_2015',
+  region: region,
+  scale: 30,
+  crs: 'EPSG:32644',
+  maxPixels: 1e13,
+  fileFormat: 'GeoTIFF'
+});
+
+
+// --------------------
+// 2020 LULC raster
+// --------------------
+
+var lulc2020 = ee.Image(
+  PROJECT + 'chennai_mlc_lulc_2020'
+);
+
+Export.image.toDrive({
+  image: lulc2020,
+  description: 'EXPORT_chennai_mlc_lulc_2020',
+  folder: DRIVE_FOLDER,
+  fileNamePrefix: 'chennai_mlc_lulc_2020',
+  region: region,
+  scale: 30,
+  crs: 'EPSG:32644',
+  maxPixels: 1e13,
+  fileFormat: 'GeoTIFF'
+});
+
+
+// =============================================================
+// 3. HELPER FUNCTION FOR VECTOR / TABLE EXPORTS
+// =============================================================
+
+function exportVector(assetName) {
+
+  var fc = ee.FeatureCollection(
+    PROJECT + assetName
+  );
+
+  Export.table.toDrive({
+    collection: fc,
+    description: 'EXPORT_' + assetName,
+    folder: DRIVE_FOLDER,
+    fileNamePrefix: assetName,
+    fileFormat: 'GeoJSON'
+  });
+
+}
+
+
+// =============================================================
+// 4. EXPORT ALL VECTOR / TABLE ASSETS VISIBLE IN SCREENSHOT
+// =============================================================
+
+
+// 2010 work-in-progress assets
+exportVector(
+  'chennai_2010_passB_candidates_05B'
+);
+
+exportVector(
+  'chennai_transfer_2015_to_2010_QA_05A'
+);
+
+
+// Study area / boundary assets
+exportVector(
+  'chennai_admin_study_area'
+);
+
+exportVector(
+  'chennai_admin_study_area_clean'
+);
+
+exportVector(
+  'chennai_gcc_wards_2025'
+);
+
+exportVector(
+  'chennai_gcc_wards_corrected_shapefile'
+);
+
+exportVector(
+  'chennai_urban_study_area_expanded'
+);
+
+
+// 2015 training / validation
+exportVector(
+  'chennai_training_2015_final'
+);
+
+exportVector(
+  'chennai_validation_2015_final'
+);
+
+
+// 2020 training / validation
+exportVector(
+  'chennai_training_2020_final'
+);
+
+exportVector(
+  'chennai_validation_2020_final'
+);
+
+
+// 2025 master polygons
+exportVector(
+  'chennai_training_polygons_2025_master'
+);
+
+exportVector(
+  'chennai_validation_polygons_2025_master'
+);
+
+
+// =============================================================
+// END
+// =============================================================
+
+print('======================================');
+print('EXPORT TASKS CREATED');
+print('Open the TASKS tab and run each task.');
+print('Drive folder: ' + DRIVE_FOLDER);
+print('======================================');

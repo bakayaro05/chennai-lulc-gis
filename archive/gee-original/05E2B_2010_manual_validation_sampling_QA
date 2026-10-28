@@ -1,0 +1,1385 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var valAgri2010 = 
+    /* color: #0b4a8b */
+    /* shown: false */
+    /* locked: true */
+    ee.Geometry.MultiPolygon(
+        [[[[80.25919776777441, 13.198755302116531],
+           [80.25686961034948, 13.198635179737908],
+           [80.25695544103796, 13.196347620560559],
+           [80.25890272478277, 13.19651474889688]]],
+         [[[80.2608241871472, 13.197281382952543],
+           [80.26351176058012, 13.197479847080754],
+           [80.26340864488516, 13.200927990693543],
+           [80.26030801126394, 13.20076086537624]]],
+         [[[80.25339560023914, 13.19822863769771],
+           [80.25675372592579, 13.198118960509227],
+           [80.25668935290943, 13.199367188460062],
+           [80.25405005923878, 13.199382856552807]]],
+         [[[80.2510720748104, 13.194281328013275],
+           [80.25211277190817, 13.194119420959462],
+           [80.25233807746542, 13.19558180336104],
+           [80.25130274478568, 13.19577504609521],
+           [80.25116863433493, 13.195069970515917]]]]),
+    valBarren2010 = 
+    /* color: #ffc82d */
+    /* shown: false */
+    /* locked: true */
+    ee.Geometry.MultiPolygon(
+        [[[[80.25182546821047, 13.186909716410538],
+           [80.2566749021094, 13.1874737958666],
+           [80.25668563094546, 13.191579001597418],
+           [80.25143923011233, 13.190806016473314]]],
+         [[[80.24323077667667, 13.186019107952596],
+           [80.25142760742618, 13.186165351432102],
+           [80.25111647118045, 13.190427265846768],
+           [80.25069804657413, 13.190124338108129],
+           [80.24666400421573, 13.19003032597497],
+           [80.24458261002017, 13.190667518613965],
+           [80.24288745392276, 13.190646627078369]]],
+         [[[80.24270234214482, 13.19070281154767],
+           [80.23903308021245, 13.19039988415047],
+           [80.2397626410645, 13.187224346775633],
+           [80.24295983421025, 13.187454156785776]]],
+         [[[80.28145014388453, 13.183032456782993],
+           [80.28081177813898, 13.181334960698566],
+           [80.28230845076929, 13.180730694602909],
+           [80.28294145209681, 13.182485648529818]]],
+         [[[80.28117179183552, 13.183925364144422],
+           [80.28148292808125, 13.185878768698279],
+           [80.27939080504963, 13.186129471896308],
+           [80.2792245080907, 13.18390969506087]]],
+         [[[80.28665164676706, 13.181327830342768],
+           [80.28691986766854, 13.178089497359208],
+           [80.29098609653512, 13.180042948514044],
+           [80.29144743648568, 13.18156809204964],
+           [80.28920510974923, 13.18159943051574]]]]),
+    valVeg2010 = 
+    /* color: #00ffff */
+    /* shown: false */
+    /* locked: true */
+    ee.Geometry.MultiPolygon(
+        [[[[80.25629472768097, 13.187232068867676],
+           [80.25192809140472, 13.186751556345536],
+           [80.25273275410919, 13.181925486917347],
+           [80.25521111523895, 13.181612102493292],
+           [80.25675606763153, 13.182123963511604]]],
+         [[[80.1094288724618, 12.947414037107238],
+           [80.11103819787074, 12.94664028692185],
+           [80.11174630105067, 12.946807584462764],
+           [80.11171294604029, 12.945941072969992],
+           [80.11076880846704, 12.943828925932882],
+           [80.11060488290148, 12.942163464775359],
+           [80.11363041467028, 12.942017076705966],
+           [80.11517536706286, 12.942769928718626],
+           [80.11596930093127, 12.947705235605243],
+           [80.11569035119372, 12.951218445365798],
+           [80.11030447549182, 12.949827805758579],
+           [80.10968220300036, 12.947307905193261]]],
+         [[[80.10839557278247, 12.939308407944033],
+           [80.10434351559408, 12.93985740191007],
+           [80.10305741706273, 12.938028855166689],
+           [80.1033041802921, 12.936219880858152],
+           [80.10366311351905, 12.935196427865959],
+           [80.10531771930987, 12.932768184533227],
+           [80.1100598648482, 12.931199677380446],
+           [80.11233437809283, 12.932726357803775],
+           [80.1092806627344, 12.937221707642134]]],
+         [[[80.10683580792795, 12.902299305397758],
+           [80.11027380294259, 12.900270453527174],
+           [80.11188312835152, 12.89893182060258],
+           [80.11310621566231, 12.900730606940668],
+           [80.11188312835152, 12.904997443729195],
+           [80.10688349074776, 12.906252381871568]]]]),
+    valWater2010 = 
+    /* color: #bf04c2 */
+    /* shown: false */
+    /* locked: true */
+    ee.Geometry.MultiPolygon(
+        [[[[80.12929318167981, 12.912810071219301],
+           [80.13205049254712, 12.911366929669207],
+           [80.1335418007594, 12.913772160956322],
+           [80.13418553092298, 12.916261028089753],
+           [80.13403532721814, 12.917934202142337],
+           [80.1321899674159, 12.9182270064494],
+           [80.13158915259656, 12.914420523689875]]],
+         [[[80.15257745474113, 12.897209232297644],
+           [80.1505175182177, 12.89616341314182],
+           [80.14875798910393, 12.894552843093722],
+           [80.14830737798943, 12.892942262681265],
+           [80.14935880392326, 12.890850584339397],
+           [80.15070658751739, 12.890066792934666],
+           [80.15332442351593, 12.89230489511329],
+           [80.15363550291357, 12.89510753911056]]],
+         [[[80.16403020458802, 12.94094982229456],
+           [80.16393364506348, 12.938246657038498],
+           [80.1645130022107, 12.937723833898387],
+           [80.16988814907654, 12.937755203317696],
+           [80.16884745197876, 12.93952234090062],
+           [80.16606868343933, 12.940557522189152]]]]),
+    valBuilt2010 = /* color: #ff0000 */ee.Geometry.MultiPolygon(
+        [[[[80.21662175810282, 13.12826992809845],
+           [80.21677196180765, 13.12032899496344],
+           [80.22278011000101, 13.120349892492616],
+           [80.22258699095194, 13.126389203968493]]],
+         [[[80.19986044072436, 13.137209332178546],
+           [80.20026813649463, 13.13286290612754],
+           [80.20479570531177, 13.137731733975949],
+           [80.20331512593555, 13.141513889825717],
+           [80.19902359151172, 13.140155663768773]]],
+         [[[80.2502728073372, 13.134479248779474],
+           [80.25048738405839, 13.128377445642382],
+           [80.2575684158577, 13.12833565194752],
+           [80.25838380739823, 13.133183673119337]]]]);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05E2B
+//
+// MANUAL 2010 VALIDATION POLYGON SAMPLING + QA
+//
+// REQUIRED GEOMETRY IMPORTS
+// -------------------------
+// valBuilt2010
+// valVeg2010
+// valWater2010
+// valAgri2010
+// valBarren2010
+//
+// PURPOSE
+// -------
+// Sample manually interpreted 2010 validation polygons against
+// the authoritative materialized 2010 predictor stack.
+//
+// HARD VALIDATION REQUIREMENTS:
+//
+// 1. Independent manual reference labels
+// 2. clear_count >= 2
+// 3. outside 30 m buffer of FINAL 2010 training
+// 4. no duplicate 2010 raster pixels
+// 5. no overlap with already accepted automatic validation pixels
+//
+// IMPORTANT INDEPENDENCE RULE
+// ---------------------------
+// FINAL 2010 TRAINING IS USED ONLY FOR THE 30 m EXCLUSION.
+//
+// Training spectra, training signatures and the future classifier
+// are NOT used to screen manual validation labels.
+//
+// QA ONLY.
+// NO FINAL VALIDATION EXPORT.
+// NO MLC.
+// NO CLASSIFICATION.
+//
+// ================================================================
+
+
+// ================================================================
+// 1. REQUIRED GEOMETRY IMPORT CHECK
+// ================================================================
+
+valBuilt2010;
+valVeg2010;
+valWater2010;
+valAgri2010;
+valBarren2010;
+
+
+// ================================================================
+// 2. ASSETS
+// ================================================================
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var TRAINING_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final';
+
+
+var TRANSFER_QA_ASSET =
+  'projects/assignment-482806/assets/chennai_validation_transfer_2015_to_2010_QA_05E1';
+
+
+// ================================================================
+// 3. SETTINGS
+// ================================================================
+
+var SCALE =
+  30;
+
+
+var TRAINING_EXCLUSION_METERS =
+  30;
+
+
+var PREDICTORS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+var TARGET_PER_CLASS =
+  60;
+
+
+// Current automatically accepted independent validation:
+
+var CURRENT_BUILT =
+  17;
+
+var CURRENT_VEG =
+  1;
+
+var CURRENT_WATER =
+  43;
+
+var CURRENT_AGRI =
+  0;
+
+var CURRENT_BARREN =
+  5;
+
+
+// Required manual additions:
+
+var NEED_BUILT =
+  43;
+
+var NEED_VEG =
+  59;
+
+var NEED_WATER =
+  17;
+
+var NEED_AGRI =
+  60;
+
+var NEED_BARREN =
+  55;
+
+
+// ================================================================
+// 4. LOAD MATERIALIZED INPUTS
+// ================================================================
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  );
+
+
+var training2010 =
+  ee.FeatureCollection(
+    TRAINING_ASSET
+  );
+
+
+var transferQA =
+  ee.FeatureCollection(
+    TRANSFER_QA_ASSET
+  );
+
+
+var existingEligibleValidation =
+  transferQA.filter(
+    ee.Filter.eq(
+      'eligible_2010_validation',
+      1
+    )
+  );
+
+
+var stackProjection =
+  stack2010
+    .select(
+      'blue'
+    )
+    .projection();
+
+
+// ================================================================
+// 5. INPUT CHECK
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05E2B — INPUT CHECK'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    training_n:
+      training2010.size(),
+
+    existing_eligible_validation_n:
+      existingEligibleValidation.size()
+
+  })
+);
+
+
+print(
+  'Existing eligible validation histogram'
+);
+
+
+print(
+  existingEligibleValidation.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ================================================================
+// 6. HELPER — CONVERT MULTIPOLYGON IMPORT TO FEATURES
+// ================================================================
+//
+// Every separate drawn polygon gets its own manual poly_id.
+//
+// ID ranges:
+//
+// Built-up             401+
+// Vegetation           411+
+// Water                421+
+// Agricultural/Open    431+
+// Barren/Fallow        441+
+//
+// ================================================================
+
+function geometryToFeatures(
+  geometryImport,
+  classId,
+  className,
+  startingPolyId,
+  sourceName
+) {
+
+  var parts =
+    ee.Geometry(
+      geometryImport
+    )
+    .geometries();
+
+
+  var n =
+    parts.size();
+
+
+  var indices =
+    ee.List.sequence(
+      0,
+      n.subtract(
+        1
+      )
+    );
+
+
+  return ee.FeatureCollection(
+
+    indices.map(
+      function(index) {
+
+        index =
+          ee.Number(
+            index
+          );
+
+
+        var geom =
+          ee.Geometry(
+            parts.get(
+              index
+            )
+          );
+
+
+        return ee.Feature(
+          geom,
+          {
+
+            class_id:
+              classId,
+
+            class_name:
+              className,
+
+            poly_id:
+              ee.Number(
+                startingPolyId
+              )
+              .add(
+                index
+              ),
+
+            manual_polygon_number:
+              index.add(
+                1
+              ),
+
+            validation_source:
+              sourceName,
+
+            target_year:
+              2010
+
+          }
+        );
+
+      }
+    )
+
+  );
+
+}
+
+
+// ================================================================
+// 7. BUILD MANUAL POLYGON FEATURE COLLECTIONS
+// ================================================================
+
+var builtPolygons =
+  geometryToFeatures(
+    valBuilt2010,
+    1,
+    'Built-up',
+    401,
+    'manual_validation_built'
+  );
+
+
+var vegPolygons =
+  geometryToFeatures(
+    valVeg2010,
+    2,
+    'Vegetation',
+    411,
+    'manual_validation_vegetation'
+  );
+
+
+var waterPolygons =
+  geometryToFeatures(
+    valWater2010,
+    3,
+    'Water',
+    421,
+    'manual_validation_water'
+  );
+
+
+var agriPolygons =
+  geometryToFeatures(
+    valAgri2010,
+    4,
+    'Agricultural/Open',
+    431,
+    'manual_validation_agri'
+  );
+
+
+var barrenPolygons =
+  geometryToFeatures(
+    valBarren2010,
+    5,
+    'Barren/Fallow',
+    441,
+    'manual_validation_barren'
+  );
+
+
+var allManualPolygons =
+  builtPolygons
+
+    .merge(
+      vegPolygons
+    )
+
+    .merge(
+      waterPolygons
+    )
+
+    .merge(
+      agriPolygons
+    )
+
+    .merge(
+      barrenPolygons
+    );
+
+
+// ================================================================
+// 8. POLYGON COUNT CHECK
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  'MANUAL POLYGON COUNTS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    built_polygons:
+      builtPolygons.size(),
+
+    vegetation_polygons:
+      vegPolygons.size(),
+
+    water_polygons:
+      waterPolygons.size(),
+
+    agri_polygons:
+      agriPolygons.size(),
+
+    barren_polygons:
+      barrenPolygons.size(),
+
+    all_manual_polygons:
+      allManualPolygons.size()
+
+  })
+);
+
+
+// ================================================================
+// 9. CREATE AUTHORITATIVE PIXEL COORDINATES
+// ================================================================
+
+var pixelXY =
+  ee.Image.pixelCoordinates(
+    stackProjection
+  )
+  .rename(
+    [
+      'auth_px',
+      'auth_py'
+    ]
+  );
+
+
+// ================================================================
+// 10. MANUAL VALIDATION SAMPLING IMAGE
+// ================================================================
+
+var samplingImage =
+  stack2010
+
+    .select(
+      PREDICTORS
+    )
+
+    .addBands(
+      stack2010.select(
+        'clear_count'
+      )
+    )
+
+    .addBands(
+      pixelXY
+    );
+
+
+// ================================================================
+// 11. SAMPLE ALL MANUAL POLYGONS
+// ================================================================
+
+var manualSamples =
+  samplingImage.sampleRegions({
+
+    collection:
+      allManualPolygons,
+
+    properties: [
+
+      'class_id',
+      'class_name',
+      'poly_id',
+      'manual_polygon_number',
+      'validation_source',
+      'target_year'
+
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      stackProjection,
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+
+  });
+
+
+// ================================================================
+// 12. CREATE AUTHORITATIVE PIXEL KEY
+// ================================================================
+
+manualSamples =
+  manualSamples.map(
+    function(feature) {
+
+      var px =
+        ee.Number(
+          feature.get(
+            'auth_px'
+          )
+        );
+
+
+      var py =
+        ee.Number(
+          feature.get(
+            'auth_py'
+          )
+        );
+
+
+      var key =
+        px.format(
+          '%.0f'
+        )
+        .cat(
+          '_'
+        )
+        .cat(
+          py.format(
+            '%.0f'
+          )
+        );
+
+
+      return feature.set(
+        'auth_pixel_key',
+        key
+      );
+
+    }
+  );
+
+
+// ================================================================
+// 13. REMOVE DUPLICATES INSIDE MANUAL POLYGONS
+// ================================================================
+//
+// Protects against overlapping polygons or shared raster cells.
+//
+// ================================================================
+
+var manualSamplesUnique =
+  manualSamples.distinct(
+    [
+      'auth_pixel_key'
+    ]
+  );
+
+
+// ================================================================
+// 14. BUILD FINAL 2010 TRAINING 30 m EXCLUSION
+// ================================================================
+
+var trainingBuffers =
+  training2010.map(
+    function(feature) {
+
+      return ee.Feature(
+        feature
+          .geometry()
+          .buffer(
+            TRAINING_EXCLUSION_METERS
+          )
+      );
+
+    }
+  );
+
+
+var trainingExclusionGeometry =
+  trainingBuffers.geometry();
+
+
+// ================================================================
+// 15. EXISTING AUTOMATIC-VALIDATION PIXEL KEYS
+// ================================================================
+//
+// Some 05E1 points may not have an auth_pixel_key property.
+//
+// Therefore create the key fresh from the authoritative 2010 grid.
+//
+// ================================================================
+
+var existingValidationWithKeys =
+  existingEligibleValidation.map(
+    function(feature) {
+
+      var xy =
+        pixelXY.reduceRegion({
+
+          reducer:
+            ee.Reducer.first(),
+
+          geometry:
+            feature.geometry(),
+
+          scale:
+            SCALE,
+
+          crs:
+            stackProjection,
+
+          maxPixels:
+            10
+
+        });
+
+
+      var px =
+        ee.Number(
+          xy.get(
+            'auth_px'
+          )
+        );
+
+
+      var py =
+        ee.Number(
+          xy.get(
+            'auth_py'
+          )
+        );
+
+
+      var key =
+        px.format(
+          '%.0f'
+        )
+        .cat(
+          '_'
+        )
+        .cat(
+          py.format(
+            '%.0f'
+          )
+        );
+
+
+      return feature.set(
+        'auth_pixel_key',
+        key
+      );
+
+    }
+  );
+
+
+var existingValidationKeys =
+  ee.List(
+    existingValidationWithKeys.aggregate_array(
+      'auth_pixel_key'
+    )
+  );
+
+
+// ================================================================
+// 16. APPLY HARD MANUAL-VALIDATION QA
+// ================================================================
+//
+// Hard requirements:
+//
+// clear_count >= 2
+// outside 30m training exclusion
+// not same raster cell as existing accepted validation
+//
+// NO spectral classifier is used.
+//
+// ================================================================
+
+var evaluatedManual =
+  manualSamplesUnique.map(
+    function(feature) {
+
+      var clearCount =
+        ee.Number(
+          feature.get(
+            'clear_count'
+          )
+        );
+
+
+      var clearOkay =
+        clearCount.gte(
+          2
+        );
+
+
+      var trainingExcluded =
+        ee.Number(
+          ee.Algorithms.If(
+
+            trainingExclusionGeometry.intersects(
+              feature.geometry(),
+              1
+            ),
+
+            1,
+
+            0
+
+          )
+        );
+
+
+      var existingValidationDuplicate =
+        ee.Number(
+          ee.Algorithms.If(
+
+            existingValidationKeys.contains(
+              feature.get(
+                'auth_pixel_key'
+              )
+            ),
+
+            1,
+
+            0
+
+          )
+        );
+
+
+      var eligible =
+        clearOkay
+
+          .and(
+            trainingExcluded.eq(
+              0
+            )
+          )
+
+          .and(
+            existingValidationDuplicate.eq(
+              0
+            )
+          );
+
+
+      return feature.set({
+
+        flag_clear_ok:
+          ee.Number(
+            ee.Algorithms.If(
+              clearOkay,
+              1,
+              0
+            )
+          ),
+
+        training_excluded_30m:
+          trainingExcluded,
+
+        duplicate_existing_validation:
+          existingValidationDuplicate,
+
+        manual_validation_eligible:
+          ee.Number(
+            ee.Algorithms.If(
+              eligible,
+              1,
+              0
+            )
+          )
+
+      });
+
+    }
+  );
+
+
+// ================================================================
+// 17. ELIGIBLE MANUAL VALIDATION POOL
+// ================================================================
+
+var eligibleManual =
+  evaluatedManual.filter(
+    ee.Filter.eq(
+      'manual_validation_eligible',
+      1
+    )
+  );
+
+
+// ================================================================
+// 18. OVERALL QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05E2B — OVERALL MANUAL VALIDATION QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    raw_sampled_pixels:
+      manualSamples.size(),
+
+    unique_manual_pixels:
+      manualSamplesUnique.size(),
+
+    duplicate_inside_manual_polygons:
+      manualSamples.size()
+        .subtract(
+          manualSamplesUnique.size()
+        ),
+
+    low_clear_pixels:
+      evaluatedManual
+        .filter(
+          ee.Filter.eq(
+            'flag_clear_ok',
+            0
+          )
+        )
+        .size(),
+
+    training_excluded_pixels:
+      evaluatedManual
+        .filter(
+          ee.Filter.eq(
+            'training_excluded_30m',
+            1
+          )
+        )
+        .size(),
+
+    duplicate_existing_validation_pixels:
+      evaluatedManual
+        .filter(
+          ee.Filter.eq(
+            'duplicate_existing_validation',
+            1
+          )
+        )
+        .size(),
+
+    eligible_manual_pixels:
+      eligibleManual.size()
+
+  })
+);
+
+
+// ================================================================
+// 19. CLASS-WISE AVAILABILITY
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05E2B — CLASS-WISE MANUAL AVAILABILITY'
+);
+
+print(
+  '========================================'
+);
+
+
+var needByClass =
+  ee.Dictionary({
+
+    '1':
+      NEED_BUILT,
+
+    '2':
+      NEED_VEG,
+
+    '3':
+      NEED_WATER,
+
+    '4':
+      NEED_AGRI,
+
+    '5':
+      NEED_BARREN
+
+  });
+
+
+var currentByClass =
+  ee.Dictionary({
+
+    '1':
+      CURRENT_BUILT,
+
+    '2':
+      CURRENT_VEG,
+
+    '3':
+      CURRENT_WATER,
+
+    '4':
+      CURRENT_AGRI,
+
+    '5':
+      CURRENT_BARREN
+
+  });
+
+
+[1, 2, 3, 4, 5].forEach(
+  function(classId) {
+
+    var classEligible =
+      eligibleManual.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    var availableN =
+      classEligible.size();
+
+
+    var neededN =
+      ee.Number(
+        needByClass.get(
+          String(
+            classId
+          )
+        )
+      );
+
+
+    var currentN =
+      ee.Number(
+        currentByClass.get(
+          String(
+            classId
+          )
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          [
+            'Built-up',
+            'Vegetation',
+            'Water',
+            'Agricultural/Open',
+            'Barren/Fallow'
+          ][
+            classId - 1
+          ],
+
+        existing_auto_validation:
+          currentN,
+
+        manual_needed:
+          neededN,
+
+        manual_available:
+          availableN,
+
+        sufficient:
+          availableN.gte(
+            neededN
+          ),
+
+        projected_total_if_available:
+          currentN.add(
+            availableN
+          ),
+
+        remaining_deficit:
+          neededN
+            .subtract(
+              availableN
+            )
+            .max(
+              0
+            ),
+
+        distinct_manual_poly_id_n:
+          ee.List(
+            classEligible.aggregate_array(
+              'poly_id'
+            )
+          )
+          .distinct()
+          .size(),
+
+        manual_poly_id_histogram:
+          classEligible.aggregate_histogram(
+            'poly_id'
+          ),
+
+        mean_clear_count:
+          classEligible.aggregate_mean(
+            'clear_count'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 20. PER-POLYGON QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05E2B — PER-POLYGON MANUAL QA'
+);
+
+print(
+  '========================================'
+);
+
+
+var allPolygonList =
+  allManualPolygons.toList(
+    allManualPolygons.size()
+  );
+
+
+var polygonIndices =
+  ee.List.sequence(
+    0,
+    allManualPolygons.size()
+      .subtract(
+        1
+      )
+  );
+
+
+var perPolygonQA =
+  ee.FeatureCollection(
+
+    polygonIndices.map(
+      function(index) {
+
+        index =
+          ee.Number(
+            index
+          );
+
+
+        var polygon =
+          ee.Feature(
+            allPolygonList.get(
+              index
+            )
+          );
+
+
+        var polyId =
+          polygon.get(
+            'poly_id'
+          );
+
+
+        var allPixels =
+          evaluatedManual.filter(
+            ee.Filter.eq(
+              'poly_id',
+              polyId
+            )
+          );
+
+
+        var eligiblePixels =
+          allPixels.filter(
+            ee.Filter.eq(
+              'manual_validation_eligible',
+              1
+            )
+          );
+
+
+        return ee.Feature(
+          null,
+          {
+
+            class_id:
+              polygon.get(
+                'class_id'
+              ),
+
+            class_name:
+              polygon.get(
+                'class_name'
+              ),
+
+            poly_id:
+              polyId,
+
+            manual_polygon_number:
+              polygon.get(
+                'manual_polygon_number'
+              ),
+
+            sampled_n:
+              allPixels.size(),
+
+            low_clear_n:
+              allPixels
+                .filter(
+                  ee.Filter.eq(
+                    'flag_clear_ok',
+                    0
+                  )
+                )
+                .size(),
+
+            training_excluded_n:
+              allPixels
+                .filter(
+                  ee.Filter.eq(
+                    'training_excluded_30m',
+                    1
+                  )
+                )
+                .size(),
+
+            duplicate_existing_validation_n:
+              allPixels
+                .filter(
+                  ee.Filter.eq(
+                    'duplicate_existing_validation',
+                    1
+                  )
+                )
+                .size(),
+
+            eligible_n:
+              eligiblePixels.size(),
+
+            mean_clear_count:
+              eligiblePixels.aggregate_mean(
+                'clear_count'
+              )
+
+          }
+        );
+
+      }
+    )
+
+  );
+
+
+print(
+  perPolygonQA
+);
+
+
+// ================================================================
+// 21. ELIGIBLE CLASS HISTOGRAM
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  'ELIGIBLE MANUAL VALIDATION HISTOGRAM'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  eligibleManual.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ================================================================
+// 22. FINAL MESSAGE
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05E2B COMPLETE — QA ONLY'
+);
+
+print(
+  'NO EXPORT TASK CREATED.'
+);
+
+print(
+  'DO NOT RUN AGAIN.'
+);
+
+print(
+  'Send OVERALL QA + 5 CLASS-WISE DICTIONARIES.'
+);
+
+print(
+  'If any class is insufficient, we add polygons ONLY for that class.'
+);
+
+print(
+  '========================================'
+);

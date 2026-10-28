@@ -1,0 +1,362 @@
+
+ // ============================================================
+ // CHENNAI LULC — STAGE 08F-4 | X3 SNIC SEGMENT CONTEXT
+ // Date: 21 October 2026
+ // Original 2015: 600 training, 300 validation, 5 classes
+ // Read-only exploratory experiment. No exports or overwrites.
+ // ============================================================
+
+ // 1. Original, frozen assets.
+ var ROOT = 'projects/assignment-482806/assets/';
+ var study = ee.FeatureCollection(ROOT + 'chennai_admin_study_area_clean');
+ var roi = study.geometry();
+ var training = ee.FeatureCollection(ROOT + 'chennai_training_2015_final');
+ var validation = ee.FeatureCollection(ROOT + 'chennai_validation_2015_final');
+ var baseline = ee.Image(ROOT + 'chennai_mlc_lulc_2015')
+   .select(0).rename('baseline');
+ var grid = baseline.projection();
+
+ var ORIGINAL_BANDS = [
+   'blue', 'green', 'red', 'nir', 'swir1', 'swir2',
+   'NDVI', 'NDWI', 'NDBI'
+ ];
+ var CONTEXT_BANDS = ['segment_NDBI_mean', 'segment_red_sd'];
+ var MODEL_BANDS = ORIGINAL_BANDS.concat(CONTEXT_BANDS);
+ var CLASS_IDS = [1, 2, 3, 4, 5];
+ var CLASS_LABELS = [
+   'Built-up', 'Vegetation', 'Water',
+   'Agricultural/Open', 'Barren/Fallow'
+ ];
+ var REGULARIZATION = 1e-6;
+
+ // Fixed in advance for this ONE exploratory trial.
+ // size=5 represents initial seed separation, not fixed object size.
+ var SNIC_SIZE = 5;
+ var SNIC_COMPACTNESS = 0.1;
+ var SNIC_CONNECTIVITY = 8;
+ var SNIC_NEIGHBOURHOOD = 64;
+ var COMPONENT_MAX_SIZE = 256;
+
+ // 2. Reproduce exact locked Landsat 8 processing.
+ function preprocessL8(image) {
+   var qa = image.select('QA_PIXEL');
+   var clear = qa.bitwiseAnd(63).eq(0)
+     .and(image.select('QA_RADSAT').eq(0));
+   return image.select(
+       ['SR_B2','SR_B3','SR_B4','SR_B5','SR_B6','SR_B7'],
+       ['blue','green','red','nir','swir1','swir2']
+     )
+     .multiply(0.0000275).subtract(0.2)
+     .updateMask(clear)
+     .copyProperties(image, ['system:time_start']);
+ }
+
+ function addIndices(image) {
+   var red = image.select('red');
+   var green = image.select('green');
+   var nir = image.select('nir');
+   var swir1 = image.select('swir1');
+   return image.addBands([
+     nir.subtract(red).divide(nir.add(red)).rename('NDVI'),
+     green.subtract(nir).divide(green.add(nir)).rename('NDWI'),
+     swir1.subtract(nir).divide(swir1.add(nir)).rename('NDBI')
+   ]).select(ORIGINAL_BANDS);
+ }
+
+ var scenes = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+   .filterBounds(roi)
+   .filterDate('2015-01-01', '2016-01-01')
+   .map(preprocessL8);
+
+ // SNIC needs an explicitly fixed grid. Compute before ROI clipping
+ // so edge segments see the surrounding available Landsat imagery.
+ var spectral = addIndices(scenes.median()).reproject(grid);
+
+ // 3. Image-only SNIC: no training or validation labels are used.
+ var snic = ee.Algorithms.Image.Segmentation.SNIC({
+   image: spectral,
+   size: SNIC_SIZE,
+   compactness: SNIC_COMPACTNESS,
+   connectivity: SNIC_CONNECTIVITY,
+   neighborhoodSize: SNIC_NEIGHBOURHOOD
+ }).reproject(grid);
+
+ var segmentIDs = snic.select('clusters').rename('segment_id');
+
+ // Context feature 10: mean NDBI within the image-derived segment.
+ var segmentNDBIMean = snic.select('NDBI_mean')
+   .rename('segment_NDBI_mean');
+
+ // Context feature 11: red-band variation within that segment.
+ // Objects wider/taller than COMPONENT_MAX_SIZE may be masked.
+ var segmentRedSD = spectral.select('red')
+   .addBands(snic.select('clusters'))
+   .reduceConnectedComponents({
+     reducer: ee.Reducer.stdDev(),
+     labelBand: 'clusters',
+     maxSize: COMPONENT_MAX_SIZE
+   })
+   .rename('segment_red_sd');
+
+ var featureStack = spectral
+   .addBands([segmentNDBIMean, segmentRedSD])
+   .select(MODEL_BANDS)
+   .clip(roi);
+
+ // Add segment IDs for QA only, NOT as a predictor.
+ var sampleImage = featureStack.addBands(segmentIDs.clip(roi));
+
+ // 4. Frozen original training/validation sampling.
+ var trainSamples = sampleImage.sampleRegions({
+   collection: training,
+   properties: ['class_id', 'poly_id'],
+   projection: grid,
+   geometries: false,
+   tileScale: 16
+ });
+ var valSamples = sampleImage.sampleRegions({
+   collection: validation,
+   properties: ['class_id', 'val_poly_id'],
+   projection: grid,
+   geometries: false,
+   tileScale: 16
+ });
+
+ // Verify spectral inputs exactly match archived original training.
+ var archived = training.map(function(f) {
+   return f.set({
+     archive_red: f.get('red'),
+     archive_NDBI: f.get('NDBI')
+   });
+ });
+ var spectralQA = sampleImage.sampleRegions({
+   collection: archived,
+   properties: ['class_id', 'archive_red', 'archive_NDBI'],
+   projection: grid,
+   geometries: false,
+   tileScale: 16
+ }).map(function(f) {
+   return f.set({
+     delta_red: ee.Number(f.get('red'))
+       .subtract(ee.Number(f.get('archive_red'))).abs(),
+     delta_NDBI: ee.Number(f.get('NDBI'))
+       .subtract(ee.Number(f.get('archive_NDBI'))).abs()
+   });
+ });
+
+ // Object overlap diagnostic: if validation and training points
+ // share SNIC segment IDs, their contextual information overlaps.
+ var trainingSegmentIDs = ee.List(
+   trainSamples.aggregate_array('segment_id')
+ ).distinct();
+ var validationSharedSegments = valSamples.filter(
+   ee.Filter.inList('segment_id', trainingSegmentIDs)
+ );
+ var numberOfSharedSegments = ee.List(
+   validationSharedSegments.aggregate_array('segment_id')
+ ).distinct().size();
+
+ // 5. Original Gaussian maximum-likelihood classifier, 11-D.
+ function classModel(classID) {
+   var points = trainSamples.filter(
+     ee.Filter.eq('class_id', classID)
+   );
+   var mean = ee.Array([
+     MODEL_BANDS.map(function(b) {
+       return points.aggregate_mean(b);
+     })
+   ]).transpose();
+   var vectorized = points.makeArray(MODEL_BANDS, 'features');
+   var covariance = ee.Array(
+     vectorized.reduceColumns({
+       reducer: ee.Reducer.covariance()
+         .setOutputs(['covariance']),
+       selectors: ['features']
+     }).get('covariance')
+   );
+   var regularized = covariance.add(
+     ee.Array.identity(MODEL_BANDS.length)
+       .multiply(REGULARIZATION)
+   );
+   return ee.Dictionary({
+     class_id: classID,
+     count: points.size(),
+     mean: mean,
+     determinant: regularized.matrixDeterminant(),
+     inverse: regularized.matrixInverse()
+   });
+ }
+
+ var models = ee.List(CLASS_IDS.map(classModel));
+ var pixelVector = featureStack.toArray().toArray(1);
+
+ function gaussianScore(parameters, name) {
+   var p = ee.Dictionary(parameters);
+   var mean = ee.Image.constant(ee.Array(p.get('mean')));
+   var inverse = ee.Image.constant(ee.Array(p.get('inverse')));
+   var det = ee.Number(p.get('determinant'));
+   var centered = pixelVector.subtract(mean);
+   var mahalanobis = centered.arrayTranspose()
+     .matrixMultiply(inverse)
+     .matrixMultiply(centered)
+     .arrayGet([0, 0]);
+   // Identical Gaussian MLC scoring convention to X1 and X2.
+   // Class priors equal (120 per class).
+   return mahalanobis.multiply(-0.5)
+     .subtract(ee.Image.constant(det.max(1e-300).log().multiply(0.5)))
+     .rename(name);
+ }
+
+ var scores = ee.Image.cat([
+   gaussianScore(models.get(0), 'score_1'),
+   gaussianScore(models.get(1), 'score_2'),
+   gaussianScore(models.get(2), 'score_3'),
+   gaussianScore(models.get(3), 'score_4'),
+   gaussianScore(models.get(4), 'score_5')
+ ]);
+
+ var candidate = scores.toArray()
+   .arrayArgmax().arrayGet([0]).add(1)
+   .rename('candidate').toInt8().clip(roi);
+
+ // 6. Exploratory comparison with the existing 300 points.
+ var baselinePred = baseline.sampleRegions({
+   collection: validation,
+   properties: ['class_id'],
+   projection: grid,
+   geometries: false,
+   tileScale: 16
+ });
+ var candidatePred = candidate.sampleRegions({
+   collection: validation,
+   properties: ['class_id'],
+   projection: grid,
+   geometries: false,
+   tileScale: 16
+ });
+
+ var order = [1, 2, 3, 4, 5];
+ var cmBase = baselinePred.errorMatrix('class_id', 'baseline', order);
+ var cmCandidate = candidatePred.errorMatrix('class_id', 'candidate', order);
+ var aBase = ee.Array(cmBase.array());
+ var aCandidate = ee.Array(cmCandidate.array());
+ var baseTP = ee.Number(aBase.get([0, 0]));
+ var candidateTP = ee.Number(aCandidate.get([0, 0]));
+ var baselineFalseBuiltup = ee.Number(0);
+ var candidateFalseBuiltup = ee.Number(0);
+ for (var i = 1; i < 5; i++) {
+   baselineFalseBuiltup = baselineFalseBuiltup.add(aBase.get([i, 0]));
+   candidateFalseBuiltup = candidateFalseBuiltup.add(aCandidate.get([i, 0]));
+ }
+
+ // 7. QA output. Stop interpreting results if counts differ.
+ print('=============================================');
+ print('STAGE 08F-4 | X3 SNIC SEGMENT-CONTEXT MLC');
+ print('=============================================');
+ print('Segmentation: SNIC size 5, compactness 0.1,');
+ print('connectivity 8, tile neighbourhood 64.');
+ print('SNIC 5 is SEED SPACING, not a fixed 5x5 window.');
+ print('Grid:');
+ print(grid);
+ print('Scene count (expected 19):');
+ print(scenes.size());
+ print('Feature bands (expected 11):');
+ print(featureStack.bandNames());
+ print('SNIC output bands:');
+ print(snic.bandNames());
+ print('Original training total (600):');
+ print(training.size());
+ print('New training samples (600):');
+ print(trainSamples.size());
+ print('Class counts (120 each):');
+ print(trainSamples.aggregate_histogram('class_id'));
+ print('Original validation total (300):');
+ print(validation.size());
+ print('New validation samples (300):');
+ print(valSamples.size());
+ print('Max archived RED mismatch (0):');
+ print(spectralQA.aggregate_max('delta_red'));
+ print('Max archived NDBI mismatch (0):');
+ print(spectralQA.aggregate_max('delta_NDBI'));
+ print('Distinct SNIC segments at training points:');
+ print(trainingSegmentIDs.size());
+ print('Validation points sharing a segment with training:');
+ print(validationSharedSegments.size());
+ print('Distinct shared training/validation segments:');
+ print(numberOfSharedSegments);
+ print('NOTE: shared segments reduce effective spatial independence.');
+
+ print('REGULARIZED GAUSSIAN COVARIANCE QA');
+ for (var j = 0; j < 5; j++) {
+   var cm = ee.Dictionary(models.get(j));
+   print(ee.String(CLASS_LABELS[j])
+     .cat(' | n=').cat(ee.Number(cm.get('count')).format('%d'))
+     .cat(' | det=').cat(
+       ee.Number(cm.get('determinant')).format('%.10e')
+     ));
+ }
+
+ print('=============================================');
+ print('EXPLORATORY VALIDATION - ORIGINAL 300 POINTS');
+ print('=============================================');
+ print('Baseline prediction count (300):');
+ print(baselinePred.size());
+ print('Candidate prediction count (300):');
+ print(candidatePred.size());
+ print('BASELINE CONFUSION MATRIX:');
+ print(cmBase);
+ print('SNIC EXPERIMENT CONFUSION MATRIX:');
+ print(cmCandidate);
+ print('Baseline overall accuracy:');
+ print(cmBase.accuracy());
+ print('SNIC overall accuracy:');
+ print(cmCandidate.accuracy());
+ print('Change in overall accuracy, percentage points:');
+ print(ee.Number(cmCandidate.accuracy())
+   .subtract(cmBase.accuracy()).multiply(100));
+ print('Baseline Kappa:');
+ print(cmBase.kappa());
+ print('SNIC Kappa:');
+ print(cmCandidate.kappa());
+ print('BASELINE producer accuracy:');
+ print(cmBase.producersAccuracy());
+ print('SNIC producer accuracy:');
+ print(cmCandidate.producersAccuracy());
+ print('BASELINE user accuracy:');
+ print(cmBase.consumersAccuracy());
+ print('SNIC user accuracy:');
+ print(cmCandidate.consumersAccuracy());
+ print('Correct Built-up: baseline vs SNIC:');
+ print(ee.Dictionary({baseline: baseTP, snic: candidateTP}));
+ print('Built-up true-positive change:');
+ print(candidateTP.subtract(baseTP));
+ print('Non-Built-up erroneously mapped Built-up:');
+ print(ee.Dictionary({
+   baseline: baselineFalseBuiltup,
+   snic: candidateFalseBuiltup
+ }));
+ print('=============================================');
+ print('QA REQUIRED BEFORE INTERPRETING ACCURACY.');
+ print('NO ASSETS EXPORTED OR OVERWRITTEN.');
+ print('NO MODEL IS ACCEPTED YET.');
+ print('=============================================');
+
+ // 8. Layers; SNIC/candidate OFF initially to limit load.
+ Map.layers().reset();
+ Map.setOptions('SATELLITE');
+ var palette = ['ff0000', '008000', '0000ff', 'ffff00', 'd2b48c'];
+ Map.addLayer(baseline, {min: 1, max: 5, palette: palette},
+   'LOCKED original 2015', true);
+ Map.addLayer(candidate, {min: 1, max: 5, palette: palette},
+   'X3 SNIC segmentation-assisted MLC', false);
+ Map.addLayer(segmentIDs.clip(roi).randomVisualizer(), {},
+   'SNIC segment labels (zoom in)', false);
+ Map.addLayer(segmentNDBIMean.clip(roi), {
+   min: -0.3, max: 0.3, palette: ['2166ac', 'ffffff', 'b2182b']
+ }, 'SNIC segment mean NDBI', false);
+ Map.addLayer(segmentRedSD.clip(roi), {
+   min: 0, max: 0.08, palette: ['ffffff', 'feb24c', 'bd0026']
+ }, 'SNIC segment red texture', false);
+ Map.centerObject(roi, 10);
+
+ // END STAGE 08F-4

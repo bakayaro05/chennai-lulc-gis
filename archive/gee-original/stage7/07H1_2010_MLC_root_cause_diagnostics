@@ -1,0 +1,399 @@
+
+// ============================================================
+// CHENNAI LULC — STAGE 07H1
+// 2010 MANUAL GAUSSIAN MLC — ROOT CAUSE DIAGNOSTICS
+//
+// READ-ONLY / NO EXPORT / NO RETRAINING
+//
+// Checks:
+// 1. Training resubstitution confusion matrix
+// 2. Training accuracy by source site
+// 3. Stored vs live predictor pixel consistency
+// 4. Training vs validation spectral characteristics
+// 5. Validation misclassification patterns
+// ============================================================
+
+// ------------------------------------------------------------
+// 1. CONFIGURATION
+// ------------------------------------------------------------
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var CRS = 'EPSG:32644';
+var SCALE = 30;
+
+var ORDER = [1, 2, 3, 4, 5];
+
+var BANDS = [
+  'blue', 'green', 'red',
+  'nir', 'swir1', 'swir2',
+  'NDVI', 'NDWI', 'NDBI'
+];
+
+var proj = ee.Projection(CRS).atScale(SCALE);
+
+// ------------------------------------------------------------
+// 2. LOAD EXISTING SAVED ASSETS
+// ------------------------------------------------------------
+
+var roi = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+).geometry();
+
+var training = ee.FeatureCollection(
+  ROOT + 'chennai_training_2010_manual_final_v1'
+);
+
+var validation = ee.FeatureCollection(
+  ROOT + 'chennai_validation_2010_final'
+);
+
+var classified = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2010_manual_v1'
+).select('classification');
+
+var stack = ee.Image(
+  ROOT + 'chennai_predictor_stack_2010'
+).select(BANDS);
+
+// ------------------------------------------------------------
+// 3. TRAINING-SET PREDICTIONS
+// ------------------------------------------------------------
+
+var trainPred = classified.sampleRegions({
+  collection: training,
+  properties: [
+    'class_id',
+    'site_id',
+    'grid_key'
+  ],
+  projection: proj,
+  scale: SCALE,
+  geometries: true,
+  tileScale: 8
+});
+
+var trainMatrix = trainPred.errorMatrix(
+  'class_id',
+  'classification',
+  ORDER
+);
+
+print('========================================');
+print('07H1 — ROOT CAUSE DIAGNOSTICS');
+print('========================================');
+
+print('Saved training count:');
+print(training.size());
+
+print('Training pixels with saved raster predictions:');
+print(trainPred.size());
+
+print('TRAINING CONFUSION MATRIX:');
+print(trainMatrix);
+
+print('TRAINING ACCURACY (%):');
+print(
+  ee.Number(trainMatrix.accuracy())
+    .multiply(100)
+);
+
+print('TRAINING KAPPA:');
+print(trainMatrix.kappa());
+
+print('Training producer accuracy:');
+print(trainMatrix.producersAccuracy());
+
+print('Training user accuracy:');
+print(trainMatrix.consumersAccuracy());
+
+print('IMPORTANT: Training accuracy is NOT independent accuracy.');
+
+// ------------------------------------------------------------
+// 4. TRAINING ACCURACY BY SITE
+// ------------------------------------------------------------
+
+var trainTagged = trainPred.map(function(f) {
+  return f.set(
+    'correct',
+    ee.Number(f.get('class_id')).eq(
+      ee.Number(f.get('classification'))
+    )
+  );
+});
+
+var siteIDs = ee.List(
+  training.aggregate_array('site_id')
+).distinct().sort();
+
+var siteAccuracy = ee.FeatureCollection(
+  siteIDs.map(function(id) {
+
+    var sub = trainTagged.filter(
+      ee.Filter.eq('site_id', id)
+    );
+
+    return ee.Feature(null, {
+      site_id: id,
+      class_id: sub.first().get('class_id'),
+      sample_count: sub.size(),
+      training_accuracy: sub.aggregate_mean('correct'),
+      training_errors: sub.filter(
+        ee.Filter.eq('correct', 0)
+      ).size()
+    });
+
+  })
+);
+
+print('========================================');
+print('TRAINING ACCURACY BY SITE');
+print('========================================');
+
+print(siteAccuracy.sort('training_accuracy'));
+
+// ------------------------------------------------------------
+// 5. VERIFY STORED VS LIVE NINE-BAND VALUES
+// ------------------------------------------------------------
+
+// In 07F the predictor values were saved as properties.
+// Check whether sampling the locked 2010 stack again at
+// those same locations produces matching values.
+
+var liveNames = BANDS.map(function(b) {
+  return b + '_live';
+});
+
+var liveTraining = stack
+  .rename(liveNames)
+  .sampleRegions({
+    collection: training,
+    properties: [
+      'class_id', 'site_id', 'grid_key'
+    ].concat(BANDS),
+    projection: proj,
+    scale: SCALE,
+    geometries: true,
+    tileScale: 8
+  });
+
+var pixelConsistency = liveTraining.map(function(f) {
+
+  var differences = ee.List(
+    BANDS.map(function(b) {
+
+      return ee.Number(f.get(b))
+        .subtract(
+          ee.Number(f.get(b + '_live'))
+        )
+        .abs();
+
+    })
+  );
+
+  return f.set({
+    max_absolute_band_difference:
+      differences.reduce(ee.Reducer.max())
+  });
+
+});
+
+print('========================================');
+print('TRAINING PIXEL CONSISTENCY');
+print('========================================');
+
+print('Live nine-band samples recovered:');
+print(liveTraining.size());
+
+print('Maximum absolute band difference, statistics:');
+print(
+  pixelConsistency.aggregate_stats(
+    'max_absolute_band_difference'
+  )
+);
+
+print('Number of pixels with difference > 0.000001:');
+print(
+  pixelConsistency.filter(
+    ee.Filter.gt(
+      'max_absolute_band_difference',
+      0.000001
+    )
+  ).size()
+);
+
+// ------------------------------------------------------------
+// 6. VALIDATION SPECTRAL SAMPLING
+// ------------------------------------------------------------
+
+// This measures the existing 2010 predictor values
+// at the independent validation point locations.
+//
+// No labels are changed and no points are moved.
+
+var valSpectra = stack.sampleRegions({
+  collection: validation,
+  properties: ['class_id'],
+  projection: proj,
+  scale: SCALE,
+  geometries: true,
+  tileScale: 8
+});
+
+// ------------------------------------------------------------
+// 7. TRAINING VS VALIDATION CLASS STATISTICS
+// ------------------------------------------------------------
+
+var classComparison = ee.FeatureCollection(
+  ORDER.map(function(k) {
+
+    var t = training.filter(
+      ee.Filter.eq('class_id', k)
+    );
+
+    var v = valSpectra.filter(
+      ee.Filter.eq('class_id', k)
+    );
+
+    return ee.Feature(null, {
+      class_id: k,
+
+      training_count: t.size(),
+      validation_count: v.size(),
+
+      training_NDVI: t.aggregate_mean('NDVI'),
+      validation_NDVI: v.aggregate_mean('NDVI'),
+
+      training_NDBI: t.aggregate_mean('NDBI'),
+      validation_NDBI: v.aggregate_mean('NDBI'),
+
+      training_NDWI: t.aggregate_mean('NDWI'),
+      validation_NDWI: v.aggregate_mean('NDWI')
+    });
+
+  })
+);
+
+print('========================================');
+print('TRAINING VS VALIDATION SPECTRAL QA');
+print('========================================');
+
+print('Validation points with valid predictor values:');
+print(valSpectra.size());
+
+print('Class-wise index comparisons:');
+print(classComparison);
+
+// ------------------------------------------------------------
+// 8. VALIDATION ERROR DIAGNOSTICS
+// ------------------------------------------------------------
+
+var valPred = classified.sampleRegions({
+  collection: validation,
+  properties: ['class_id'],
+  projection: proj,
+  scale: SCALE,
+  geometries: true,
+  tileScale: 8
+});
+
+var valTagged = valPred.map(function(f) {
+
+  var actual = ee.Number(f.get('class_id'));
+  var predicted = ee.Number(f.get('classification'));
+
+  return f.set({
+    correct: actual.eq(predicted),
+    error_pair: actual.format('%d')
+      .cat('_to_')
+      .cat(predicted.format('%d'))
+  });
+
+});
+
+var wrong = valTagged.filter(
+  ee.Filter.eq('correct', 0)
+);
+
+print('========================================');
+print('VALIDATION ERROR BREAKDOWN');
+print('========================================');
+
+print('Validation predictions:');
+print(valPred.size());
+
+print('Misclassified validation points:');
+print(wrong.size());
+
+print('Reference-to-predicted error pairs:');
+print(wrong.aggregate_histogram('error_pair'));
+
+// ------------------------------------------------------------
+// 9. MAP FOR OPTIONAL DIAGNOSTIC REVIEW
+// ------------------------------------------------------------
+
+Map.layers().reset();
+Map.setOptions('TERRAIN');
+Map.centerObject(roi, 10);
+
+Map.addLayer(
+  stack,
+  {
+    bands: ['red', 'green', 'blue'],
+    min: 0.02,
+    max: 0.30
+  },
+  '2010 LANDSAT TRUE COLOUR',
+  false
+);
+
+Map.addLayer(
+  classified,
+  {
+    min: 1,
+    max: 5,
+    palette: [
+      'ff0000',
+      '008000',
+      '0000ff',
+      'ffff00',
+      'd2b48c'
+    ]
+  },
+  '2010 GAUSSIAN MLC',
+  true
+);
+
+Map.addLayer(
+  wrong.style({
+    color: 'FF00FF',
+    pointSize: 3
+  }),
+  {},
+  'MISCLASSIFIED VALIDATION POINTS',
+  false
+);
+
+// ------------------------------------------------------------
+// 10. STATUS
+// ------------------------------------------------------------
+
+print('========================================');
+print('07H1 AUDIT COMPLETE');
+print('========================================');
+
+print('No training samples modified.');
+print('No validation samples modified.');
+print('No classifier retrained.');
+print('No assets exported.');
+
+print('Do not use validation results to tune');
+print('training labels or choose model parameters.');
+
+print('========================================');
+print('END STAGE 07H1');
+print('========================================');
+
+// ============================================================
+// END
+// ============================================================

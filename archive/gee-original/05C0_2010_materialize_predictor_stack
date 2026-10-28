@@ -1,0 +1,473 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05C0
+//
+// MATERIALIZE LOCKED 2010 PREDICTOR + QA STACK
+//
+// PURPOSE
+// -------
+// Build the authoritative 2010 Landsat-5 predictor stack ONCE
+// and save it as an Earth Engine image asset.
+//
+// LOCKED ORDER:
+//
+// Landsat-5 scenes
+//      ↓
+// QA masking + SR scaling
+//      ↓
+// full-year median REFLECTANCE composite
+//      ↓
+// NDVI / NDWI / NDBI calculated from median composite
+//      ↓
+// nine predictors
+//      ↓
+// clear-count QA band
+//      ↓
+// export
+//
+// IMPORTANT:
+// clear_count is QA ONLY.
+// It is NOT an MLC predictor.
+//
+// NO training.
+// NO validation.
+// NO classification.
+// NO map layers.
+// ================================================================
+
+
+// ================================================================
+// 1. SETTINGS
+// ================================================================
+
+var ROI_ASSET =
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean';
+
+
+var OUTPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var ANALYSIS_CRS =
+  'EPSG:32644';
+
+
+var ANALYSIS_SCALE =
+  30;
+
+
+var PREDICTOR_BANDS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+// ================================================================
+// 2. LOAD LOCKED ROI
+// ================================================================
+
+var studyArea =
+  ee.FeatureCollection(
+    ROI_ASSET
+  );
+
+
+var roi =
+  studyArea.geometry();
+
+
+// ================================================================
+// 3. LANDSAT-5 PREPROCESSING
+// ================================================================
+//
+// Collection 2 Tier 1 Level 2 Surface Reflectance
+//
+// QA_PIXEL reject:
+//
+// bit 0 = fill
+// bit 1 = dilated cloud
+// bit 3 = cloud
+// bit 4 = cloud shadow
+// bit 5 = snow
+//
+// QA_RADSAT must equal 0.
+//
+// Scaling:
+//
+// DN * 0.0000275 - 0.2
+//
+// ================================================================
+
+function preprocessL5(image) {
+
+  var qa =
+    image.select(
+      'QA_PIXEL'
+    );
+
+
+  var radsat =
+    image.select(
+      'QA_RADSAT'
+    );
+
+
+  var clearMask =
+    qa.bitwiseAnd(
+      1 << 0
+    )
+    .eq(0)
+
+    .and(
+      qa.bitwiseAnd(
+        1 << 1
+      )
+      .eq(0)
+    )
+
+    .and(
+      qa.bitwiseAnd(
+        1 << 3
+      )
+      .eq(0)
+    )
+
+    .and(
+      qa.bitwiseAnd(
+        1 << 4
+      )
+      .eq(0)
+    )
+
+    .and(
+      qa.bitwiseAnd(
+        1 << 5
+      )
+      .eq(0)
+    )
+
+    .and(
+      radsat.eq(0)
+    );
+
+
+  var optical =
+    image.select(
+
+      [
+        'SR_B1',
+        'SR_B2',
+        'SR_B3',
+        'SR_B4',
+        'SR_B5',
+        'SR_B7'
+      ],
+
+      [
+        'blue',
+        'green',
+        'red',
+        'nir',
+        'swir1',
+        'swir2'
+      ]
+
+    )
+
+    .multiply(
+      0.0000275
+    )
+
+    .add(
+      -0.2
+    )
+
+    .updateMask(
+      clearMask
+    );
+
+
+  return optical.copyProperties(
+
+    image,
+
+    [
+      'system:time_start',
+      'LANDSAT_PRODUCT_ID',
+      'SPACECRAFT_ID'
+    ]
+
+  );
+
+}
+
+
+// ================================================================
+// 4. BUILD FULL-YEAR 2010 LANDSAT-5 COLLECTION
+// ================================================================
+
+var C2010 =
+  ee.ImageCollection(
+    'LANDSAT/LT05/C02/T1_L2'
+  )
+
+  .filterBounds(
+    roi
+  )
+
+  .filterDate(
+    '2010-01-01',
+    '2011-01-01'
+  )
+
+  .map(
+    preprocessL5
+  );
+
+
+// ================================================================
+// 5. FULL-YEAR MEDIAN REFLECTANCE COMPOSITE
+// ================================================================
+
+var composite2010 =
+  C2010
+    .median()
+    .clip(
+      roi
+    );
+
+
+// ================================================================
+// 6. CLEAR-OBSERVATION COUNT
+// ================================================================
+//
+// QA only.
+// NOT a classifier predictor.
+//
+// ================================================================
+
+var clearCount2010 =
+  C2010
+    .select(
+      'red'
+    )
+    .count()
+    .rename(
+      'clear_count'
+    )
+    .clip(
+      roi
+    );
+
+
+// ================================================================
+// 7. CALCULATE INDICES FROM MEDIAN COMPOSITE
+// ================================================================
+//
+// IMPORTANT:
+// This is the locked project methodology.
+//
+// Indices are NOT calculated per-scene before median compositing.
+// ================================================================
+
+var blue =
+  composite2010.select(
+    'blue'
+  );
+
+
+var green =
+  composite2010.select(
+    'green'
+  );
+
+
+var red =
+  composite2010.select(
+    'red'
+  );
+
+
+var nir =
+  composite2010.select(
+    'nir'
+  );
+
+
+var swir1 =
+  composite2010.select(
+    'swir1'
+  );
+
+
+var ndvi =
+  nir
+    .subtract(
+      red
+    )
+    .divide(
+      nir.add(
+        red
+      )
+    )
+    .rename(
+      'NDVI'
+    );
+
+
+var ndwi =
+  green
+    .subtract(
+      nir
+    )
+    .divide(
+      green.add(
+        nir
+      )
+    )
+    .rename(
+      'NDWI'
+    );
+
+
+var ndbi =
+  swir1
+    .subtract(
+      nir
+    )
+    .divide(
+      swir1.add(
+        nir
+      )
+    )
+    .rename(
+      'NDBI'
+    );
+
+
+// ================================================================
+// 8. BUILD AUTHORITATIVE NINE-BAND STACK
+// ================================================================
+
+var predictorStack2010 =
+  composite2010
+    .select(
+      [
+        'blue',
+        'green',
+        'red',
+        'nir',
+        'swir1',
+        'swir2'
+      ]
+    )
+
+    .addBands(
+      ndvi
+    )
+
+    .addBands(
+      ndwi
+    )
+
+    .addBands(
+      ndbi
+    )
+
+    .select(
+      PREDICTOR_BANDS
+    )
+
+    .clip(
+      roi
+    );
+
+
+// ================================================================
+// 9. ADD QA BAND
+// ================================================================
+//
+// Final exported image contains 10 bands:
+//
+// 1 blue
+// 2 green
+// 3 red
+// 4 nir
+// 5 swir1
+// 6 swir2
+// 7 NDVI
+// 8 NDWI
+// 9 NDBI
+// 10 clear_count
+//
+// MLC will later explicitly select only the first nine.
+// ================================================================
+
+var output2010 =
+  predictorStack2010
+    .addBands(
+      clearCount2010
+    );
+
+
+// ================================================================
+// 10. MINIMAL QA
+// ================================================================
+
+print(
+  ee.String(
+    '2010 scene count = '
+  )
+  .cat(
+    C2010.size().format('%d')
+  )
+);
+
+
+print(
+  output2010.bandNames()
+);
+
+
+// ================================================================
+// 11. EXPORT ONCE
+// ================================================================
+
+Export.image.toAsset({
+
+  image:
+    output2010,
+
+  description:
+    'chennai_predictor_stack_2010',
+
+  assetId:
+    OUTPUT_ASSET,
+
+  region:
+    roi,
+
+  scale:
+    ANALYSIS_SCALE,
+
+  crs:
+    ANALYSIS_CRS,
+
+  maxPixels:
+    1e9
+
+});
+
+
+// ================================================================
+// END 05C0
+// ================================================================

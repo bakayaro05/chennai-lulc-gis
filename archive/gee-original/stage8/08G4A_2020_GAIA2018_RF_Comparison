@@ -1,0 +1,554 @@
+
+// =============================================================
+// CHENNAI LULC — STAGE 08G-4A
+// CONTROLLED GAIA-2018 POSITIVE TRAINING TEST | YEAR 2020
+//
+// Difference from Stage 08G-4:
+// Positive GAIA cutoff changes from 2015 to 2018.
+//
+// Original 2020 MLC, training, validation: unchanged.
+// No exports or original asset modifications.
+// =============================================================
+
+// 1. ORIGINAL PROJECT INPUTS
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var roi = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+).geometry();
+
+var originalTraining = ee.FeatureCollection(
+  ROOT + 'chennai_training_2020_final'
+);
+
+var originalValidation = ee.FeatureCollection(
+  ROOT + 'chennai_validation_2020_final'
+);
+
+var baseline = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2020'
+).select(0).rename('baseline');
+
+var grid = baseline.projection();
+
+var BAND9 = [
+  'blue', 'green', 'red', 'nir', 'swir1', 'swir2',
+  'NDVI', 'NDWI', 'NDBI'
+];
+
+var PREDICTORS = BAND9.concat(['BSI', 'NDBI_mean5']);
+
+var N_PER_GROUP = 150;
+var SEED = 20261022;
+
+// =============================================================
+// 2. SAME 2020 LANDSAT PREPROCESSING
+// =============================================================
+
+function preprocess(image) {
+
+  var clear = image.select('QA_PIXEL')
+    .bitwiseAnd(63).eq(0)
+    .and(image.select('QA_RADSAT').eq(0));
+
+  return image.select(
+    ['SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B6', 'SR_B7'],
+    ['blue', 'green', 'red', 'nir', 'swir1', 'swir2']
+  )
+  .multiply(0.0000275)
+  .subtract(0.2)
+  .updateMask(clear);
+
+}
+
+var scenes = ee.ImageCollection(
+  'LANDSAT/LC08/C02/T1_L2'
+)
+.filterBounds(roi)
+.filterDate('2020-01-01', '2021-01-01')
+.map(preprocess);
+
+var median = scenes.median();
+
+var blue = median.select('blue');
+var red = median.select('red');
+var green = median.select('green');
+var nir = median.select('nir');
+var swir1 = median.select('swir1');
+
+var spectral = median.addBands([
+
+  nir.subtract(red)
+    .divide(nir.add(red))
+    .rename('NDVI'),
+
+  green.subtract(nir)
+    .divide(green.add(nir))
+    .rename('NDWI'),
+
+  swir1.subtract(nir)
+    .divide(swir1.add(nir))
+    .rename('NDBI'),
+
+  swir1.add(red)
+    .subtract(nir)
+    .subtract(blue)
+    .divide(
+      swir1.add(red).add(nir).add(blue)
+    )
+    .rename('BSI')
+
+]).reproject(grid);
+
+var ndbi5 = spectral.select('NDBI')
+  .reduceNeighborhood({
+
+    reducer: ee.Reducer.mean(),
+
+    kernel: ee.Kernel.square({
+      radius: 2,
+      units: 'pixels',
+      normalize: false
+    }),
+
+    skipMasked: true
+
+  })
+  .rename('NDBI_mean5');
+
+var stack = spectral.addBands(ndbi5)
+  .select(PREDICTORS)
+  .clip(roi);
+
+// =============================================================
+// 3. GAIA REFERENCE - NOW USING 2018
+// =============================================================
+
+// GAIA index:
+// 2018 = 1
+// 2015 = 4
+// 2010 = 9
+// 1985 = 34
+
+var gaia = ee.Image(
+  'Tsinghua/FROM-GLC/GAIA/v10'
+)
+.select('change_year_index')
+.unmask(0)
+.reproject(grid);
+
+// CHANGED:
+// Positive Built-up samples now use ALL impervious
+// pixels identified by GAIA up to and including 2018.
+
+var by2018 = gaia.gte(1)
+  .and(gaia.lte(34));
+
+// =============================================================
+// 4. EXCLUDE ORIGINAL TRAINING/VALIDATION NEIGHBOURHOODS
+// =============================================================
+
+var excluded = originalTraining
+  .merge(originalValidation)
+  .map(function(f) {
+
+    return ee.Feature(
+      f.geometry().buffer(90)
+    );
+
+  });
+
+var nearReference = ee.Image.constant(0)
+  .toByte()
+  .paint(excluded, 1)
+  .reproject(grid);
+
+var eligible = nearReference.eq(0);
+
+// =============================================================
+// 5. AUTOMATED PSEUDO-TRAINING GROUPS
+// =============================================================
+
+// Group 1:
+// GAIA impervious by 2018 + MLC class 4
+// -> provisional Built-up label.
+//
+// Group 2:
+// GAIA impervious by 2018 + MLC class 5
+// -> provisional Built-up label.
+//
+// Group 3:
+// Not impervious by GAIA 2018 + MLC class 4
+// -> provisional Agricultural/Open label.
+//
+// Group 4:
+// Not impervious by GAIA 2018 + MLC class 5
+// -> provisional Barren/Fallow label.
+//
+// All groups contain provisional pseudo-labels.
+// GAIA does not document construction in 2019-2020.
+
+var pos4 = by2018.and(baseline.eq(4));
+var pos5 = by2018.and(baseline.eq(5));
+
+var neg4 = by2018.not().and(baseline.eq(4));
+var neg5 = by2018.not().and(baseline.eq(5));
+
+var strata = ee.Image.constant(0)
+  .toByte()
+  .where(pos4, 1)
+  .where(pos5, 2)
+  .where(neg4, 3)
+  .where(neg5, 4)
+  .rename('stratum');
+
+strata = strata
+  .updateMask(strata.gt(0))
+  .updateMask(eligible)
+  .clip(roi);
+
+// =============================================================
+// 6. SAMPLE 150 PIXELS FROM EACH GROUP
+// =============================================================
+
+var pseudo = strata.addBands(stack)
+  .stratifiedSample({
+
+    numPoints: 0,
+
+    classBand: 'stratum',
+
+    region: roi,
+
+    projection: grid,
+
+    classValues: [1, 2, 3, 4],
+
+    classPoints: [
+      N_PER_GROUP,
+      N_PER_GROUP,
+      N_PER_GROUP,
+      N_PER_GROUP
+    ],
+
+    seed: SEED,
+
+    tileScale: 8,
+
+    dropNulls: true,
+
+    geometries: false
+
+  })
+  .map(function(f) {
+
+    var group = ee.Number(f.get('stratum'));
+
+    var cid = ee.Number(
+      ee.Algorithms.If(
+        group.lte(2),
+        1,
+        ee.Algorithms.If(
+          group.eq(3),
+          4,
+          5
+        )
+      )
+    );
+
+    return f.set({
+      class_id: cid,
+      rf_label: cid.subtract(1),
+      reference_source: 'GAIA_2018_assisted_pseudo'
+    });
+
+  });
+
+// =============================================================
+// 7. PRESERVE ORIGINAL 600 TRAINING POINTS
+// =============================================================
+
+var manual = stack.sampleRegions({
+
+  collection: originalTraining,
+
+  properties: ['class_id'],
+
+  projection: grid,
+
+  tileScale: 8,
+
+  geometries: false
+
+})
+.map(function(f) {
+
+  return f.set({
+
+    rf_label: ee.Number(
+      f.get('class_id')
+    ).subtract(1),
+
+    reference_source: 'original_training'
+
+  });
+
+});
+
+var train = manual.merge(pseudo);
+
+// =============================================================
+// 8. SAME RANDOM FOREST SETTINGS
+// =============================================================
+
+var classifier = ee.Classifier
+  .smileRandomForest({
+
+    numberOfTrees: 160,
+
+    minLeafPopulation: 3,
+
+    bagFraction: 0.7,
+
+    seed: SEED
+
+  })
+  .train({
+
+    features: train,
+
+    classProperty: 'rf_label',
+
+    inputProperties: PREDICTORS
+
+  });
+
+var candidate = stack.classify(classifier)
+  .add(1)
+  .toByte()
+  .rename('candidate')
+  .updateMask(baseline.mask())
+  .clip(roi);
+
+// =============================================================
+// 9. SAME 300 VALIDATION POINTS
+// =============================================================
+
+var checked = baseline.addBands(candidate)
+  .sampleRegions({
+
+    collection: originalValidation,
+
+    properties: ['class_id'],
+
+    projection: grid,
+
+    tileScale: 8,
+
+    geometries: false
+
+  })
+  .map(function(f) {
+
+    var actual = ee.Number(f.get('class_id'));
+
+    var oldClass = ee.Number(f.get('baseline'));
+
+    var newClass = ee.Number(f.get('candidate'));
+
+    return f.set({
+
+      correctness_delta: newClass.eq(actual)
+        .subtract(oldClass.eq(actual)),
+
+      prediction_changed: newClass.neq(oldClass)
+
+    });
+
+  });
+
+var ORDER = [1, 2, 3, 4, 5];
+
+var cmOld = checked.errorMatrix(
+  'class_id',
+  'baseline',
+  ORDER
+);
+
+var cmNew = checked.errorMatrix(
+  'class_id',
+  'candidate',
+  ORDER
+);
+
+var bu = checked.filter(
+  ee.Filter.eq('class_id', 1)
+);
+
+var nonBU = checked.filter(
+  ee.Filter.neq('class_id', 1)
+);
+
+// =============================================================
+// 10. CONSOLE RESULTS
+// =============================================================
+
+print('==========================================');
+print('STAGE 08G-4A | 2020 GAIA-2018 RF TEST');
+print('==========================================');
+
+print('ONLY change: GAIA positive cutoff 2015 -> 2018.');
+
+print('2020 Landsat scenes (expect 21):');
+print(scenes.size());
+
+print('Original training (expect 600):');
+print(manual.size());
+
+print('Original class balance (expect 120/class):');
+print(manual.aggregate_histogram('class_id'));
+
+print('GAIA-2018 pseudo groups (target 150 each):');
+print(pseudo.aggregate_histogram('stratum'));
+
+print('Combined training class balance:');
+print(train.aggregate_histogram('class_id'));
+
+print('Validation records (expect 300):');
+print(checked.size());
+
+print('ORIGINAL 2020 MLC confusion matrix:');
+print(cmOld);
+
+print('NEW GAIA-2018 RF confusion matrix:');
+print(cmNew);
+
+print('Original / GAIA-2018 RF overall accuracy:');
+
+print(ee.Dictionary({
+  original: cmOld.accuracy(),
+  RF2018: cmNew.accuracy()
+}));
+
+print('Original / GAIA-2018 RF Built-up recall:');
+
+print(ee.Dictionary({
+  original: cmOld.producersAccuracy().get([0,0]),
+  RF2018: cmNew.producersAccuracy().get([0,0])
+}));
+
+print('Built-up true positives:');
+
+print(ee.Dictionary({
+
+  original: bu.filter(
+    ee.Filter.eq('baseline', 1)
+  ).size(),
+
+  RF2018: bu.filter(
+    ee.Filter.eq('candidate', 1)
+  ).size()
+
+}));
+
+print('Built-up false positives:');
+
+print(ee.Dictionary({
+
+  original: nonBU.filter(
+    ee.Filter.eq('baseline', 1)
+  ).size(),
+
+  RF2018: nonBU.filter(
+    ee.Filter.eq('candidate', 1)
+  ).size()
+
+}));
+
+print('Paired validation changes:');
+
+print(ee.Dictionary({
+
+  improved: checked.filter(
+    ee.Filter.eq('correctness_delta', 1)
+  ).size(),
+
+  worsened: checked.filter(
+    ee.Filter.eq('correctness_delta', -1)
+  ).size(),
+
+  changed_prediction: checked.filter(
+    ee.Filter.eq('prediction_changed', 1)
+  ).size()
+
+}));
+
+print('==========================================');
+print('REFERENCE FOR COMPARISON');
+print('==========================================');
+
+print('Previous 08G-4 GAIA-2015 RF:');
+print('Overall accuracy = 79.00%');
+print('Built-up recall = 71.67%');
+print('Built-up false positives = 31');
+
+print('Original MLC: OA 86.33%, BU recall 86.67%, FP 4');
+
+print('GAIA pseudo-labels are not ground truth.');
+print('Original assets unchanged.');
+print('NO EXPORT TASK.');
+
+// =============================================================
+// 11. MAP PREVIEW
+// =============================================================
+
+var palette = [
+  'ff0000',
+  '008000',
+  '0000ff',
+  'ffff00',
+  'd2b48c'
+];
+
+Map.layers().reset();
+
+Map.setOptions('SATELLITE');
+
+Map.addLayer(
+  baseline,
+  {min: 1, max: 5, palette: palette},
+  '2020 ORIGINAL MLC',
+  true
+);
+
+Map.addLayer(
+  candidate,
+  {min: 1, max: 5, palette: palette},
+  '2020 GAIA-2018 RF',
+  false
+);
+
+Map.addLayer(
+  candidate.eq(1)
+    .and(baseline.neq(1))
+    .selfMask(),
+  {palette: ['00ffff']},
+  '2020 NEW Built-up - GAIA 2018 RF',
+  false
+);
+
+Map.addLayer(
+  baseline.eq(1)
+    .and(candidate.neq(1))
+    .selfMask(),
+  {palette: ['ff00ff']},
+  '2020 LOST Built-up - GAIA 2018 RF',
+  false
+);
+
+Map.centerObject(roi, 10);
+
+// =============================================================
+// END STAGE 08G-4A
+// =============================================================

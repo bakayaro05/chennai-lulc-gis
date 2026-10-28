@@ -1,0 +1,187 @@
+
+ // ============================================================
+ // CHENNAI LULC — STAGE 07J
+ // DIRECT 2015 GAUSSIAN MLC MODEL -> 2010 LANDSAT STACK
+ // DIAGNOSTIC ONLY: no 2010 training, no exports, no changes.
+ // IMPORTANT: UNHARMONIZED Landsat 8 (2015) -> Landsat 5 (2010).
+ // ============================================================
+
+ var ROOT = 'projects/assignment-482806/assets/';
+ var BANDS = [
+   'blue', 'green', 'red', 'nir', 'swir1', 'swir2',
+   'NDVI', 'NDWI', 'NDBI'
+ ];
+ var CLASSES = [1, 2, 3, 4, 5];
+ var REGULARIZATION = 1e-6;
+ var CRS = 'EPSG:32644';
+ var SCALE = 30;
+
+ // Existing completed 2015 training features, measured using Landsat 8.
+ var training2015 = ee.FeatureCollection(
+   ROOT + 'chennai_training_2015_final'
+ );
+
+ // Saved Landsat 5 predictor stack for the year 2010.
+ var stack2010 = ee.Image(
+   ROOT + 'chennai_predictor_stack_2010'
+ ).select(BANDS);
+
+ // Reserved 2010 reference points. Used ONLY to assess the transfer.
+ var validation2010 = ee.FeatureCollection(
+   ROOT + 'chennai_validation_2010_final'
+ );
+
+ var roi = ee.FeatureCollection(
+   ROOT + 'chennai_admin_study_area_clean'
+ ).geometry();
+
+ print('==============================================');
+ print('07J — DIRECT 2015 MLC MODEL ON 2010');
+ print('==============================================');
+ print('EXPERIMENT ONLY: Landsat 8 -> Landsat 5 WITHOUT harmonization.');
+ print('2015 training count (expected 600):');
+ print(training2015.size());
+ print('2015 training class counts (expected 120 each):');
+ print(training2015.aggregate_histogram('class_id'));
+ print('2010 predictor band order:');
+ print(stack2010.bandNames());
+ print('2010 validation point count (expected 300):');
+ print(validation2010.size());
+ print('2010 validation class counts:');
+ print(validation2010.aggregate_histogram('class_id'));
+
+ // Reconstruct the actual 2015 Gaussian MLC statistics.
+ // NO 2010 training points are involved in fitting.
+ function fitGaussianFrom2015(classID) {
+   var fc = training2015.filter(ee.Filter.eq('class_id', classID));
+   var meanValues = BANDS.map(function(b) {
+     return fc.aggregate_mean(b);
+   });
+   var mu = ee.Array([meanValues]).transpose();
+   var arrayFC = fc.makeArray(BANDS, 'model_array_2015');
+   var covDict = arrayFC.reduceColumns({
+     reducer: ee.Reducer.covariance().setOutputs(['covariance']),
+     selectors: ['model_array_2015']
+   });
+   var cov = ee.Array(covDict.get('covariance'));
+   var regularized = cov.add(
+     ee.Array.identity(BANDS.length).multiply(REGULARIZATION)
+   );
+   return ee.Dictionary({
+     class_id: classID,
+     n: fc.size(),
+     mean: mu,
+     determinant: regularized.matrixDeterminant(),
+     inverse: regularized.matrixInverse()
+   });
+ }
+
+ var parameters = CLASSES.map(fitGaussianFrom2015);
+
+ var parameterQA = ee.FeatureCollection(
+   CLASSES.map(function(k) {
+     var p = ee.Dictionary(parameters[k - 1]);
+     var determinant = ee.Number(p.get('determinant'));
+     return ee.Feature(null, {
+       class_id: k,
+       n: p.get('n'),
+       regularized_determinant: determinant,
+       determinant_positive: determinant.gt(0)
+     });
+   })
+ );
+ print('==============================================');
+ print('2015 MODEL PARAMETER QA');
+ print('==============================================');
+ print(parameterQA);
+
+ // Evaluate the 2015 class Gaussian log likelihoods on 2010 pixels.
+ var predictorColumn = stack2010.toArray().toArray(1);
+ function gaussianScore2010(param, outName) {
+   var p = ee.Dictionary(param);
+   var mean = ee.Image.constant(ee.Array(p.get('mean')));
+   var inverse = ee.Image.constant(ee.Array(p.get('inverse')));
+   var determinant = ee.Number(p.get('determinant')).max(1e-300);
+   var delta = predictorColumn.subtract(mean);
+   var squaredDistance = delta
+     .arrayTranspose()
+     .matrixMultiply(inverse)
+     .matrixMultiply(delta)
+     .arrayGet([0, 0]);
+   return squaredDistance.multiply(-0.5)
+     .subtract(ee.Image.constant(determinant.log()).multiply(0.5))
+     .rename(outName);
+ }
+
+ var scoreImages = CLASSES.map(function(k) {
+   return gaussianScore2010(parameters[k - 1], 'score_' + k);
+ });
+ var transferred2010 = ee.Image.cat(scoreImages)
+   .toArray()
+   .arrayArgmax()
+   .arrayGet([0])
+   .add(1)
+   .rename('predicted_class')
+   .toInt8()
+   .clip(roi);
+
+ // Evaluation at the pre-existing, unchanged 2010 reference points.
+ var predictedPoints = transferred2010.sampleRegions({
+   collection: validation2010,
+   properties: ['class_id'],
+   projection: ee.Projection(CRS).atScale(SCALE),
+   scale: SCALE,
+   geometries: false,
+   tileScale: 8
+ });
+
+ var matrix = predictedPoints.errorMatrix(
+   'class_id', 'predicted_class', CLASSES
+ );
+
+ print('==============================================');
+ print('TRANSFER VALIDATION COVERAGE');
+ print('==============================================');
+ print('2010 validation points with predictions (expected 300):');
+ print(predictedPoints.size());
+ print('Missing predictions (expected 0):');
+ print(validation2010.size().subtract(predictedPoints.size()));
+ print('Prediction counts by class:');
+ print(predictedPoints.aggregate_histogram('predicted_class'));
+ print('==============================================');
+ print('DIRECT 2015 -> 2010 TRANSFER RESULTS');
+ print('==============================================');
+ print('Confusion matrix: rows reference, columns predicted; order 1-5.');
+ print(matrix);
+ print('Overall accuracy (%):');
+ print(ee.Number(matrix.accuracy()).multiply(100));
+ print('Kappa:');
+ print(matrix.kappa());
+ print('Producer accuracies:');
+ print(matrix.producersAccuracy());
+ print('User accuracies:');
+ print(matrix.consumersAccuracy());
+ print('==============================================');
+ print('BENCHMARK: 2010 MANUAL NINE-BAND BASELINE');
+ print('==============================================');
+ print('Baseline independent 2010 validation OA: 59.3333%.');
+ print('Baseline Barren/Open reference -> Agriculture: 20/60.');
+ print('Baseline Barren/Open reference -> Barren/Open: 21/60.');
+ print('NOTE: both methods assessed on already-examined 2010 validation set.');
+ print('NOTE: direct cross-sensor transfer is NOT harmonized.');
+ print('Poor direct-transfer OA does not rule out harmonized model transfer.');
+
+ // Optional preview ONLY. Off by default to avoid unnecessary computation.
+ Map.centerObject(roi, 10);
+ Map.addLayer(
+   transferred2010,
+   {min: 1, max: 5, palette: [
+     'ff0000', '008000', '0000ff', 'ffff00', 'd2b48c'
+   ]},
+   '2010: DIRECT 2015 MLC MODEL (EXPERIMENTAL)',
+   false
+ );
+
+ print('==============================================');
+ print('07J COMPLETE — NO ASSETS MODIFIED OR EXPORTED');
+ print('==============================================');

@@ -1,0 +1,571 @@
+// ============================================================================
+// 06D6 — 2010 V2C MATERIALIZED FINAL QA
+// ============================================================================
+//
+// PURPOSE
+// -------
+// Verify the ACTUAL exported 2010 V2C training asset.
+//
+// This is the definitive post-materialization checkpoint before Gaussian MLC.
+//
+// CHECKS:
+//   1. 600 total
+//   2. 120/class
+//   3. rejected Vegetation poly 16 absent
+//   4. three known Agricultural/Open proximity pixels absent
+//   5. no duplicate/cross-class pixels
+//   6. 0 training pixels within 30 m of locked validation
+//   7. 600 predictor-complete
+//   8. clear_count >= 2
+//   9. seven correction replacements still >60 m from validation
+//
+// QA ONLY.
+// NO EXPORT.
+// NO CLASSIFIER.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 1. ASSETS
+// ============================================================================
+
+var TRAINING_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final_v2c_corrected';
+
+var VALIDATION_ASSET =
+  'projects/assignment-482806/assets/chennai_validation_2010_final';
+
+
+// ============================================================================
+// 2. CONSTANTS
+// ============================================================================
+
+var FINAL_EXCLUSION_M = 30;
+var REPLACEMENT_SAFETY_M = 60;
+
+var PREDICTORS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+
+// ============================================================================
+// 3. LOAD MATERIALIZED ASSETS
+// ============================================================================
+
+var training =
+  ee.FeatureCollection(
+    TRAINING_ASSET
+  );
+
+var validation =
+  ee.FeatureCollection(
+    VALIDATION_ASSET
+  );
+
+
+// ============================================================================
+// 4. TOTAL COUNTS
+// ============================================================================
+
+print('========================================');
+print('06D6 — MATERIALIZED ASSET TOTALS');
+print('========================================');
+
+print(
+  ee.Dictionary({
+
+    training_total:
+      training.size(),
+
+    expected_training:
+      600,
+
+    validation_total:
+      validation.size(),
+
+    expected_validation:
+      300
+
+  })
+);
+
+
+// ============================================================================
+// 5. DIRECT CLASS COUNTS
+// ============================================================================
+
+print('========================================');
+print('06D6 — FINAL CLASS COUNTS');
+print('========================================');
+
+
+[1, 2, 3, 4, 5].forEach(
+  function(classId) {
+
+    var n =
+      training
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+        .size();
+
+    print(
+      ee.String('Class ')
+        .cat(String(classId))
+        .cat(' = ')
+        .cat(
+          n.format('%d')
+        )
+    );
+
+  }
+);
+
+
+print(
+  ee.String('TOTAL = ')
+    .cat(
+      training.size().format('%d')
+    )
+);
+
+
+// ============================================================================
+// 6. AUTHORITATIVE VEGETATION LEDGER
+// ============================================================================
+
+var vegetation =
+  training.filter(
+    ee.Filter.eq(
+      'class_id',
+      2
+    )
+  );
+
+
+print('========================================');
+print('06D6 — VEGETATION LEDGER');
+print('========================================');
+
+
+print(
+  ee.Dictionary({
+
+    vegetation_total:
+      vegetation.size(),
+
+    rejected_poly16_remaining:
+      vegetation
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            16
+          )
+        )
+        .size(),
+
+    poly17:
+      vegetation
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            17
+          )
+        )
+        .size(),
+
+    poly25:
+      vegetation
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            25
+          )
+        )
+        .size(),
+
+    poly26:
+      vegetation
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            26
+          )
+        )
+        .size()
+
+  })
+);
+
+
+// ============================================================================
+// 7. KNOWN AGRICULTURAL/OPEN PROXIMITY PIXELS
+// ============================================================================
+
+var BAD_AGRI_1 =
+  '14001.500000_48638.500000';
+
+var BAD_AGRI_2 =
+  '13990.500000_48640.500000';
+
+var BAD_AGRI_3 =
+  '13985.500000_48632.500000';
+
+
+print('========================================');
+print('06D6 — KNOWN BAD PIXEL ABSENCE');
+print('========================================');
+
+
+print(
+  ee.Dictionary({
+
+    bad_agri_1_remaining:
+      training
+        .filter(
+          ee.Filter.eq(
+            'auth_pixel_key',
+            BAD_AGRI_1
+          )
+        )
+        .size(),
+
+    bad_agri_2_remaining:
+      training
+        .filter(
+          ee.Filter.eq(
+            'auth_pixel_key',
+            BAD_AGRI_2
+          )
+        )
+        .size(),
+
+    bad_agri_3_remaining:
+      training
+        .filter(
+          ee.Filter.eq(
+            'auth_pixel_key',
+            BAD_AGRI_3
+          )
+        )
+        .size()
+
+  })
+);
+
+
+// ============================================================================
+// 8. PIXEL UNIQUENESS
+// ============================================================================
+
+var uniqueClassPixels =
+  training.distinct([
+    'pixel_class_key'
+  ]);
+
+var uniqueSpatialPixels =
+  training.distinct([
+    'auth_pixel_key'
+  ]);
+
+
+print('========================================');
+print('06D6 — PIXEL INTEGRITY');
+print('========================================');
+
+
+print(
+  ee.Dictionary({
+
+    total_rows:
+      training.size(),
+
+    unique_class_pixels:
+      uniqueClassPixels.size(),
+
+    unique_spatial_pixels:
+      uniqueSpatialPixels.size(),
+
+    duplicate_same_class_rows:
+      ee.Number(
+        training.size()
+      )
+      .subtract(
+        uniqueClassPixels.size()
+      ),
+
+    cross_class_conflict_excess:
+      ee.Number(
+        uniqueClassPixels.size()
+      )
+      .subtract(
+        uniqueSpatialPixels.size()
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 9. FINAL 30 m TRAINING / VALIDATION INDEPENDENCE
+// ============================================================================
+
+var within30m =
+  ee.Filter.withinDistance({
+
+    distance:
+      FINAL_EXCLUSION_M,
+
+    leftField:
+      '.geo',
+
+    rightField:
+      '.geo',
+
+    maxError:
+      1
+
+  });
+
+
+var independentTraining =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      training,
+
+      validation,
+
+      within30m
+
+    )
+
+  );
+
+
+print('========================================');
+print('06D6 — FINAL 30 m VALIDATION INDEPENDENCE');
+print('========================================');
+
+
+print(
+  ee.Dictionary({
+
+    training_total:
+      training.size(),
+
+    surviving_30m_exclusion:
+      independentTraining.size(),
+
+    within_30m_validation:
+      ee.Number(
+        training.size()
+      )
+      .subtract(
+        independentTraining.size()
+      ),
+
+    required_overlap:
+      0
+
+  })
+);
+
+
+// ============================================================================
+// 10. PREDICTOR COMPLETENESS
+// ============================================================================
+
+var predictorComplete =
+  training.filter(
+    ee.Filter.notNull(
+      PREDICTORS.concat([
+        'clear_count'
+      ])
+    )
+  );
+
+
+print('========================================');
+print('06D6 — ATTRIBUTE COMPLETENESS');
+print('========================================');
+
+
+print(
+  ee.Dictionary({
+
+    predictor_complete:
+      predictorComplete.size(),
+
+    expected:
+      600,
+
+    min_clear_count:
+      training.aggregate_min(
+        'clear_count'
+      ),
+
+    max_clear_count:
+      training.aggregate_max(
+        'clear_count'
+      ),
+
+    mean_clear_count:
+      training.aggregate_mean(
+        'clear_count'
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 11. CORRECTION REPLACEMENT CHECK
+// ============================================================================
+
+var corrections =
+  training.filter(
+    ee.Filter.notNull([
+      'correction_type'
+    ])
+  );
+
+
+print('========================================');
+print('06D6 — CORRECTION REPLACEMENTS');
+print('========================================');
+
+
+print(
+  ee.Dictionary({
+
+    correction_rows:
+      corrections.size(),
+
+    expected_corrections:
+      7
+
+  })
+);
+
+
+print(
+  'Correction type histogram'
+);
+
+print(
+  corrections.aggregate_histogram(
+    'correction_type'
+  )
+);
+
+
+// ============================================================================
+// 12. 60 m SAFETY OF THE SEVEN CORRECTIONS
+// ============================================================================
+
+var within60m =
+  ee.Filter.withinDistance({
+
+    distance:
+      REPLACEMENT_SAFETY_M,
+
+    leftField:
+      '.geo',
+
+    rightField:
+      '.geo',
+
+    maxError:
+      1
+
+  });
+
+
+var correctionsSafe60 =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      corrections,
+
+      validation,
+
+      within60m
+
+    )
+
+  );
+
+
+print('========================================');
+print('06D6 — CORRECTION 60 m SAFETY');
+print('========================================');
+
+
+print(
+  ee.Dictionary({
+
+    correction_total:
+      corrections.size(),
+
+    beyond_60m:
+      correctionsSafe60.size(),
+
+    within_60m:
+      ee.Number(
+        corrections.size()
+      )
+      .subtract(
+        correctionsSafe60.size()
+      ),
+
+    expected_within_60m:
+      0
+
+  })
+);
+
+
+// ============================================================================
+// 13. FINAL LOCK CHECK
+// ============================================================================
+
+print('========================================');
+print('06D6 — FINAL LOCK CONDITIONS');
+print('========================================');
+
+print('EXPECTED:');
+print('Training total = 600');
+print('Classes = 120 / 120 / 120 / 120 / 120');
+print('Vegetation poly16 = 0');
+print('All three known bad Agricultural/Open pixels = 0');
+print('Duplicate same-class rows = 0');
+print('Cross-class conflicts = 0');
+print('Within 30 m validation = 0');
+print('Predictor complete = 600');
+print('Minimum clear_count >= 2');
+print('Correction rows = 7');
+print('Corrections within 60 m validation = 0');
+
+print('========================================');
+print('NO EXPORT CREATED.');
+print('NO CLASSIFIER RUN.');
+print('========================================');
+
+// ============================================================================
+// END 06D6
+// ============================================================================

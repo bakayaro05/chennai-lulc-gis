@@ -1,0 +1,753 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05F1B
+//
+// 2010 GAUSSIAN MLC — CLASSIFICATION EXPORT ONLY
+//
+// PURPOSE
+// -------
+// Recreate the already-verified 2010 Gaussian MLC classification
+// from LOCKED materialized inputs and create ONE export task.
+//
+// This script does NOT:
+// - modify training
+// - use validation
+// - calculate accuracy
+// - calculate area
+// - create map layers
+//
+// INPUTS
+// ------
+// chennai_predictor_stack_2010
+// chennai_training_2010_final
+//
+// OUTPUT
+// ------
+// chennai_mlc_lulc_2010
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSETS
+// ================================================================
+
+var ROI_ASSET =
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean';
+
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var TRAINING_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final';
+
+
+var OUTPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_mlc_lulc_2010';
+
+
+// ================================================================
+// 2. LOCKED SETTINGS
+// ================================================================
+
+var ANALYSIS_CRS =
+  'EPSG:32644';
+
+
+var ANALYSIS_SCALE =
+  30;
+
+
+var MLC_REGULARIZATION =
+  1e-6;
+
+
+var MLC_BANDS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+var NUM_MLC_BANDS =
+  MLC_BANDS.length;
+
+
+// ================================================================
+// 3. LOAD LOCKED INPUTS
+// ================================================================
+
+var roiFC =
+  ee.FeatureCollection(
+    ROI_ASSET
+  );
+
+
+var roi =
+  roiFC.geometry();
+
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  )
+  .select(
+    MLC_BANDS
+  );
+
+
+var training2010 =
+  ee.FeatureCollection(
+    TRAINING_ASSET
+  );
+
+
+// ================================================================
+// 4. INPUT QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05F1B — EXPORT-ONLY INPUT QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    training_total:
+      training2010.size(),
+
+    predictor_band_count:
+      stack2010.bandNames().size()
+
+  })
+);
+
+
+print(
+  'Training class histogram'
+);
+
+
+print(
+  training2010.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ================================================================
+// 5. BUILD GAUSSIAN PARAMETERS
+// ================================================================
+
+function buildClassParameters(
+  classId
+) {
+
+  var classSamples =
+    training2010
+
+      .filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      )
+
+      .filter(
+        ee.Filter.notNull(
+          MLC_BANDS
+        )
+      );
+
+
+  // --------------------------------------------------------------
+  // MEAN VECTOR — 9 x 1
+  // --------------------------------------------------------------
+
+  var meanValues =
+    MLC_BANDS.map(
+      function(bandName) {
+
+        return classSamples.aggregate_mean(
+          bandName
+        );
+
+      }
+    );
+
+
+  var meanVector =
+    ee.Array([
+      meanValues
+    ])
+    .transpose();
+
+
+  // --------------------------------------------------------------
+  // ARRAY PROPERTY FOR COVARIANCE
+  // --------------------------------------------------------------
+
+  var arraySamples =
+    classSamples.makeArray(
+      MLC_BANDS,
+      'mlc_vector'
+    );
+
+
+  // --------------------------------------------------------------
+  // FULL COVARIANCE MATRIX
+  // --------------------------------------------------------------
+
+  var covarianceResult =
+    arraySamples.reduceColumns({
+
+      reducer:
+        ee.Reducer.covariance(),
+
+      selectors: [
+        'mlc_vector'
+      ]
+
+    });
+
+
+  var covariance =
+    ee.Array(
+
+      ee.Dictionary(
+        covarianceResult
+      )
+      .values()
+      .get(
+        0
+      )
+
+    );
+
+
+  // --------------------------------------------------------------
+  // REGULARIZATION
+  // --------------------------------------------------------------
+
+  var regularizedCovariance =
+    covariance.add(
+
+      ee.Array
+        .identity(
+          NUM_MLC_BANDS
+        )
+        .multiply(
+          MLC_REGULARIZATION
+        )
+
+    );
+
+
+  // --------------------------------------------------------------
+  // DETERMINANT + INVERSE
+  // --------------------------------------------------------------
+
+  var determinant =
+    regularizedCovariance
+      .matrixDeterminant();
+
+
+  var inverse =
+    regularizedCovariance
+      .matrixInverse();
+
+
+  return ee.Dictionary({
+
+    class_id:
+      classId,
+
+    training_n:
+      classSamples.size(),
+
+    mean:
+      meanVector,
+
+    determinant:
+      determinant,
+
+    inverse:
+      inverse
+
+  });
+
+}
+
+
+// ================================================================
+// 6. BUILD PARAMETERS FOR FIVE CLASSES
+// ================================================================
+
+var params1 =
+  buildClassParameters(1);
+
+var params2 =
+  buildClassParameters(2);
+
+var params3 =
+  buildClassParameters(3);
+
+var params4 =
+  buildClassParameters(4);
+
+var params5 =
+  buildClassParameters(5);
+
+
+// ================================================================
+// 7. PARAMETER QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05F1B — PARAMETER QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    class_id:
+      1,
+
+    training_n:
+      params1.get('training_n'),
+
+    determinant:
+      params1.get('determinant')
+
+  })
+);
+
+
+print(
+  ee.Dictionary({
+
+    class_id:
+      2,
+
+    training_n:
+      params2.get('training_n'),
+
+    determinant:
+      params2.get('determinant')
+
+  })
+);
+
+
+print(
+  ee.Dictionary({
+
+    class_id:
+      3,
+
+    training_n:
+      params3.get('training_n'),
+
+    determinant:
+      params3.get('determinant')
+
+  })
+);
+
+
+print(
+  ee.Dictionary({
+
+    class_id:
+      4,
+
+    training_n:
+      params4.get('training_n'),
+
+    determinant:
+      params4.get('determinant')
+
+  })
+);
+
+
+print(
+  ee.Dictionary({
+
+    class_id:
+      5,
+
+    training_n:
+      params5.get('training_n'),
+
+    determinant:
+      params5.get('determinant')
+
+  })
+);
+
+
+// ================================================================
+// 8. GAUSSIAN SCORE FUNCTION
+// ================================================================
+//
+// g_i(x) =
+//
+// -0.5 * [(x-mu)' Sigma^-1 (x-mu)]
+// -0.5 * ln(|Sigma|)
+//
+// Equal priors and common Gaussian normalization constants
+// are omitted because they are identical for all classes.
+//
+// ================================================================
+
+function createScore(
+  classParams,
+  scoreBandName
+) {
+
+  classParams =
+    ee.Dictionary(
+      classParams
+    );
+
+
+  var meanVector =
+    ee.Array(
+      classParams.get(
+        'mean'
+      )
+    );
+
+
+  var inverseCovariance =
+    ee.Array(
+      classParams.get(
+        'inverse'
+      )
+    );
+
+
+  var determinant =
+    ee.Number(
+      classParams.get(
+        'determinant'
+      )
+    );
+
+
+  // --------------------------------------------------------------
+  // PIXEL VECTOR — 9 x 1
+  // --------------------------------------------------------------
+
+  var imageVector =
+    stack2010
+
+      .select(
+        MLC_BANDS
+      )
+
+      .toArray()
+
+      .toArray(
+        1
+      );
+
+
+  // --------------------------------------------------------------
+  // MEAN VECTOR IMAGE
+  // --------------------------------------------------------------
+
+  var meanImage =
+    ee.Image.constant(
+      meanVector
+    );
+
+
+  // --------------------------------------------------------------
+  // DIFFERENCE
+  // --------------------------------------------------------------
+
+  var difference =
+    imageVector.subtract(
+      meanImage
+    );
+
+
+  // --------------------------------------------------------------
+  // INVERSE COVARIANCE IMAGE
+  // --------------------------------------------------------------
+
+  var inverseImage =
+    ee.Image.constant(
+      inverseCovariance
+    );
+
+
+  // --------------------------------------------------------------
+  // MAHALANOBIS QUADRATIC TERM
+  // --------------------------------------------------------------
+
+  var mahalanobis =
+    difference
+
+      .arrayTranspose()
+
+      .matrixMultiply(
+        inverseImage
+      )
+
+      .matrixMultiply(
+        difference
+      )
+
+      .arrayGet(
+        [0, 0]
+      );
+
+
+  // --------------------------------------------------------------
+  // GAUSSIAN LOG-LIKELIHOOD SCORE
+  // --------------------------------------------------------------
+
+  var score =
+    mahalanobis
+
+      .multiply(
+        -0.5
+      )
+
+      .subtract(
+
+        ee.Image.constant(
+
+          determinant
+            .log()
+            .multiply(
+              0.5
+            )
+
+        )
+
+      )
+
+      .rename(
+        scoreBandName
+      );
+
+
+  return score;
+
+}
+
+
+// ================================================================
+// 9. CREATE FIVE SCORE IMAGES
+// ================================================================
+
+var score1 =
+  createScore(
+    params1,
+    'score_1'
+  );
+
+
+var score2 =
+  createScore(
+    params2,
+    'score_2'
+  );
+
+
+var score3 =
+  createScore(
+    params3,
+    'score_3'
+  );
+
+
+var score4 =
+  createScore(
+    params4,
+    'score_4'
+  );
+
+
+var score5 =
+  createScore(
+    params5,
+    'score_5'
+  );
+
+
+// ================================================================
+// 10. SCORE STACK
+// ================================================================
+
+var scoreStack =
+  score1
+
+    .addBands(
+      score2
+    )
+
+    .addBands(
+      score3
+    )
+
+    .addBands(
+      score4
+    )
+
+    .addBands(
+      score5
+    );
+
+
+print(
+  'Gaussian score bands'
+);
+
+
+print(
+  scoreStack.bandNames()
+);
+
+
+// ================================================================
+// 11. FINAL 2010 CLASSIFICATION
+// ================================================================
+//
+// arrayArgmax:
+// 0 -> class 1
+// 1 -> class 2
+// 2 -> class 3
+// 3 -> class 4
+// 4 -> class 5
+//
+// Therefore add 1.
+//
+// ================================================================
+
+var classified2010 =
+  scoreStack
+
+    .toArray()
+
+    .arrayArgmax()
+
+    .arrayGet(
+      [0]
+    )
+
+    .add(
+      1
+    )
+
+    .rename(
+      'classification'
+    )
+
+    .toInt8()
+
+    .clip(
+      roi
+    );
+
+
+// ================================================================
+// 12. CREATE THE ONE EXPORT TASK
+// ================================================================
+
+Export.image.toAsset({
+
+  image:
+    classified2010,
+
+  description:
+    'chennai_mlc_lulc_2010',
+
+  assetId:
+    OUTPUT_ASSET,
+
+  region:
+    roi,
+
+  scale:
+    ANALYSIS_SCALE,
+
+  crs:
+    ANALYSIS_CRS,
+
+  maxPixels:
+    1e9,
+
+  pyramidingPolicy: {
+
+    '.default':
+      'mode'
+
+  }
+
+});
+
+
+// ================================================================
+// 13. FINAL MESSAGE
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05F1B EXPORT-ONLY SCRIPT FINISHED'
+);
+
+print(
+  'One task should now appear in Tasks:'
+);
+
+print(
+  'chennai_mlc_lulc_2010'
+);
+
+print(
+  'START THAT TASK.'
+);
+
+print(
+  'DO NOT RUN THIS SCRIPT AGAIN.'
+);
+
+print(
+  '========================================'
+);

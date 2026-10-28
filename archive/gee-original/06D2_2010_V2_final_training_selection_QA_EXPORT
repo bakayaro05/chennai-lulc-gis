@@ -1,0 +1,1742 @@
+// ============================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+//
+// SCRIPT 06D2
+// 2010 V2 FINAL TRAINING SELECTION — QA + EXPORT TASK
+//
+// PURPOSE
+// -------
+// Build the definitive 2010 V2 training dataset after:
+//
+// - complete manual training review
+// - recovery of legitimate historical training-side candidates
+// - authoritative 2010-stack re-sampling
+// - clear_count >= 2
+// - duplicate/conflict removal
+// - 30 m exclusion from FINAL 2010 validation
+//
+// SELECTION PRINCIPLE
+// -------------------
+// 1. Keep manually reviewed 06C2 base points FIRST.
+// 2. Use historical training-side candidates ONLY to fill deficits.
+// 3. Use deterministic, diversity-aware poly_id supplementation.
+// 4. Exactly 120 pixels/class.
+// 5. Exactly 600 total.
+// 6. Preserve old V1 asset.
+//
+// OLD ASSET REMAINS UNTOUCHED:
+// projects/assignment-482806/assets/chennai_training_2010_final
+//
+// NEW V2 ASSET:
+// projects/assignment-482806/assets/chennai_training_2010_final_v2
+//
+// IMPORTANT
+// ---------
+// This script CREATES ONE EXPORT TASK.
+// DO NOT START IT UNTIL QA IS REVIEWED.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 1. CONSTANTS
+// ============================================================================
+
+var CRS = 'EPSG:32644';
+
+var SCALE = 30;
+
+var TARGET = 120;
+
+var VALIDATION_EXCLUSION_M = 30;
+
+var PROJ =
+  ee.Projection(CRS)
+    .atScale(SCALE);
+
+var PREDICTORS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+
+// ============================================================================
+// 2. ASSET PATHS
+// ============================================================================
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+var QA05A_ASSET =
+  'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A';
+
+var C1_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+var C2A_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_rescued_uncertain_05C2A';
+
+var C3A_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_targeted_expansion_05C3A';
+
+var C4E_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_manual_barren_05C4E';
+
+var VALIDATION_ASSET =
+  'projects/assignment-482806/assets/chennai_validation_2010_final';
+
+
+var OUTPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final_v2';
+
+
+// ============================================================================
+// 3. LOAD ASSETS
+// ============================================================================
+
+var stack =
+  ee.Image(STACK_ASSET);
+
+var qa05A =
+  ee.FeatureCollection(QA05A_ASSET);
+
+var c1 =
+  ee.FeatureCollection(C1_ASSET);
+
+var c2a =
+  ee.FeatureCollection(C2A_ASSET);
+
+var c3a =
+  ee.FeatureCollection(C3A_ASSET);
+
+var c4e =
+  ee.FeatureCollection(C4E_ASSET);
+
+var validation2010 =
+  ee.FeatureCollection(VALIDATION_ASSET);
+
+
+// ============================================================================
+// 4. AUTHORITATIVE GRID
+// ============================================================================
+
+var coords =
+  ee.Image.pixelCoordinates(PROJ)
+    .rename([
+      'px',
+      'py'
+    ]);
+
+var samplingImage =
+  stack
+    .select(
+      PREDICTORS.concat([
+        'clear_count'
+      ])
+    )
+    .addBands(coords);
+
+
+// ============================================================================
+// 5. CLASS-NAME HELPER
+// ============================================================================
+
+function className(classNum) {
+
+  classNum =
+    ee.Number(classNum);
+
+  return ee.String(
+
+    ee.Algorithms.If(
+      classNum.eq(1),
+      'Built-up',
+
+      ee.Algorithms.If(
+        classNum.eq(2),
+        'Vegetation',
+
+        ee.Algorithms.If(
+          classNum.eq(3),
+          'Water',
+
+          ee.Algorithms.If(
+            classNum.eq(4),
+            'Agricultural/Open',
+            'Barren/Fallow'
+          )
+        )
+      )
+    )
+
+  );
+
+}
+
+
+// ============================================================================
+// 6. CANONICALIZE SOURCE PROPERTIES
+// ============================================================================
+
+function canonicalize(feature) {
+
+  feature =
+    ee.Feature(feature);
+
+  var classNum =
+    ee.Number.parse(
+      ee.String(
+        feature.get('class_id')
+      )
+    )
+    .int();
+
+  var polyNum =
+    ee.Number.parse(
+      ee.String(
+        feature.get('poly_id')
+      )
+    )
+    .int();
+
+  var classKey =
+    classNum.format('%d');
+
+  var polyKey =
+    polyNum.format('%d');
+
+  return feature.set({
+
+    class_num:
+      classNum,
+
+    class_key:
+      classKey,
+
+    class_name:
+      className(classNum),
+
+    poly_num:
+      polyNum,
+
+    poly_key:
+      polyKey,
+
+    class_poly_key:
+      classKey
+        .cat('_')
+        .cat(polyKey)
+
+  });
+
+}
+
+
+// ============================================================================
+// 7. AUTHORITATIVE PIXEL KEY
+// ============================================================================
+
+function addPixelKey(feature) {
+
+  feature =
+    ee.Feature(feature);
+
+  var px =
+    ee.Number(
+      feature.get('px')
+    )
+    .format('%.6f');
+
+  var py =
+    ee.Number(
+      feature.get('py')
+    )
+    .format('%.6f');
+
+  var classKey =
+    ee.String(
+      feature.get('class_key')
+    );
+
+  var pixelKey =
+    px
+      .cat('_')
+      .cat(py);
+
+  return feature.set({
+
+    auth_pixel_key:
+      pixelKey,
+
+    pixel_class_key:
+      classKey
+        .cat('_')
+        .cat(pixelKey)
+
+  });
+
+}
+
+
+// ============================================================================
+// 8. AUTHORITATIVE SAMPLING HELPER
+// ============================================================================
+
+function sampleCollection(collection) {
+
+  return samplingImage
+
+    .sampleRegions({
+
+      collection:
+        collection,
+
+      properties: [
+        'class_num',
+        'class_key',
+        'class_name',
+        'poly_num',
+        'poly_key',
+        'class_poly_key',
+        'reuse_asset',
+        'pool_origin'
+      ],
+
+      scale:
+        SCALE,
+
+      projection:
+        PROJ,
+
+      geometries:
+        true,
+
+      tileScale:
+        8
+
+    })
+
+    .filter(
+      ee.Filter.gte(
+        'clear_count',
+        2
+      )
+    )
+
+    .map(
+      addPixelKey
+    );
+
+}
+
+
+// ============================================================================
+// 9. LOCKED MANUAL ACCEPT LEDGER
+// ============================================================================
+
+var ACCEPT_KEYS = [
+
+  // Built-up
+  '1_1',
+  '1_3',
+  '1_4',
+  '1_5',
+  '1_6',
+  '1_7',
+  '1_8',
+  '1_9',
+  '1_12',
+
+  // Vegetation
+  '2_16',
+  '2_17',
+  '2_25',
+  '2_26',
+
+  // Water
+  '3_31',
+  '3_32',
+  '3_35',
+  '3_38',
+  '3_39',
+  '3_201',
+
+  // Agricultural/Open
+  '4_46',
+  '4_47',
+  '4_48',
+  '4_51',
+  '4_52',
+  '4_53',
+  '4_55',
+  '4_56',
+  '4_57',
+  '4_59',
+  '4_60',
+  '4_202',
+
+  // Barren/Fallow
+  '5_63',
+  '5_64',
+  '5_65'
+
+];
+
+
+// ============================================================================
+// 10. REBUILD MANUALLY REVIEWED BASE
+// ============================================================================
+
+var baseSource =
+  qa05A
+
+    .map(canonicalize)
+
+    .filter(
+      ee.Filter.inList(
+        'class_poly_key',
+        ACCEPT_KEYS
+      )
+    )
+
+    .map(
+      function(feature) {
+
+        return ee.Feature(feature).set({
+
+          reuse_asset:
+            '06C2_manual_accept',
+
+          pool_origin:
+            '06C2_manual_base'
+
+        });
+
+      }
+    );
+
+
+var base =
+  sampleCollection(
+    baseSource
+  )
+  .distinct([
+    'pixel_class_key'
+  ]);
+
+
+// ============================================================================
+// 11. PREPARE HISTORICAL TRAINING REUSE
+// ============================================================================
+
+function prepareHistorical(
+  collection,
+  sourceName
+) {
+
+  return collection
+
+    .map(canonicalize)
+
+    .map(
+      function(feature) {
+
+        return ee.Feature(feature).set({
+
+          reuse_asset:
+            sourceName,
+
+          pool_origin:
+            'historical_training_reuse'
+
+        });
+
+      }
+    );
+
+}
+
+
+var c1Prepared =
+  prepareHistorical(
+    c1,
+    '05C1_passB'
+  );
+
+var c2aPrepared =
+  prepareHistorical(
+    c2a,
+    '05C2A_rescued'
+  );
+
+var c3aPrepared =
+  prepareHistorical(
+    c3a,
+    '05C3A_targeted60m'
+  );
+
+
+var automatedRaw =
+  c1Prepared
+    .merge(c2aPrepared)
+    .merge(c3aPrepared);
+
+
+var automatedApproved =
+  automatedRaw.filter(
+    ee.Filter.inList(
+      'class_poly_key',
+      ACCEPT_KEYS
+    )
+  );
+
+
+// ============================================================================
+// 12. PREPARE EXISTING MANUAL BARREN ADDITION
+// ============================================================================
+
+var c4ePrepared =
+  c4e.map(
+    function(feature) {
+
+      return ee.Feature(feature).set({
+
+        class_num:
+          5,
+
+        class_key:
+          '5',
+
+        class_name:
+          'Barren/Fallow',
+
+        poly_num:
+          304,
+
+        poly_key:
+          '304',
+
+        class_poly_key:
+          '5_304',
+
+        reuse_asset:
+          '05C4E_manual_barren',
+
+        pool_origin:
+          'historical_training_reuse'
+
+      });
+
+    }
+  );
+
+
+// ============================================================================
+// 13. REBUILD REUSE POOL
+// ============================================================================
+
+var reuseSource =
+  automatedApproved
+    .merge(
+      c4ePrepared
+    );
+
+
+var reuseSampled =
+  sampleCollection(
+    reuseSource
+  );
+
+
+var reuseClassUnique =
+  reuseSampled.distinct([
+    'pixel_class_key'
+  ]);
+
+
+// ============================================================================
+// 14. REMOVE REUSE PIXELS ALREADY IN MANUAL BASE
+// ============================================================================
+
+var samePixel =
+  ee.Filter.equals({
+
+    leftField:
+      'auth_pixel_key',
+
+    rightField:
+      'auth_pixel_key'
+
+  });
+
+
+var genuinelyNewReuse =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      reuseClassUnique,
+
+      base,
+
+      samePixel
+
+    )
+
+  );
+
+
+// ============================================================================
+// 15. CONSOLIDATE
+// ============================================================================
+
+var consolidated =
+  base
+    .merge(
+      genuinelyNewReuse
+    )
+    .distinct([
+      'pixel_class_key'
+    ]);
+
+
+// ============================================================================
+// 16. APPLY 30 m VALIDATION EXCLUSION
+// ============================================================================
+
+var within30m =
+  ee.Filter.withinDistance({
+
+    distance:
+      VALIDATION_EXCLUSION_M,
+
+    leftField:
+      '.geo',
+
+    rightField:
+      '.geo',
+
+    maxError:
+      1
+
+  });
+
+
+var eligible =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      consolidated,
+
+      validation2010,
+
+      within30m
+
+    )
+
+  );
+
+
+// ============================================================================
+// 17. SPLIT MANUAL BASE AND REUSE AFTER VALIDATION EXCLUSION
+// ============================================================================
+
+var manualPool =
+  eligible.filter(
+    ee.Filter.eq(
+      'pool_origin',
+      '06C2_manual_base'
+    )
+  );
+
+
+var reusePool =
+  eligible.filter(
+    ee.Filter.eq(
+      'pool_origin',
+      'historical_training_reuse'
+    )
+  );
+
+
+// ============================================================================
+// 18. LOCKED EXPECTED BASE COUNTS
+// ============================================================================
+//
+// After validation exclusion:
+//
+// Built-up          = 104
+// Vegetation        = 120
+// Water             = 46
+// Agricultural/Open = 115
+// Barren/Fallow     = 69
+//
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D2 — INPUT RECONSTRUCTION QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    eligible_total:
+      eligible.size(),
+
+    expected_eligible_total:
+      990,
+
+    manual_base_total:
+      manualPool.size(),
+
+    expected_manual_base_total:
+      454,
+
+    reuse_total:
+      reusePool.size(),
+
+    expected_reuse_total:
+      536
+
+  })
+);
+
+
+print(
+  'MANUAL BASE CLASS HISTOGRAM — EXPECT 104/120/46/115/69'
+);
+
+
+print(
+  manualPool.aggregate_histogram(
+    'class_key'
+  )
+);
+
+
+print(
+  'REUSE CLASS HISTOGRAM — EXPECT 106/153/110/82/85'
+);
+
+
+print(
+  reusePool.aggregate_histogram(
+    'class_key'
+  )
+);
+
+
+// ============================================================================
+// 19. SELECTION HELPERS
+// ============================================================================
+
+function selectRandomN(
+  collection,
+  n,
+  seed,
+  selectionLabel
+) {
+
+  return collection
+
+    .randomColumn(
+      'selection_random',
+      seed
+    )
+
+    .sort(
+      'selection_random'
+    )
+
+    .limit(n)
+
+    .map(
+      function(feature) {
+
+        return ee.Feature(feature).set(
+          'selection_role',
+          selectionLabel
+        );
+
+      }
+    );
+
+}
+
+
+function selectReusePoly(
+  classKey,
+  polyKey,
+  n,
+  seed
+) {
+
+  var fc =
+    reusePool
+
+      .filter(
+        ee.Filter.eq(
+          'class_key',
+          classKey
+        )
+      )
+
+      .filter(
+        ee.Filter.eq(
+          'poly_key',
+          polyKey
+        )
+      );
+
+
+  return selectRandomN(
+    fc,
+    n,
+    seed,
+    'historical_reuse_fill'
+  );
+
+}
+
+
+// ============================================================================
+// 20. KEEP ALL MANUAL BASE POINTS
+// ============================================================================
+
+var manualSelected =
+  manualPool.map(
+    function(feature) {
+
+      return ee.Feature(feature).set(
+        'selection_role',
+        'manual_reviewed_base_kept'
+      );
+
+    }
+  );
+
+
+// ============================================================================
+// 21. BUILT-UP SUPPLEMENT — NEED 16
+// ============================================================================
+//
+// Base distribution is already heavy in poly 8.
+//
+// Therefore fill from lower-represented accepted source groups.
+//
+// Selected:
+//
+// poly 1 = 3
+// poly 3 = 3
+// poly 4 = 3
+// poly 5 = 4
+// poly 9 = 3
+//
+// TOTAL = 16
+//
+// ============================================================================
+
+var builtFill =
+  selectReusePoly(
+    '1',
+    '1',
+    3,
+    6101
+  )
+
+  .merge(
+    selectReusePoly(
+      '1',
+      '3',
+      3,
+      6103
+    )
+  )
+
+  .merge(
+    selectReusePoly(
+      '1',
+      '4',
+      3,
+      6104
+    )
+  )
+
+  .merge(
+    selectReusePoly(
+      '1',
+      '5',
+      4,
+      6105
+    )
+  )
+
+  .merge(
+    selectReusePoly(
+      '1',
+      '9',
+      3,
+      6109
+    )
+  );
+
+
+// ============================================================================
+// 22. VEGETATION SUPPLEMENT — NEED 0
+// ============================================================================
+//
+// Manual base already contains exactly 120.
+//
+// Historical reuse is deliberately NOT added.
+//
+// ============================================================================
+
+var vegetationFill =
+  ee.FeatureCollection([]);
+
+
+
+
+// ============================================================================
+// 23. WATER SUPPLEMENT — NEED 74
+// ============================================================================
+//
+// Manual base:
+//
+// 201 = 11
+// 31  = 11
+// 32  = 7
+// 35  = 1
+// 38  = 16
+//
+// Fill to improve geographic source balance:
+//
+// 201 = +25
+// 31  = +25
+// 32  = +5
+// 38  = +19
+//
+// Final approximate distribution:
+//
+// 201 = 36
+// 31  = 36
+// 32  = 12
+// 35  = 1
+// 38  = 35
+//
+// TOTAL = 120
+//
+// ============================================================================
+
+var waterFill =
+  selectReusePoly(
+    '3',
+    '201',
+    25,
+    63201
+  )
+
+  .merge(
+    selectReusePoly(
+      '3',
+      '31',
+      25,
+      63031
+    )
+  )
+
+  .merge(
+    selectReusePoly(
+      '3',
+      '32',
+      5,
+      63032
+    )
+  )
+
+  .merge(
+    selectReusePoly(
+      '3',
+      '38',
+      19,
+      63038
+    )
+  );
+
+
+// ============================================================================
+// 24. AGRICULTURAL/OPEN SUPPLEMENT — NEED 5
+// ============================================================================
+//
+// Recall macro-site A:
+//
+// 47,51,52,53,55,56,60
+//
+// We deliberately do NOT fill from that macro-site.
+//
+// Fill only from independent accepted sources:
+//
+// 202 = 2
+// 48  = 2
+// 57  = 1
+//
+// TOTAL = 5
+//
+// ============================================================================
+
+var agriFill =
+  selectReusePoly(
+    '4',
+    '202',
+    2,
+    64202
+  )
+
+  .merge(
+    selectReusePoly(
+      '4',
+      '48',
+      2,
+      64048
+    )
+  )
+
+  .merge(
+    selectReusePoly(
+      '4',
+      '57',
+      1,
+      64057
+    )
+  );
+
+
+// ============================================================================
+// 25. BARREN/FALLOW SUPPLEMENT — NEED 51
+// ============================================================================
+//
+// Manual base:
+//
+// poly 63 = 42
+// poly 64 = 21
+// poly 65 = 6
+//
+// Existing manual training-only polygon 304 is a valuable independent site.
+//
+// Fill:
+//
+// poly 304 = 40
+// poly 63  = 7
+// poly 64  = 4
+//
+// Final:
+//
+// 304 = 40
+// 63  = 49
+// 64  = 25
+// 65  = 6
+//
+// TOTAL = 120
+//
+// This avoids allowing either 63 or 304 to dominate excessively.
+//
+// ============================================================================
+
+var barrenFill =
+  selectReusePoly(
+    '5',
+    '304',
+    40,
+    65304
+  )
+
+  .merge(
+    selectReusePoly(
+      '5',
+      '63',
+      7,
+      65063
+    )
+  )
+
+  .merge(
+    selectReusePoly(
+      '5',
+      '64',
+      4,
+      65064
+    )
+  );
+
+
+// ============================================================================
+// 26. COMBINE ALL SUPPLEMENTAL REUSE
+// ============================================================================
+
+var reuseSelected =
+  builtFill
+    .merge(
+      vegetationFill
+    )
+    .merge(
+      waterFill
+    )
+    .merge(
+      agriFill
+    )
+    .merge(
+      barrenFill
+    );
+
+
+// ============================================================================
+// 27. SUPPLEMENT QA
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D2 — SUPPLEMENT SELECTION QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    built_fill_n:
+      builtFill.size(),
+
+    expected_built_fill:
+      16,
+
+    vegetation_fill_n:
+      vegetationFill.size(),
+
+    expected_vegetation_fill:
+      0,
+
+    water_fill_n:
+      waterFill.size(),
+
+    expected_water_fill:
+      74,
+
+    agri_fill_n:
+      agriFill.size(),
+
+    expected_agri_fill:
+      5,
+
+    barren_fill_n:
+      barrenFill.size(),
+
+    expected_barren_fill:
+      51,
+
+    total_reuse_selected:
+      reuseSelected.size(),
+
+    expected_total_reuse_selected:
+      146
+
+  })
+);
+
+
+print(
+  'SUPPLEMENT CLASS HISTOGRAM'
+);
+
+
+print(
+  reuseSelected.aggregate_histogram(
+    'class_key'
+  )
+);
+
+
+print(
+  'SUPPLEMENT POLY HISTOGRAM'
+);
+
+
+print(
+  reuseSelected.aggregate_histogram(
+    'class_poly_key'
+  )
+);
+
+
+// ============================================================================
+// 28. BUILD FINAL 600
+// ============================================================================
+
+var finalTrainingRaw =
+  manualSelected
+    .merge(
+      reuseSelected
+    );
+
+
+// ============================================================================
+// 29. STANDARDIZE FINAL EXPORT PROPERTIES
+// ============================================================================
+
+var finalTraining =
+  finalTrainingRaw.map(
+    function(feature) {
+
+      feature =
+        ee.Feature(feature);
+
+      var classNum =
+        ee.Number(
+          feature.get('class_num')
+        )
+        .int();
+
+      var polyNum =
+        ee.Number(
+          feature.get('poly_num')
+        )
+        .int();
+
+      return feature.set({
+
+        class_id:
+          classNum,
+
+        class_name:
+          className(classNum),
+
+        poly_id:
+          polyNum,
+
+        training_year:
+          2010,
+
+        training_version:
+          'V2_manual_review_plus_training_reuse',
+
+        validation_exclusion_m:
+          VALIDATION_EXCLUSION_M
+
+      });
+
+    }
+  );
+
+
+// ============================================================================
+// 30. FINAL TOTAL / CLASS QA
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D2 — FINAL 2010 V2 TRAINING QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    final_total:
+      finalTraining.size(),
+
+    expected_total:
+      600,
+
+    manual_base_kept:
+      finalTraining
+        .filter(
+          ee.Filter.eq(
+            'selection_role',
+            'manual_reviewed_base_kept'
+          )
+        )
+        .size(),
+
+    expected_manual_base_kept:
+      454,
+
+    historical_reuse_fill:
+      finalTraining
+        .filter(
+          ee.Filter.eq(
+            'selection_role',
+            'historical_reuse_fill'
+          )
+        )
+        .size(),
+
+    expected_historical_reuse_fill:
+      146
+
+  })
+);
+
+
+print(
+  'FINAL CLASS HISTOGRAM — EXPECT 120 EACH'
+);
+
+
+print(
+  finalTraining.aggregate_histogram(
+    'class_key'
+  )
+);
+
+
+// ============================================================================
+// 31. FINAL CLASS-WISE SOURCE QA
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D2 — FINAL CLASS-WISE SOURCE QA'
+);
+
+print(
+  '========================================'
+);
+
+
+[1, 2, 3, 4, 5].forEach(
+  function(classId) {
+
+    var key =
+      String(classId);
+
+    var fc =
+      finalTraining.filter(
+        ee.Filter.eq(
+          'class_key',
+          key
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        final_n:
+          fc.size(),
+
+        expected_n:
+          120,
+
+        distinct_poly_id_n:
+          ee.List(
+            fc.aggregate_array(
+              'poly_key'
+            )
+          )
+          .distinct()
+          .size(),
+
+        poly_id_histogram:
+          fc.aggregate_histogram(
+            'poly_key'
+          ),
+
+        selection_role_histogram:
+          fc.aggregate_histogram(
+            'selection_role'
+          ),
+
+        provenance_histogram:
+          fc.aggregate_histogram(
+            'reuse_asset'
+          ),
+
+        min_clear_count:
+          fc.aggregate_min(
+            'clear_count'
+          ),
+
+        mean_clear_count:
+          fc.aggregate_mean(
+            'clear_count'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ============================================================================
+// 32. DUPLICATE / CROSS-CLASS PIXEL QA
+// ============================================================================
+
+var finalClassUnique =
+  finalTraining.distinct([
+    'pixel_class_key'
+  ]);
+
+
+var finalSpatialUnique =
+  finalTraining.distinct([
+    'auth_pixel_key'
+  ]);
+
+
+var duplicateClassRows =
+  ee.Number(
+    finalTraining.size()
+  )
+  .subtract(
+    finalClassUnique.size()
+  );
+
+
+var crossClassConflictExcess =
+  ee.Number(
+    finalClassUnique.size()
+  )
+  .subtract(
+    finalSpatialUnique.size()
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D2 — FINAL PIXEL INTEGRITY QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    final_rows:
+      finalTraining.size(),
+
+    class_unique_rows:
+      finalClassUnique.size(),
+
+    spatial_unique_pixels:
+      finalSpatialUnique.size(),
+
+    duplicate_same_class_rows:
+      duplicateClassRows,
+
+    cross_class_conflict_excess_rows:
+      crossClassConflictExcess
+
+  })
+);
+
+
+// ============================================================================
+// 33. FINAL VALIDATION-INDEPENDENCE CHECK
+// ============================================================================
+
+var finalIndependent =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      finalTraining,
+
+      validation2010,
+
+      within30m
+
+    )
+
+  );
+
+
+var finalValidationOverlap =
+  ee.Number(
+    finalTraining.size()
+  )
+  .subtract(
+    finalIndependent.size()
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D2 — FINAL VALIDATION INDEPENDENCE QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    final_training_n:
+      finalTraining.size(),
+
+    surviving_30m_exclusion_n:
+      finalIndependent.size(),
+
+    training_within_30m_of_validation:
+      finalValidationOverlap,
+
+    required_overlap:
+      0
+
+  })
+);
+
+
+// ============================================================================
+// 34. PREDICTOR COMPLETENESS QA
+// ============================================================================
+
+var predictorComplete =
+  finalTraining.filter(
+    ee.Filter.notNull(
+      PREDICTORS.concat([
+        'clear_count'
+      ])
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D2 — FINAL ATTRIBUTE QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    predictor_complete_n:
+      predictorComplete.size(),
+
+    expected_predictor_complete:
+      600,
+
+    minimum_clear_count:
+      finalTraining.aggregate_min(
+        'clear_count'
+      ),
+
+    maximum_clear_count:
+      finalTraining.aggregate_max(
+        'clear_count'
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 35. OLD / NEW VERSION NOTE
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  'VERSION CONTROL'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'OLD V1 TRAINING ASSET IS NOT MODIFIED:'
+);
+
+
+print(
+  'projects/assignment-482806/assets/chennai_training_2010_final'
+);
+
+
+print(
+  'NEW V2 TRAINING WILL EXPORT TO:'
+);
+
+
+print(
+  OUTPUT_ASSET
+);
+
+
+// ============================================================================
+// 36. CREATE ONE EXPORT TASK
+// ============================================================================
+//
+// IMPORTANT:
+//
+// TASK IS CREATED,
+// BUT DO NOT START IT UNTIL QA IS REVIEWED.
+//
+// ============================================================================
+
+Export.table.toAsset({
+
+  collection:
+    finalTraining,
+
+  description:
+    'chennai_training_2010_final_v2',
+
+  assetId:
+    OUTPUT_ASSET
+
+});
+
+
+// ============================================================================
+// 37. FINISH
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D2 SCRIPT FINISHED'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'ONE EXPORT TASK HAS BEEN CREATED.'
+);
+
+
+print(
+  'DO NOT START IT YET.'
+);
+
+
+print(
+  'EXPECTED FINAL CONDITIONS:'
+);
+
+
+print(
+  'TOTAL = 600'
+);
+
+
+print(
+  'CLASS HISTOGRAM = 120 / 120 / 120 / 120 / 120'
+);
+
+
+print(
+  'MANUAL BASE = 454'
+);
+
+
+print(
+  'HISTORICAL REUSE FILL = 146'
+);
+
+
+print(
+  'DUPLICATE PIXELS = 0'
+);
+
+
+print(
+  'CROSS-CLASS CONFLICTS = 0'
+);
+
+
+print(
+  'WITHIN 30 m OF VALIDATION = 0'
+);
+
+
+print(
+  'PREDICTOR COMPLETE = 600'
+);
+
+
+print(
+  'OLD V1 ASSET REMAINS AVAILABLE FOR REVERSION.'
+);
+
+
+print(
+  'Send FINAL TRAINING QA + CLASS-WISE SOURCE QA +'
+);
+
+
+print(
+  'PIXEL INTEGRITY QA + VALIDATION INDEPENDENCE QA + ATTRIBUTE QA.'
+);
+
+
+print(
+  '========================================'
+);
+
+
+// ============================================================================
+// END 06D2
+// ============================================================================

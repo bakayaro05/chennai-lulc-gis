@@ -1,0 +1,2149 @@
+// ================================================================
+// 05B_2010_automated_training
+// Chennai Multi-Temporal LULC Project
+//
+// PURPOSE
+// -------
+// Automated Pass-B construction of 2010 training candidates.
+//
+// INPUT:
+// 05A conservative 2015 → 2010 temporal-transfer QA asset.
+//
+// WORKFLOW:
+//
+// 05A STABLE points
+//       ↓
+// source-group diversity QA
+//       ↓
+// sample ORIGINAL 2010 Landsat-5 predictor values
+//       ↓
+// construct 2010-native class signatures
+//       ↓
+// expand only 60 m around trusted STABLE anchors
+//       ↓
+// evaluate every candidate independently using 2010-native signatures
+//       ↓
+// clear-observation QA
+//       ↓
+// local spatial-consistency QA
+//       ↓
+// deduplicate Landsat pixels
+//       ↓
+// assess whether ≥120 high-confidence candidates/class exist
+//       ↓
+// create provisional balanced 120/class set where possible
+//
+// IMPORTANT:
+// -------
+// This script does NOT:
+//   - use validation data
+//   - train Gaussian MLC
+//   - calculate final areas
+//
+// DO NOT EXPORT FINAL TRAINING UNTIL THE QA RESULTS ARE REVIEWED.
+// ================================================================
+
+
+// ================================================================
+// 1. PROJECT CONSTANTS
+// ================================================================
+
+var ROI_ASSET =
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean';
+
+var QA_05A_ASSET =
+  'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A';
+
+
+var ROI =
+  ee.FeatureCollection(
+    ROI_ASSET
+  );
+
+
+var qa05A =
+  ee.FeatureCollection(
+    QA_05A_ASSET
+  );
+
+
+// ------------------------------------------------
+// Locked project spatial settings
+// ------------------------------------------------
+
+var CRS =
+  'EPSG:32644';
+
+var SCALE =
+  30;
+
+
+// ------------------------------------------------
+// Locked predictor stack
+// ------------------------------------------------
+
+var PREDICTORS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+
+// ------------------------------------------------
+// Locked class schema
+// ------------------------------------------------
+
+var CLASS_PROPERTY =
+  'class_id';
+
+
+var CLASS_IDS =
+  [1, 2, 3, 4, 5];
+
+
+var CLASS_NAMES = [
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+];
+
+
+// ================================================================
+// 2. PASS-B SETTINGS
+// ================================================================
+//
+// 05A already acted as the conservative cross-sensor gate.
+//
+// Pass B operates entirely in 2010 Landsat-5 feature space.
+//
+// We initially retain the existing project screening gates.
+// These are NOT tuned using validation.
+// ================================================================
+
+var DISTANCE_THRESHOLD =
+  1.25;
+
+
+var MARGIN_THRESHOLD =
+  0.25;
+
+
+var MIN_CLEAR_FOR_AUTO =
+  2;
+
+
+// ------------------------------------------------
+// Local candidate expansion
+// ------------------------------------------------
+//
+// 60 m = two Landsat pixels.
+//
+// Candidates are generated ONLY close to trusted
+// 05A stable anchors.
+//
+// They still have to independently pass all Pass-B tests.
+// ------------------------------------------------
+
+var EXPANSION_RADIUS_M =
+  60;
+
+
+// ------------------------------------------------
+// 3 × 3 local spatial QA
+// ------------------------------------------------
+
+var MIN_LOCAL_FRACTION =
+  5 / 9;
+
+
+var MIN_VALID_NEIGHBOURS =
+  5;
+
+
+// ------------------------------------------------
+// Numerical protection only
+// ------------------------------------------------
+
+var EPSILON =
+  1e-6;
+
+
+// ------------------------------------------------
+// Desired final training
+// ------------------------------------------------
+
+var TARGET_PER_CLASS =
+  120;
+
+
+// ================================================================
+// 3. LANDSAT-5 PREPROCESSING
+// ================================================================
+//
+// Locked 2010 methodology.
+// ================================================================
+
+function preprocessL5(image) {
+
+  var qa =
+    image.select(
+      'QA_PIXEL'
+    );
+
+
+  var qaMask =
+    qa.bitwiseAnd(1 << 0).eq(0)
+      .and(
+        qa.bitwiseAnd(1 << 1).eq(0)
+      )
+      .and(
+        qa.bitwiseAnd(1 << 3).eq(0)
+      )
+      .and(
+        qa.bitwiseAnd(1 << 4).eq(0)
+      )
+      .and(
+        qa.bitwiseAnd(1 << 5).eq(0)
+      );
+
+
+  var radsatMask =
+    image.select(
+      'QA_RADSAT'
+    ).eq(0);
+
+
+  var optical =
+    image
+      .select(
+        [
+          'SR_B1',
+          'SR_B2',
+          'SR_B3',
+          'SR_B4',
+          'SR_B5',
+          'SR_B7'
+        ],
+        [
+          'blue',
+          'green',
+          'red',
+          'nir',
+          'swir1',
+          'swir2'
+        ]
+      )
+      .multiply(
+        0.0000275
+      )
+      .add(
+        -0.2
+      )
+      .updateMask(
+        qaMask
+      )
+      .updateMask(
+        radsatMask
+      );
+
+
+  // ------------------------------------------------
+  // Explicit index arithmetic
+  // ------------------------------------------------
+
+  var ndvi =
+    optical.select('nir')
+      .subtract(
+        optical.select('red')
+      )
+      .divide(
+        optical.select('nir')
+          .add(
+            optical.select('red')
+          )
+      )
+      .rename(
+        'NDVI'
+      );
+
+
+  var ndwi =
+    optical.select('green')
+      .subtract(
+        optical.select('nir')
+      )
+      .divide(
+        optical.select('green')
+          .add(
+            optical.select('nir')
+          )
+      )
+      .rename(
+        'NDWI'
+      );
+
+
+  var ndbi =
+    optical.select('swir1')
+      .subtract(
+        optical.select('nir')
+      )
+      .divide(
+        optical.select('swir1')
+          .add(
+            optical.select('nir')
+          )
+      )
+      .rename(
+        'NDBI'
+      );
+
+
+  return optical
+    .addBands(
+      ndvi
+    )
+    .addBands(
+      ndwi
+    )
+    .addBands(
+      ndbi
+    )
+    .select(
+      PREDICTORS
+    )
+    .copyProperties(
+      image,
+      ['system:time_start']
+    );
+}
+
+
+// ================================================================
+// 4. BUILD LOCKED 2010 LANDSAT-5 STACK
+// ================================================================
+
+var collection2010 =
+  ee.ImageCollection(
+    'LANDSAT/LT05/C02/T1_L2'
+  )
+    .filterBounds(
+      ROI
+    )
+    .filterDate(
+      '2010-01-01',
+      '2011-01-01'
+    )
+    .map(
+      preprocessL5
+    );
+
+
+var image2010 =
+  collection2010
+    .median()
+    .select(
+      PREDICTORS
+    )
+    .clip(
+      ROI
+    );
+
+
+var clear2010 =
+  collection2010
+    .select(
+      'red'
+    )
+    .count()
+    .rename(
+      'clear_count'
+    )
+    .clip(
+      ROI
+    );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '05B — 2010 AUTOMATED TRAINING'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+    scene_count_2010:
+      collection2010.size(),
+
+    expected_scene_count:
+      7
+  })
+);
+
+
+// ================================================================
+// 5. LOAD ONLY 05A STABLE SEEDS
+// ================================================================
+
+var stableSeeds =
+  qa05A.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'STABLE'
+    )
+  );
+
+
+print(
+  '----------------------------------------'
+);
+
+print(
+  '05A STABLE SEED CHECK'
+);
+
+print(
+  '----------------------------------------'
+);
+
+
+print(
+  ee.Dictionary({
+
+    total_stable_seeds:
+      stableSeeds.size(),
+
+    expected_from_05A:
+      289
+  })
+);
+
+
+print(
+  'Stable seed class histogram'
+);
+
+print(
+  stableSeeds.aggregate_histogram(
+    CLASS_PROPERTY
+  )
+);
+
+
+// ================================================================
+// 6. SOURCE-GROUP DIVERSITY QA
+// ================================================================
+//
+// We retain poly_id from the completed 2015 workflow.
+//
+// This allows us to detect whether a class is being represented
+// by only one or two source groups.
+// ================================================================
+
+function summarizeSeedClass(
+  classId
+) {
+
+  var fc =
+    stableSeeds.filter(
+      ee.Filter.eq(
+        CLASS_PROPERTY,
+        classId
+      )
+    );
+
+
+  var groups =
+    ee.List(
+      fc.aggregate_array(
+        'poly_id'
+      )
+    )
+    .distinct()
+    .sort();
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      class_name:
+        CLASS_NAMES[
+          classId - 1
+        ],
+
+      stable_seed_n:
+        fc.size(),
+
+      distinct_poly_id_n:
+        groups.size(),
+
+      poly_ids:
+        groups
+    }
+  );
+}
+
+
+var seedDiversitySummary =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      summarizeSeedClass
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '05A STABLE-SEED SOURCE-GROUP DIVERSITY'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  seedDiversitySummary
+);
+
+
+// ------------------------------------------------
+// Exact poly_id histogram per class
+// ------------------------------------------------
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var classSeeds =
+      stableSeeds.filter(
+        ee.Filter.eq(
+          CLASS_PROPERTY,
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        stable_seed_count:
+          classSeeds.size(),
+
+        poly_id_histogram:
+          classSeeds
+            .aggregate_histogram(
+              'poly_id'
+            )
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 7. SAMPLE ORIGINAL 2010 VALUES AT TRUSTED SEEDS
+// ================================================================
+//
+// IMPORTANT:
+//
+// These are ORIGINAL Landsat-5 2010 predictors.
+//
+// The robust cross-sensor normalized space was only needed
+// for Pass A.
+//
+// From this point onward we operate in target-year-native
+// 2010 Landsat-5 space.
+// ================================================================
+
+var nativeSeedSamples =
+  image2010.sampleRegions({
+
+    collection:
+      stableSeeds,
+
+    properties: [
+      'class_id',
+      'class_name',
+      'poly_id'
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      ee.Projection(
+        CRS
+      ).atScale(
+        SCALE
+      ),
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+  });
+
+
+print(
+  '2010-native seed sample total'
+);
+
+print(
+  nativeSeedSamples.size()
+);
+
+
+print(
+  '2010-native seed class histogram'
+);
+
+print(
+  nativeSeedSamples.aggregate_histogram(
+    CLASS_PROPERTY
+  )
+);
+
+
+// ================================================================
+// 8. BUILD 2010-NATIVE CLASS SIGNATURES
+// ================================================================
+//
+// For each class:
+//
+// mean vector = original 2010 Landsat-5 predictors
+// SD vector   = within-class sample standard deviation
+//
+// These signatures are therefore fully target-year-native.
+// ================================================================
+
+function buildNativeSignature(
+  classId
+) {
+
+  var classSamples =
+    nativeSeedSamples.filter(
+      ee.Filter.eq(
+        CLASS_PROPERTY,
+        classId
+      )
+    );
+
+
+  var means =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_mean(
+            band
+          )
+        );
+
+      }
+    );
+
+
+  var sds =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_sample_sd(
+            band
+          )
+        )
+        .max(
+          EPSILON
+        );
+
+      }
+    );
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      class_name:
+        CLASS_NAMES[
+          classId - 1
+        ],
+
+      n_seed:
+        classSamples.size(),
+
+      means:
+        ee.List(
+          means
+        ),
+
+      sds:
+        ee.List(
+          sds
+        )
+    }
+  );
+}
+
+
+var nativeSignatures =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      buildNativeSignature
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '2010-NATIVE CLASS SIGNATURES'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  nativeSignatures
+);
+
+
+// ================================================================
+// 9. DISTANCE TO 2010-NATIVE CLASS
+// ================================================================
+
+function distanceToNativeClass(
+  image,
+  classId
+) {
+
+  var signature =
+    ee.Feature(
+      nativeSignatures
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+        .first()
+    );
+
+
+  var meanImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'means'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    );
+
+
+  var sdImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'sds'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    )
+    .max(
+      EPSILON
+    );
+
+
+  return image
+    .select(
+      PREDICTORS
+    )
+    .subtract(
+      meanImage
+    )
+    .divide(
+      sdImage
+    )
+    .pow(2)
+    .reduce(
+      ee.Reducer.mean()
+    )
+    .sqrt()
+    .rename(
+      'd' + classId
+    );
+}
+
+
+// ================================================================
+// 10. BUILD FIVE 2010-NATIVE DISTANCE LAYERS
+// ================================================================
+
+var d1 =
+  distanceToNativeClass(
+    image2010,
+    1
+  );
+
+
+var d2 =
+  distanceToNativeClass(
+    image2010,
+    2
+  );
+
+
+var d3 =
+  distanceToNativeClass(
+    image2010,
+    3
+  );
+
+
+var d4 =
+  distanceToNativeClass(
+    image2010,
+    4
+  );
+
+
+var d5 =
+  distanceToNativeClass(
+    image2010,
+    5
+  );
+
+
+var distanceImages = [
+  d1,
+  d2,
+  d3,
+  d4,
+  d5
+];
+
+
+var distanceStack =
+  ee.Image.cat(
+    distanceImages
+  );
+
+
+// ================================================================
+// 11. FIND BEST + SECOND-BEST 2010-NATIVE CLASS
+// ================================================================
+
+var bestDist =
+  d1.rename(
+    'best_dist'
+  );
+
+
+var bestClass =
+  ee.Image.constant(
+    1
+  )
+    .rename(
+      'best_class'
+    )
+    .updateMask(
+      d1.mask()
+    );
+
+
+var secondDist =
+  ee.Image.constant(
+    9999
+  )
+    .rename(
+      'second_dist'
+    )
+    .updateMask(
+      d1.mask()
+    );
+
+
+for (
+  var i = 1;
+  i < CLASS_IDS.length;
+  i++
+) {
+
+  var currentClass =
+    CLASS_IDS[i];
+
+
+  var currentDistance =
+    distanceImages[i];
+
+
+  var better =
+    currentDistance.lt(
+      bestDist
+    );
+
+
+  var previousBest =
+    bestDist;
+
+
+  var updatedSecond =
+    secondDist.where(
+      better,
+      previousBest
+    );
+
+
+  var currentAsSecond =
+    currentDistance.where(
+      better,
+      9999
+    );
+
+
+  updatedSecond =
+    updatedSecond.min(
+      currentAsSecond
+    );
+
+
+  bestDist =
+    previousBest
+      .where(
+        better,
+        currentDistance
+      )
+      .rename(
+        'best_dist'
+      );
+
+
+  bestClass =
+    bestClass
+      .where(
+        better,
+        currentClass
+      )
+      .rename(
+        'best_class'
+      );
+
+
+  secondDist =
+    updatedSecond.rename(
+      'second_dist'
+    );
+}
+
+
+var margin =
+  secondDist
+    .subtract(
+      bestDist
+    )
+    .rename(
+      'margin'
+    );
+
+
+// ================================================================
+// 12. LOCAL 3 × 3 CONSISTENCY FROM 2010-NATIVE MODEL
+// ================================================================
+
+var kernel3x3 =
+  ee.Kernel.square({
+
+    radius:
+      1,
+
+    units:
+      'pixels',
+
+    normalize:
+      false
+  });
+
+
+var localValidN =
+  bestClass
+    .reduceNeighborhood({
+
+      reducer:
+        ee.Reducer.count(),
+
+      kernel:
+        kernel3x3,
+
+      skipMasked:
+        true
+    })
+    .rename(
+      'local_valid_n'
+    );
+
+
+var localSameN =
+  ee.Image.constant(
+    0
+  )
+    .rename(
+      'local_same_n'
+    )
+    .updateMask(
+      bestClass.mask()
+    );
+
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var classNeighbourCount =
+      bestClass
+        .eq(
+          classId
+        )
+        .reduceNeighborhood({
+
+          reducer:
+            ee.Reducer.sum(),
+
+          kernel:
+            kernel3x3,
+
+          skipMasked:
+            true
+        });
+
+
+    localSameN =
+      localSameN.where(
+        bestClass.eq(
+          classId
+        ),
+        classNeighbourCount
+      );
+
+  }
+);
+
+
+var localFraction =
+  localSameN
+    .divide(
+      localValidN.max(
+        1
+      )
+    )
+    .rename(
+      'local_fraction'
+    );
+
+
+// ================================================================
+// 13. CREATE SMALL EXPANSION ZONES AROUND STABLE ANCHORS
+// ================================================================
+//
+// We DO NOT search arbitrary pixels over Chennai.
+//
+// Each stable anchor is expanded only 60 m.
+//
+// The source class and poly_id are preserved.
+// ================================================================
+
+var expansionZones =
+  stableSeeds.map(
+    function(feature) {
+
+      return ee.Feature(
+        feature.geometry()
+          .buffer(
+            EXPANSION_RADIUS_M
+          ),
+        {
+
+          class_id:
+            feature.get(
+              'class_id'
+            ),
+
+          class_name:
+            feature.get(
+              'class_name'
+            ),
+
+          poly_id:
+            feature.get(
+              'poly_id'
+            ),
+
+          seed_status:
+            '05A_STABLE'
+        }
+      );
+
+    }
+  );
+
+
+print(
+  'Expansion zone count'
+);
+
+print(
+  expansionZones.size()
+);
+
+
+// ================================================================
+// 14. PIXEL COORDINATES FOR DEDUPLICATION
+// ================================================================
+
+var pixelXY =
+  ee.Image.pixelCoordinates(
+    ee.Projection(
+      CRS
+    ).atScale(
+      SCALE
+    )
+  )
+  .rename(
+    [
+      'px',
+      'py'
+    ]
+  );
+
+
+// ================================================================
+// 15. BUILD PASS-B CANDIDATE IMAGE
+// ================================================================
+//
+// Original 2010 predictors are retained in the sampled features.
+//
+// Additional QA bands:
+// d1...d5
+// best_class
+// best_dist
+// second_dist
+// margin
+// clear_count
+// local_valid_n
+// local_fraction
+// px / py
+// ================================================================
+
+var candidateImage =
+  image2010
+    .select(
+      PREDICTORS
+    )
+
+    .addBands(
+      distanceStack
+    )
+
+    .addBands(
+      bestClass
+    )
+
+    .addBands(
+      bestDist
+    )
+
+    .addBands(
+      secondDist
+    )
+
+    .addBands(
+      margin
+    )
+
+    .addBands(
+      clear2010
+    )
+
+    .addBands(
+      localValidN
+    )
+
+    .addBands(
+      localFraction
+    )
+
+    .addBands(
+      pixelXY
+    );
+
+
+// ================================================================
+// 16. SAMPLE ALL PIXELS INSIDE THE LOCAL EXPANSION ZONES
+// ================================================================
+
+var candidatePool =
+  candidateImage.sampleRegions({
+
+    collection:
+      expansionZones,
+
+    properties: [
+      'class_id',
+      'class_name',
+      'poly_id',
+      'seed_status'
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      ee.Projection(
+        CRS
+      ).atScale(
+        SCALE
+      ),
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+  });
+
+
+print(
+  'Raw Pass-B candidate rows before screening/deduplication'
+);
+
+print(
+  candidatePool.size()
+);
+
+
+// ================================================================
+// 17. CREATE UNIQUE PIXEL KEY
+// ================================================================
+//
+// Same physical Landsat pixel may occur in overlapping
+// 60 m expansion buffers.
+//
+// The key lets us remove duplicate accepted pixels later.
+// ================================================================
+
+candidatePool =
+  candidatePool.map(
+    function(feature) {
+
+      var px =
+        ee.Number(
+          feature.get(
+            'px'
+          )
+        );
+
+
+      var py =
+        ee.Number(
+          feature.get(
+            'py'
+          )
+        );
+
+
+      var key =
+        px.format(
+          '%.0f'
+        )
+        .cat(
+          '_'
+        )
+        .cat(
+          py.format(
+            '%.0f'
+          )
+        );
+
+
+      return feature.set(
+        'pixel_key',
+        key
+      );
+
+    }
+  );
+
+
+// ================================================================
+// 18. OWN-CLASS DISTANCE HELPER
+// ================================================================
+
+function ownClassDistance(
+  feature,
+  classId
+) {
+
+  return ee.Number(
+
+    ee.Algorithms.If(
+      classId.eq(1),
+
+      feature.get(
+        'd1'
+      ),
+
+      ee.Algorithms.If(
+        classId.eq(2),
+
+        feature.get(
+          'd2'
+        ),
+
+        ee.Algorithms.If(
+          classId.eq(3),
+
+          feature.get(
+            'd3'
+          ),
+
+          ee.Algorithms.If(
+            classId.eq(4),
+
+            feature.get(
+              'd4'
+            ),
+
+            feature.get(
+              'd5'
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
+
+// ================================================================
+// 19. PASS-B AUTOMATIC ACCEPTANCE
+// ================================================================
+//
+// Each expanded candidate must INDEPENDENTLY satisfy:
+//
+// 1. >= 2 clear observations
+// 2. nearest 2010-native class == source class
+// 3. own-class distance <= 1.25
+// 4. nearest-vs-second margin >= 0.25
+// 5. at least 5 valid neighbours
+// 6. >= 5/9 local class agreement
+//
+// No candidate is accepted merely because it is close to a seed.
+// ================================================================
+
+var screenedCandidates =
+  candidatePool.map(
+    function(feature) {
+
+      var sourceClass =
+        ee.Number(
+          feature.get(
+            CLASS_PROPERTY
+          )
+        );
+
+
+      var predictedClass =
+        ee.Number(
+          feature.get(
+            'best_class'
+          )
+        );
+
+
+      var ownDistance =
+        ownClassDistance(
+          feature,
+          sourceClass
+        );
+
+
+      var classMargin =
+        ee.Number(
+          feature.get(
+            'margin'
+          )
+        );
+
+
+      var clearCount =
+        ee.Number(
+          feature.get(
+            'clear_count'
+          )
+        );
+
+
+      var localN =
+        ee.Number(
+          feature.get(
+            'local_valid_n'
+          )
+        );
+
+
+      var localFrac =
+        ee.Number(
+          feature.get(
+            'local_fraction'
+          )
+        );
+
+
+      var passClear =
+        clearCount.gte(
+          MIN_CLEAR_FOR_AUTO
+        );
+
+
+      var passClass =
+        predictedClass.eq(
+          sourceClass
+        );
+
+
+      var passDistance =
+        ownDistance.lte(
+          DISTANCE_THRESHOLD
+        );
+
+
+      var passMargin =
+        classMargin.gte(
+          MARGIN_THRESHOLD
+        );
+
+
+      var passLocal =
+        localN
+          .gte(
+            MIN_VALID_NEIGHBOURS
+          )
+          .and(
+            localFrac.gte(
+              MIN_LOCAL_FRACTION
+            )
+          );
+
+
+      var accepted =
+        passClear
+          .and(
+            passClass
+          )
+          .and(
+            passDistance
+          )
+          .and(
+            passMargin
+          )
+          .and(
+            passLocal
+          );
+
+
+      return feature.set({
+
+        passB_source_class:
+          sourceClass,
+
+        passB_predicted_class:
+          predictedClass,
+
+        passB_distance:
+          ownDistance,
+
+        passB_margin:
+          classMargin,
+
+        passB_clear_ok:
+          passClear,
+
+        passB_class_ok:
+          passClass,
+
+        passB_distance_ok:
+          passDistance,
+
+        passB_margin_ok:
+          passMargin,
+
+        passB_local_ok:
+          passLocal,
+
+        passB_auto_accept:
+          ee.Number(
+            ee.Algorithms.If(
+              accepted,
+              1,
+              0
+            )
+          ),
+
+        source_year:
+          2015,
+
+        target_year:
+          2010,
+
+        training_method:
+          '05B_2010_native_local_expansion'
+      });
+
+    }
+  );
+
+
+// ================================================================
+// 20. ACCEPT + DEDUPLICATE
+// ================================================================
+
+var acceptedCandidatesRaw =
+  screenedCandidates.filter(
+    ee.Filter.eq(
+      'passB_auto_accept',
+      1
+    )
+  );
+
+
+// ------------------------------------------------
+// Dedupe identical Landsat pixels.
+//
+// At this stage a pixel is already required to agree with
+// its source class, so cross-class duplicate acceptance should
+// not occur under a single best-class model.
+// ------------------------------------------------
+
+var acceptedCandidates =
+  acceptedCandidatesRaw.distinct(
+    [
+      'pixel_key'
+    ]
+  );
+
+
+print(
+  '----------------------------------------'
+);
+
+print(
+  'PASS-B ACCEPTANCE'
+);
+
+print(
+  '----------------------------------------'
+);
+
+
+print(
+  ee.Dictionary({
+
+    accepted_before_dedup:
+      acceptedCandidatesRaw.size(),
+
+    accepted_after_dedup:
+      acceptedCandidates.size()
+  })
+);
+
+
+print(
+  'Accepted candidate class histogram'
+);
+
+print(
+  acceptedCandidates.aggregate_histogram(
+    CLASS_PROPERTY
+  )
+);
+
+
+// ================================================================
+// 21. CLASS-WISE SUFFICIENCY SUMMARY
+// ================================================================
+
+function summarizeCandidates(
+  classId
+) {
+
+  var classAccepted =
+    acceptedCandidates.filter(
+      ee.Filter.eq(
+        CLASS_PROPERTY,
+        classId
+      )
+    );
+
+
+  var n =
+    classAccepted.size();
+
+
+  var groupIds =
+    ee.List(
+      classAccepted.aggregate_array(
+        'poly_id'
+      )
+    )
+    .distinct();
+
+
+  var deficit =
+    ee.Number(
+      TARGET_PER_CLASS
+    )
+    .subtract(
+      n
+    )
+    .max(
+      0
+    );
+
+
+  var sufficient =
+    n.gte(
+      TARGET_PER_CLASS
+    );
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      class_name:
+        CLASS_NAMES[
+          classId - 1
+        ],
+
+      accepted_candidate_n:
+        n,
+
+      distinct_poly_id_n:
+        groupIds.size(),
+
+      target_n:
+        TARGET_PER_CLASS,
+
+      sufficient_120:
+        sufficient,
+
+      deficit:
+        deficit,
+
+      mean_passB_distance:
+        classAccepted.aggregate_mean(
+          'passB_distance'
+        ),
+
+      mean_passB_margin:
+        classAccepted.aggregate_mean(
+          'passB_margin'
+        ),
+
+      mean_clear_count:
+        classAccepted.aggregate_mean(
+          'clear_count'
+        ),
+
+      mean_local_fraction:
+        classAccepted.aggregate_mean(
+          'local_fraction'
+        )
+    }
+  );
+}
+
+
+var candidateSummary =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      summarizeCandidates
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  'CLASS-WISE PASS-B SUFFICIENCY SUMMARY'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  candidateSummary
+);
+
+
+// ------------------------------------------------
+// Also print poly_id histograms.
+// ------------------------------------------------
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var classAccepted =
+      acceptedCandidates.filter(
+        ee.Filter.eq(
+          CLASS_PROPERTY,
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        accepted_n:
+          classAccepted.size(),
+
+        poly_id_histogram:
+          classAccepted
+            .aggregate_histogram(
+              'poly_id'
+            )
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 22. BUILD PROVISIONAL BALANCED TRAINING SET
+// ================================================================
+//
+// If >=120 accepted candidates exist for a class:
+//
+// randomly retain 120.
+//
+// If <120 exist:
+//
+// retain ALL available candidates.
+//
+// Therefore the script NEVER weakens quality criteria to
+// force the quota.
+//
+// We inspect the resulting counts before export.
+// ================================================================
+
+var provisionalTraining2010 =
+  ee.FeatureCollection([]);
+
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var classCandidates =
+      acceptedCandidates
+        .filter(
+          ee.Filter.eq(
+            CLASS_PROPERTY,
+            classId
+          )
+        )
+        .randomColumn(
+          'selection_random',
+          500 + classId
+        )
+        .sort(
+          'selection_random'
+        )
+        .limit(
+          TARGET_PER_CLASS
+        );
+
+
+    provisionalTraining2010 =
+      provisionalTraining2010.merge(
+        classCandidates
+      );
+
+  }
+);
+
+
+// ================================================================
+// 23. PROVISIONAL TRAINING QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  'PROVISIONAL 2010 TRAINING RESULT'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'Provisional total'
+);
+
+print(
+  provisionalTraining2010.size()
+);
+
+
+print(
+  'Provisional class histogram'
+);
+
+print(
+  provisionalTraining2010.aggregate_histogram(
+    CLASS_PROPERTY
+  )
+);
+
+
+// ------------------------------------------------
+// Selected source-group distribution
+// ------------------------------------------------
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var classSelected =
+      provisionalTraining2010.filter(
+        ee.Filter.eq(
+          CLASS_PROPERTY,
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        selected_n:
+          classSelected.size(),
+
+        selected_distinct_poly_id_n:
+          ee.List(
+            classSelected.aggregate_array(
+              'poly_id'
+            )
+          )
+          .distinct()
+          .size(),
+
+        selected_poly_id_histogram:
+          classSelected
+            .aggregate_histogram(
+              'poly_id'
+            )
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 24. MAP DISPLAY
+// ================================================================
+
+Map.centerObject(
+  ROI,
+  10
+);
+
+
+// ------------------------------------------------
+// ROI
+// ------------------------------------------------
+
+Map.addLayer(
+  ROI.style({
+
+    color:
+      'FFFFFF',
+
+    fillColor:
+      '00000000',
+
+    width:
+      2
+  }),
+  {},
+  'Chennai Urban Study Area',
+  true
+);
+
+
+// ------------------------------------------------
+// 2010 Landsat-5
+// ------------------------------------------------
+
+Map.addLayer(
+  image2010,
+  {
+
+    bands: [
+      'red',
+      'green',
+      'blue'
+    ],
+
+    min:
+      0,
+
+    max:
+      0.30,
+
+    gamma:
+      1.2
+  },
+  '2010 Landsat-5 TRUE COLOR',
+  true
+);
+
+
+// ------------------------------------------------
+// 2010-native nearest class
+//
+// QA ONLY.
+// This is NOT the final MLC.
+// ------------------------------------------------
+
+Map.addLayer(
+  bestClass,
+  {
+
+    min:
+      1,
+
+    max:
+      5,
+
+    palette: [
+      'FF0000',
+      '00A000',
+      '0000FF',
+      'FFFF00',
+      'A0522D'
+    ]
+  },
+  'QA ONLY — 2010-native nearest class',
+  false
+);
+
+
+// ------------------------------------------------
+// Original 05A trusted anchors
+// ------------------------------------------------
+
+Map.addLayer(
+  stableSeeds.style({
+
+    color:
+      '00FFFF',
+
+    fillColor:
+      '00FFFF',
+
+    pointSize:
+      4,
+
+    width:
+      1
+  }),
+  {},
+  '05A STABLE seeds',
+  false
+);
+
+
+// ------------------------------------------------
+// All accepted Pass-B candidates
+// ------------------------------------------------
+
+Map.addLayer(
+  acceptedCandidates.style({
+
+    color:
+      '00FF00',
+
+    fillColor:
+      '00FF00',
+
+    pointSize:
+      3,
+
+    width:
+      1
+  }),
+  {},
+  '05B AUTO-ACCEPTED candidates',
+  false
+);
+
+
+// ------------------------------------------------
+// Provisional selected training
+// ------------------------------------------------
+
+Map.addLayer(
+  provisionalTraining2010.style({
+
+    color:
+      'FFFFFF',
+
+    fillColor:
+      'FF00FF',
+
+    pointSize:
+      5,
+
+    width:
+      1
+  }),
+  {},
+  'Provisional 2010 training',
+  true
+);
+
+
+// ================================================================
+// 25. DO NOT EXPORT FINAL TRAINING YET
+// ================================================================
+//
+// FIRST:
+// send the console QA results back for review.
+//
+// If all five classes contain 120 clean pixels and the
+// poly_id distribution is reasonable, we will enable:
+//
+// Export.table.toAsset({
+//   collection: provisionalTraining2010,
+//   description: 'chennai_training_2010_final',
+//   assetId:
+//     'projects/assignment-482806/assets/chennai_training_2010_final'
+// });
+//
+// ================================================================
+
+
+print(
+  '========================================'
+);
+
+print(
+  '05B COMPLETE — AUTOMATED TRAINING QA'
+);
+
+print(
+  'DO NOT EXPORT FINAL TRAINING YET.'
+);
+
+print(
+  'Review class sufficiency + poly_id distribution first.'
+);
+
+print(
+  '========================================'
+);
+
+// ================================================================
+// MATERIALIZE 05B ACCEPTED CANDIDATES
+// ================================================================
+//
+// This is NOT the final 2010 training asset.
+//
+// It saves the 727 high-confidence Pass-B candidates so that
+// subsequent deficit-recovery work does not need to reconstruct
+// this complete computation graph repeatedly.
+// ================================================================
+
+Export.table.toAsset({
+
+  collection:
+    acceptedCandidates,
+
+  description:
+    'chennai_2010_passB_candidates_05B',
+
+  assetId:
+    'projects/assignment-482806/assets/chennai_2010_passB_candidates_05B'
+
+});

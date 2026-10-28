@@ -1,0 +1,189 @@
+
+// ===============================================================
+// CHENNAI LULC - STAGE 08F-4C
+// X3 SNIC: FREEZE ONE 2015 PREDICTOR RASTER
+// NO changes to existing training, validation or MLC assets.
+// Run only ONCE. New asset output, overwrite:false.
+// ===============================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+var OUTPUT = ROOT + 'chennai_08f4c_X3_SNIC_frozen_11bands_segments_v1';
+
+var roi = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+).geometry();
+
+var baseline = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2015'
+).select(0);
+
+var originalGrid = baseline.projection();
+
+// VERIFIED from the existing locked raster's projection.
+// Use BOTH CRS and affine transform, not scale alone.
+var GRID_CRS = 'EPSG:32644';
+var GRID_TRANSFORM = [30, 0, 399060, 0, -30, 1463250];
+
+var BANDS9 = [
+  'blue', 'green', 'red', 'nir', 'swir1', 'swir2',
+  'NDVI', 'NDWI', 'NDBI'
+];
+
+var EXPORT_BANDS = BANDS9.concat([
+  'segment_NDBI_mean',
+  'segment_red_sd',
+  'segment_id'
+]);
+
+// ===============================================================
+// 1. Reproduce the original 2015 Landsat composite
+// ===============================================================
+
+function preprocess(image) {
+  var qa = image.select('QA_PIXEL');
+
+  var good = qa.bitwiseAnd(63).eq(0)
+    .and(image.select('QA_RADSAT').eq(0));
+
+  return image.select(
+      ['SR_B2','SR_B3','SR_B4','SR_B5','SR_B6','SR_B7'],
+      ['blue','green','red','nir','swir1','swir2']
+    )
+    .multiply(0.0000275)
+    .subtract(0.2)
+    .updateMask(good)
+    .copyProperties(image, ['system:time_start']);
+}
+
+function addIndices(im) {
+  var green = im.select('green');
+  var red = im.select('red');
+  var nir = im.select('nir');
+  var swir1 = im.select('swir1');
+
+  return im.addBands([
+    nir.subtract(red).divide(nir.add(red)).rename('NDVI'),
+    green.subtract(nir).divide(green.add(nir)).rename('NDWI'),
+    swir1.subtract(nir).divide(swir1.add(nir)).rename('NDBI')
+  ]).select(BANDS9);
+}
+
+var scenes = ee.ImageCollection(
+  'LANDSAT/LC08/C02/T1_L2'
+)
+  .filterBounds(roi)
+  .filterDate('2015-01-01', '2016-01-01')
+  .map(preprocess);
+
+// Do not clip the imagery before segmentation.
+var spectral = addIndices(
+  scenes.median()
+).reproject(originalGrid);
+
+// ===============================================================
+// 2. Recreate EXACT Stage 08F-4 SNIC settings
+// ===============================================================
+
+var snic = ee.Algorithms.Image.Segmentation.SNIC({
+  image: spectral,
+  size: 5,
+  compactness: 0.1,
+  connectivity: 8,
+  neighborhoodSize: 64
+}).reproject(originalGrid);
+
+var segmentNDBI = snic.select('NDBI_mean')
+  .rename('segment_NDBI_mean');
+
+var segmentRedSD = spectral.select('red')
+  .addBands(snic.select('clusters'))
+  .reduceConnectedComponents({
+    reducer: ee.Reducer.stdDev(),
+    labelBand: 'clusters',
+    maxSize: 256
+  })
+  .rename('segment_red_sd');
+
+var segmentID = snic.select('clusters')
+  .rename('segment_id');
+
+// ===============================================================
+// 3. Construct complete frozen predictor raster
+// ===============================================================
+
+// Store all bands as Float64.
+// This keeps signed 32-bit segment IDs exactly representable.
+
+var frozen = spectral
+  .addBands([
+    segmentNDBI,
+    segmentRedSD,
+    segmentID
+  ])
+  .select(EXPORT_BANDS)
+  .toDouble()
+  .clip(roi)
+  .set({
+    study_year: 2015,
+    experiment: '08F_X3_SNIC_fixed_grid',
+    source: 'Landsat_8_C2_T1_L2_full_year_median',
+    snic_size: 5,
+    snic_compactness: 0.1,
+    snic_connectivity: 8,
+    snic_neighborhood_size: 64,
+    red_sd_component_max_size: 256,
+    grid_crs: GRID_CRS,
+    status: 'EXPERIMENTAL_NOT_LOCKED'
+  });
+
+// ===============================================================
+// 4. Basic pre-export QA
+// ===============================================================
+
+print('============================================');
+print('STAGE 08F-4C | FROZEN SNIC PREDICTOR EXPORT');
+print('============================================');
+
+print('Target asset:');
+print(OUTPUT);
+
+print('Locked original 2015 raster projection:');
+print(originalGrid);
+
+print('2015 Landsat scenes (expected 19):');
+print(scenes.size());
+
+print('Export bands (expected 12):');
+print(frozen.bandNames());
+
+print('SNIC settings are unchanged from Stage 08F-4.');
+print('Output uses Float64 to preserve segment IDs.');
+
+print('This creates a NEW EXPERIMENTAL asset only.');
+print('Original classification and points remain locked.');
+
+print('Open TASKS to start the export.');
+
+// ===============================================================
+// 5. Export the experimental raster ONCE
+// ===============================================================
+
+// Do not run if an asset with this exact name
+// already exists. Do not overwrite anything.
+
+Export.image.toAsset({
+  image: frozen,
+  description: 'Chennai_08F4C_X3_SNIC_FrozenPredictors_v1',
+  assetId: OUTPUT,
+  region: roi,
+  crs: GRID_CRS,
+  crsTransform: GRID_TRANSFORM,
+  maxPixels: 1e9,
+  pyramidingPolicy: {
+    '.default': 'sample'
+  },
+  overwrite: false
+});
+
+// No map layers or expensive interactive reducers.
+// END STAGE 08F-4C

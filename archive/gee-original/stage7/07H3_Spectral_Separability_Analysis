@@ -1,0 +1,487 @@
+
+// ============================================================
+// CHENNAI LULC — STAGE 07H3
+// 2010 SPECTRAL SEPARABILITY: CLASSES 2, 4, 5
+//
+// CLASS 2: VEGETATION (DENSE / TREE-DOMINATED)
+// CLASS 4: AGRICULTURAL OR AGRICULTURALLY IDENTIFIABLE LAND
+// CLASS 5: VACANT / UNUSED OPEN LAND, INCLUDING GREEN PATCHES
+//
+// READ-ONLY DIAGNOSTIC. NO EXPORTS, NO RELABELLING.
+// No independent validation points used.
+// Source: locked 600-point manual V1 training asset.
+// ============================================================
+
+// 1 — INPUT AND FIXED METHOD
+var ROOT = 'projects/assignment-482806/assets/';
+
+var training = ee.FeatureCollection(
+  ROOT + 'chennai_training_2010_manual_final_v1'
+);
+
+var REGULARIZATION = 1e-6;
+
+var BANDS_9 = [
+  'blue', 'green', 'red',
+  'nir', 'swir1', 'swir2',
+  'NDVI', 'NDWI', 'NDBI'
+];
+
+var BANDS_6 = [
+  'blue', 'green', 'red',
+  'nir', 'swir1', 'swir2'
+];
+
+var BANDS_3 = [
+  'NDVI', 'NDWI', 'NDBI'
+];
+
+var CLASS_NAMES = {
+  2: 'Vegetation',
+  4: 'Agricultural',
+  5: 'Vacant_Open'
+};
+
+var CLASS_IDS = [2, 4, 5];
+
+var PAIRS = [
+  {
+    a: 2,
+    b: 4,
+    label: '2_vs_4_Vegetation_Agriculture'
+  },
+  {
+    a: 2,
+    b: 5,
+    label: '2_vs_5_Vegetation_VacantOpen'
+  },
+  {
+    a: 4,
+    b: 5,
+    label: '4_vs_5_Agriculture_VacantOpen'
+  }
+];
+
+var FEATURE_SETS = [
+  {name: 'all_9', bands: BANDS_9},
+  {name: 'raw_6', bands: BANDS_6},
+  {name: 'indices_3', bands: BANDS_3}
+];
+
+// ------------------------------------------------------------
+// 2 — CHECK ORIGINAL TRAINING DATA
+// ------------------------------------------------------------
+
+print('=============================================');
+print('07H3 — SPECTRAL SEPARABILITY ANALYSIS');
+print('=============================================');
+
+print('Training observations (expected 600):');
+print(training.size());
+
+print('Counts by original class_id:');
+print(training.aggregate_histogram('class_id'));
+
+print('Distinct original training sites (expected 28):');
+print(training.aggregate_count_distinct('site_id'));
+
+print('Investigated class meanings:');
+print('2 = dense or tree-dominated vegetation');
+print('4 = agricultural / agriculturally identifiable land');
+print('5 = unused vacant/open land, green patches permitted');
+
+// ------------------------------------------------------------
+// 3 — GAUSSIAN PARAMETER ESTIMATION
+// ------------------------------------------------------------
+//
+// Same covariance method as the working Stage 07G.
+//
+// For each class and feature set:
+// - Mean vector
+// - Sample covariance matrix
+// - Covariance regularization = 1e-6
+// - Covariance determinant
+//
+// This does not train or export a new classification.
+// ------------------------------------------------------------
+
+function estimateGaussian(fc, bands) {
+
+  var dim = bands.length;
+
+  var means = bands.map(function(b) {
+    return fc.aggregate_mean(b);
+  });
+
+  var mean = ee.Array([means]).transpose();
+
+  var withArray = fc.makeArray(
+    bands,
+    'spectral_vector'
+  );
+
+  var covarianceResult = withArray.reduceColumns({
+    reducer: ee.Reducer.covariance()
+      .setOutputs(['covariance']),
+    selectors: ['spectral_vector']
+  });
+
+  var sampleCov = ee.Array(
+    covarianceResult.get('covariance')
+  );
+
+  var cov = sampleCov.add(
+    ee.Array.identity(dim).multiply(REGULARIZATION)
+  );
+
+  return ee.Dictionary({
+    mean: mean,
+    covariance: cov,
+    determinant: cov.matrixDeterminant(),
+    sample_count: fc.size()
+  });
+
+}
+
+// ------------------------------------------------------------
+// 4 — JEFFRIES-MATUSITA SEPARABILITY
+// ------------------------------------------------------------
+//
+// Bhattacharyya distance between two Gaussians:
+//
+// D_B = (1/8) delta' Sigma_bar^-1 delta
+//     + (1/2) ln[det(Sigma_bar) /
+//                sqrt(det(Sigma_a)det(Sigma_b))]
+//
+// Sigma_bar = (Sigma_a + Sigma_b)/2
+//
+// JM = 2 * (1 - exp(-D_B))
+//
+// JM range: 0 to 2
+// Higher = stronger fitted spectral separation.
+// ------------------------------------------------------------
+
+function pairSeparation(
+  pa, pb, featureSetName, label, a, b
+) {
+
+  pa = ee.Dictionary(pa);
+  pb = ee.Dictionary(pb);
+
+  var muA = ee.Array(pa.get('mean'));
+  var muB = ee.Array(pb.get('mean'));
+
+  var covA = ee.Array(pa.get('covariance'));
+  var covB = ee.Array(pb.get('covariance'));
+
+  var covBar = covA.add(covB).multiply(0.5);
+
+  var delta = muA.subtract(muB);
+
+  // Difference between class mean vectors.
+
+  var quadratic = ee.Number(
+    delta.transpose()
+      .matrixMultiply(covBar.matrixInverse())
+      .matrixMultiply(delta)
+      .get([0, 0])
+  );
+
+  var meanTerm = quadratic.multiply(0.125);
+
+  // Use log-determinants for numerical stability.
+
+  var logDetBar = ee.Number(
+    covBar.matrixDeterminant()
+  ).max(1e-300).log();
+
+  var logDetA = ee.Number(
+    pa.get('determinant')
+  ).max(1e-300).log();
+
+  var logDetB = ee.Number(
+    pb.get('determinant')
+  ).max(1e-300).log();
+
+  var covarianceTerm = logDetBar
+    .multiply(0.5)
+    .subtract(
+      logDetA.add(logDetB).multiply(0.25)
+    );
+
+  var bhattacharyya = meanTerm
+    .add(covarianceTerm)
+    .max(0);
+
+  var jm = ee.Number(2).multiply(
+    ee.Number(1).subtract(
+      bhattacharyya.multiply(-1).exp()
+    )
+  );
+
+  return ee.Feature(null, {
+    feature_set: featureSetName,
+    pair: label,
+    class_a: a,
+    class_b: b,
+    n_a: pa.get('sample_count'),
+    n_b: pb.get('sample_count'),
+    bhattacharyya_distance: bhattacharyya,
+    JM_0_to_2: jm,
+    mean_difference_term: meanTerm,
+    covariance_difference_term: covarianceTerm,
+    covariance_det_a: pa.get('determinant'),
+    covariance_det_b: pb.get('determinant')
+  });
+
+}
+
+// ------------------------------------------------------------
+// 5 — COMPUTE SEPARABILITY FOR THREE FEATURE SETS
+// ------------------------------------------------------------
+//
+// A: All nine predictors
+// B: Six original reflectance bands
+// C: Three indices only
+//
+// Three class pairs x three feature sets = 9 results.
+// ------------------------------------------------------------
+
+var separabilityRows = [];
+
+FEATURE_SETS.forEach(function(set) {
+
+  var estimates = {};
+
+  CLASS_IDS.forEach(function(k) {
+
+    var subset = training.filter(
+      ee.Filter.eq('class_id', k)
+    );
+
+    estimates[k] = estimateGaussian(
+      subset,
+      set.bands
+    );
+
+  });
+
+  PAIRS.forEach(function(p) {
+
+    separabilityRows.push(
+      pairSeparation(
+        estimates[p.a],
+        estimates[p.b],
+        set.name,
+        p.label,
+        p.a,
+        p.b
+      )
+    );
+
+  });
+
+});
+
+var separability = ee.FeatureCollection(
+  separabilityRows
+);
+
+print('=============================================');
+print('PAIRWISE GAUSSIAN SEPARABILITY — 9 RESULTS');
+print('=============================================');
+
+print('JM near 0 = overlapping fitted distributions.');
+print('JM near 2 = strongly separated fitted distributions.');
+print('JM is NOT independent classification accuracy.');
+
+print(
+  separability.select([
+    'feature_set',
+    'pair',
+    'n_a',
+    'n_b',
+    'JM_0_to_2',
+    'bhattacharyya_distance',
+    'mean_difference_term',
+    'covariance_difference_term'
+  ])
+);
+
+// ------------------------------------------------------------
+// 6 — INDIVIDUAL BAND SEPARABILITY
+// ------------------------------------------------------------
+//
+// Compare standardized mean differences.
+//
+// d = |mean_a - mean_b| /
+//     sqrt((sd_a^2 + sd_b^2)/2)
+//
+// Larger values indicate stronger mean differences
+// relative to within-class variability.
+//
+// This is a diagnostic, not a classifier.
+// ------------------------------------------------------------
+
+var perBandRows = [];
+
+PAIRS.forEach(function(p) {
+
+  var aFC = training.filter(
+    ee.Filter.eq('class_id', p.a)
+  );
+
+  var bFC = training.filter(
+    ee.Filter.eq('class_id', p.b)
+  );
+
+  BANDS_9.forEach(function(b) {
+
+    var statsA = ee.Dictionary(
+      aFC.aggregate_stats(b)
+    );
+
+    var statsB = ee.Dictionary(
+      bFC.aggregate_stats(b)
+    );
+
+    var meanA = ee.Number(
+      statsA.get('mean')
+    );
+
+    var meanB = ee.Number(
+      statsB.get('mean')
+    );
+
+    var sdA = ee.Number(
+      statsA.get('sample_sd')
+    );
+
+    var sdB = ee.Number(
+      statsB.get('sample_sd')
+    );
+
+    var pooledSD = sdA.pow(2)
+      .add(sdB.pow(2))
+      .divide(2)
+      .sqrt()
+      .max(1e-12);
+
+    var standardizedDifference = meanA
+      .subtract(meanB)
+      .abs()
+      .divide(pooledSD);
+
+    perBandRows.push(
+      ee.Feature(null, {
+        pair: p.label,
+        band: b,
+        mean_a: meanA,
+        mean_b: meanB,
+        sd_a: sdA,
+        sd_b: sdB,
+        standardized_mean_difference:
+          standardizedDifference
+      })
+    );
+
+  });
+
+});
+
+var bandComparison = ee.FeatureCollection(
+  perBandRows
+);
+
+print('=============================================');
+print('PER-BAND SEPARABILITY — 27 RESULTS');
+print('=============================================');
+
+print('Higher standardized mean difference =');
+print('stronger separation for that individual band.');
+
+print(bandComparison);
+
+// ------------------------------------------------------------
+// 7 — CLASS DISTRIBUTION SUMMARY
+// ------------------------------------------------------------
+
+var classRows = CLASS_IDS.map(function(k) {
+
+  var fc = training.filter(
+    ee.Filter.eq('class_id', k)
+  );
+
+  var ndviStats = ee.Dictionary(
+    fc.aggregate_stats('NDVI')
+  );
+
+  var ndwiStats = ee.Dictionary(
+    fc.aggregate_stats('NDWI')
+  );
+
+  var ndbiStats = ee.Dictionary(
+    fc.aggregate_stats('NDBI')
+  );
+
+  return ee.Feature(null, {
+
+    class_id: k,
+
+    class_name: CLASS_NAMES[k],
+
+    count: fc.size(),
+
+    distinct_sites:
+      fc.aggregate_count_distinct('site_id'),
+
+    NDVI_mean: ndviStats.get('mean'),
+
+    NDVI_sd: ndviStats.get('sample_sd'),
+
+    NDVI_min: ndviStats.get('min'),
+
+    NDVI_max: ndviStats.get('max'),
+
+    NDWI_mean: ndwiStats.get('mean'),
+
+    NDBI_mean: ndbiStats.get('mean')
+
+  });
+
+});
+
+print('=============================================');
+print('CLASS DISTRIBUTION SUMMARY');
+print('=============================================');
+
+print(
+  ee.FeatureCollection(classRows)
+);
+
+// ------------------------------------------------------------
+// 8 — FINAL STATUS
+// ------------------------------------------------------------
+
+print('=============================================');
+print('07H3 COMPLETE — DIAGNOSTIC ONLY');
+print('=============================================');
+
+print('No validation data used.');
+print('No labels changed.');
+print('No classifier or raster exported.');
+print('No previous assets overwritten.');
+
+print('Interpret JM alongside prior held-out CV results.');
+
+print('High spectral separability does not prove');
+print('that agricultural vs vacant/open land use');
+print('can be recognized from isolated 30 m pixels.');
+
+print('=============================================');
+print('END STAGE 07H3');
+print('=============================================');
+
+// ============================================================
+// END
+// ============================================================

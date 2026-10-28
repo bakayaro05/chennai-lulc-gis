@@ -1,0 +1,538 @@
+
+ // ============================================================
+ // CHENNAI LULC - STAGE 08F-2
+ // ORIGINAL 2015 TRAINING + VALIDATION POINTS
+ // SPATIAL-CONTEXT GAUSSIAN MLC
+ // 21 OCTOBER 2026
+ //
+ // READ ONLY - NO EXPORTS, NO MODIFICATION OF ORIGINALS
+ // ============================================================
+
+ // 1. LOCKED INPUTS
+
+ var ROOT = 'projects/assignment-482806/assets/';
+
+ var ROI = ee.FeatureCollection(
+   ROOT + 'chennai_admin_study_area_clean'
+ );
+
+ var roi = ROI.geometry();
+
+ var originalTraining = ee.FeatureCollection(
+   ROOT + 'chennai_training_2015_final'
+ );
+
+ var originalValidation = ee.FeatureCollection(
+   ROOT + 'chennai_validation_2015_final'
+ );
+
+ var originalMap = ee.Image(
+   ROOT + 'chennai_mlc_lulc_2015'
+ ).select(0).rename('baseline');
+
+ // Inherit the existing raster grid, avoiding
+ // an assumed EPSG:32644 grid origin.
+ var grid = originalMap.projection();
+
+ var BANDS9 = [
+   'blue', 'green', 'red',
+   'nir', 'swir1', 'swir2',
+   'NDVI', 'NDWI', 'NDBI'
+ ];
+
+ var EXTRA = [
+   'NDBI_3x3_mean',
+   'red_3x3_sd'
+ ];
+
+ var BANDS11 = BANDS9.concat(EXTRA);
+
+ var CLASSES = [1, 2, 3, 4, 5];
+
+ var CLASS_NAMES = [
+   'Built-up',
+   'Vegetation',
+   'Water',
+   'Agricultural/Open',
+   'Barren/Fallow'
+ ];
+
+ var REGULARIZATION = 1e-6;
+
+ // ============================================================
+ // 2. RECREATE LOCKED 2015 LANDSAT PROCESSING
+ // ============================================================
+
+ function preprocessL8(image) {
+
+   var qa = image.select('QA_PIXEL');
+
+   var good = qa.bitwiseAnd(1 << 0).eq(0)
+     .and(qa.bitwiseAnd(1 << 1).eq(0))
+     .and(qa.bitwiseAnd(1 << 2).eq(0))
+     .and(qa.bitwiseAnd(1 << 3).eq(0))
+     .and(qa.bitwiseAnd(1 << 4).eq(0))
+     .and(qa.bitwiseAnd(1 << 5).eq(0))
+     .and(image.select('QA_RADSAT').eq(0));
+
+   return image.select(
+       [
+         'SR_B2', 'SR_B3', 'SR_B4',
+         'SR_B5', 'SR_B6', 'SR_B7'
+       ],
+       [
+         'blue', 'green', 'red',
+         'nir', 'swir1', 'swir2'
+       ]
+     )
+     .multiply(0.0000275)
+     .subtract(0.2)
+     .updateMask(good)
+     .copyProperties(image, ['system:time_start']);
+ }
+
+ function addIndices(image) {
+
+   var green = image.select('green');
+   var red = image.select('red');
+   var nir = image.select('nir');
+   var swir1 = image.select('swir1');
+
+   return image.addBands([
+
+     nir.subtract(red)
+       .divide(nir.add(red))
+       .rename('NDVI'),
+
+     green.subtract(nir)
+       .divide(green.add(nir))
+       .rename('NDWI'),
+
+     swir1.subtract(nir)
+       .divide(swir1.add(nir))
+       .rename('NDBI')
+
+   ]).select(BANDS9);
+ }
+
+ var collection2015 = ee.ImageCollection(
+   'LANDSAT/LC08/C02/T1_L2'
+ )
+   .filterBounds(roi)
+   .filterDate('2015-01-01', '2016-01-01')
+   .map(preprocessL8);
+
+ // ============================================================
+ // 3. CREATE 11-BAND PREDICTOR STACK
+ // ============================================================
+
+ // Compute neighbourhoods before clipping to ROI.
+
+ var spectral9 = addIndices(
+   collection2015.median()
+ ).reproject(grid);
+
+ var kernel3 = ee.Kernel.square({
+   radius: 1,
+   units: 'pixels',
+   normalize: false
+ });
+
+ // Spatial feature 1: neighbourhood NDBI mean.
+ var contextNDBI = spectral9.select('NDBI')
+   .reduceNeighborhood({
+     reducer: ee.Reducer.mean(),
+     kernel: kernel3,
+     skipMasked: true
+   })
+   .rename('NDBI_3x3_mean');
+
+ // Spatial feature 2: neighbourhood red texture.
+ var contextTexture = spectral9.select('red')
+   .reduceNeighborhood({
+     reducer: ee.Reducer.stdDev(),
+     kernel: kernel3,
+     skipMasked: true
+   })
+   .rename('red_3x3_sd');
+
+ // Diagnostic only: valid neighbourhood pixels.
+ var validNeighbours = spectral9.select('red')
+   .mask()
+   .reduceNeighborhood({
+     reducer: ee.Reducer.sum(),
+     kernel: kernel3
+   })
+   .rename('n_valid_3x3');
+
+ var stack11 = spectral9
+   .addBands([contextNDBI, contextTexture])
+   .select(BANDS11)
+   .clip(roi);
+
+ // ============================================================
+ // 4. REUSE ORIGINAL TRAINING + VALIDATION POINTS
+ // ============================================================
+
+ var sampledTraining = stack11
+   .addBands(validNeighbours.clip(roi))
+   .sampleRegions({
+     collection: originalTraining,
+     properties: ['class_id', 'poly_id'],
+     projection: grid,
+     geometries: false,
+     tileScale: 8
+   });
+
+ var sampledValidation = stack11.sampleRegions({
+   collection: originalValidation,
+   properties: ['class_id', 'val_poly_id'],
+   projection: grid,
+   geometries: false,
+   tileScale: 8
+ });
+
+ // Preserve archived values to check the reconstructed
+ // Landsat composite against the original training data.
+
+ var trainingWithArchives = originalTraining.map(
+   function(f) {
+     return f.set({
+       original_red_archived: f.get('red'),
+       original_NDBI_archived: f.get('NDBI')
+     });
+   }
+ );
+
+ var trainingCheck = stack11
+   .addBands(validNeighbours.clip(roi))
+   .sampleRegions({
+     collection: trainingWithArchives,
+     properties: [
+       'class_id',
+       'poly_id',
+       'original_red_archived',
+       'original_NDBI_archived'
+     ],
+     projection: grid,
+     geometries: false,
+     tileScale: 8
+   })
+   .map(function(f) {
+     return f.set({
+       red_abs_delta: ee.Number(f.get('red'))
+         .subtract(
+           ee.Number(f.get('original_red_archived'))
+         ).abs(),
+
+       NDBI_abs_delta: ee.Number(f.get('NDBI'))
+         .subtract(
+           ee.Number(f.get('original_NDBI_archived'))
+         ).abs()
+     });
+   });
+
+ // ============================================================
+ // 5. FIT TRUE 11-DIMENSIONAL GAUSSIAN MLC
+ // ============================================================
+
+ function gaussianParameters(classID) {
+
+   var fc = sampledTraining.filter(
+     ee.Filter.eq('class_id', classID)
+   );
+
+   var mean = ee.Array([
+     BANDS11.map(function(band) {
+       return fc.aggregate_mean(band);
+     })
+   ]).transpose();
+
+   var withArray = fc.makeArray(
+     BANDS11,
+     'feature_vector'
+   );
+
+   var covariance = ee.Array(
+     withArray.reduceColumns({
+       reducer: ee.Reducer.covariance()
+         .setOutputs(['covariance']),
+       selectors: ['feature_vector']
+     }).get('covariance')
+   );
+
+   var regularized = covariance.add(
+     ee.Array.identity(BANDS11.length)
+       .multiply(REGULARIZATION)
+   );
+
+   return ee.Dictionary({
+     class_id: classID,
+     count: fc.size(),
+     mean: mean,
+     raw_determinant: covariance.matrixDeterminant(),
+     determinant: regularized.matrixDeterminant(),
+     inverse: regularized.matrixInverse()
+   });
+ }
+
+ var model = ee.List(
+   CLASSES.map(gaussianParameters)
+ );
+
+ var pixelColumn = stack11
+   .toArray()
+   .toArray(1);
+
+ // Equal class priors.
+ // Full Gaussian log-likelihood, not centroid distance.
+
+ function gaussianScore(parameters, name) {
+
+   var p = ee.Dictionary(parameters);
+
+   var mu = ee.Image.constant(
+     ee.Array(p.get('mean'))
+   );
+
+   var inverse = ee.Image.constant(
+     ee.Array(p.get('inverse'))
+   );
+
+   var det = ee.Number(
+     p.get('determinant')
+   );
+
+   var d = pixelColumn.subtract(mu);
+
+   var squaredDistance = d.arrayTranspose()
+     .matrixMultiply(inverse)
+     .matrixMultiply(d)
+     .arrayGet([0, 0]);
+
+   return squaredDistance.multiply(-0.5)
+     .subtract(
+       ee.Image.constant(
+         det.max(1e-300).log()
+       ).multiply(0.5)
+     )
+     .rename(name);
+ }
+
+ var scoreStack = ee.Image.cat([
+
+   gaussianScore(model.get(0), 'score_1'),
+   gaussianScore(model.get(1), 'score_2'),
+   gaussianScore(model.get(2), 'score_3'),
+   gaussianScore(model.get(3), 'score_4'),
+   gaussianScore(model.get(4), 'score_5')
+
+ ]);
+
+ var experimentalMap = scoreStack
+   .toArray()
+   .arrayArgmax()
+   .arrayGet([0])
+   .add(1)
+   .rename('experimental')
+   .toInt8()
+   .clip(roi);
+
+ // ============================================================
+ // 6. TEST AGAINST THE ORIGINAL 300 VALIDATION POINTS
+ // ============================================================
+
+ var originalPredictions = originalMap.sampleRegions({
+   collection: originalValidation,
+   properties: ['class_id', 'val_poly_id'],
+   projection: grid,
+   geometries: false,
+   tileScale: 8
+ });
+
+ var experimentalPredictions = experimentalMap.sampleRegions({
+   collection: originalValidation,
+   properties: ['class_id', 'val_poly_id'],
+   projection: grid,
+   geometries: false,
+   tileScale: 8
+ });
+
+ var order = [1, 2, 3, 4, 5];
+
+ var cmOriginal = originalPredictions.errorMatrix(
+   'class_id',
+   'baseline',
+   order
+ );
+
+ var cmExperiment = experimentalPredictions.errorMatrix(
+   'class_id',
+   'experimental',
+   order
+ );
+
+ // ============================================================
+ // 7. QUALITY ASSURANCE AND ACCURACY RESULTS
+ // ============================================================
+
+ print('STAGE 08F-2 | EXPLORATORY SPATIAL MLC TEST');
+
+ print('Original raster projection:');
+ print(grid);
+
+ print('Raster nominal scale (expected 30m):');
+ print(grid.nominalScale());
+
+ print('2015 Landsat scene count (expected 19):');
+ print(collection2015.size());
+
+ print('11 predictor bands:');
+ print(stack11.bandNames());
+
+ print('Original training count (expected 600):');
+ print(originalTraining.size());
+
+ print('Resampled training count (expected 600):');
+ print(sampledTraining.size());
+
+ print('Training class balance (120 per class):');
+ print(sampledTraining.aggregate_histogram('class_id'));
+
+ print('Original validation count (expected 300):');
+ print(originalValidation.size());
+
+ print('Resampled validation count (expected 300):');
+ print(sampledValidation.size());
+
+ print('Maximum RED spectral reconstruction difference:');
+ print(trainingCheck.aggregate_max('red_abs_delta'));
+
+ print('Maximum NDBI spectral reconstruction difference:');
+ print(trainingCheck.aggregate_max('NDBI_abs_delta'));
+
+ print('Valid 3x3 neighbourhood support:');
+ print(
+   sampledTraining.aggregate_histogram('n_valid_3x3')
+ );
+
+ print('GAUSSIAN COVARIANCE QA');
+
+ for (var i = 0; i < 5; i++) {
+
+   var p = ee.Dictionary(model.get(i));
+
+   print(
+     ee.String(CLASS_NAMES[i])
+       .cat(' | n=')
+       .cat(
+         ee.Number(p.get('count')).format('%d')
+       )
+       .cat(' | raw det=')
+       .cat(
+         ee.Number(
+           p.get('raw_determinant')
+         ).format('%.10e')
+       )
+       .cat(' | regularized det=')
+       .cat(
+         ee.Number(
+           p.get('determinant')
+         ).format('%.10e')
+       )
+   );
+ }
+
+ print('Original validation predictions (expected 300):');
+ print(originalPredictions.size());
+
+ print('Experimental validation predictions (expected 300):');
+ print(experimentalPredictions.size());
+
+ print('ORIGINAL 2015 CONFUSION MATRIX:');
+ print(cmOriginal);
+
+ print('EXPERIMENTAL 2015 CONFUSION MATRIX:');
+ print(cmExperiment);
+
+ print('Original overall accuracy:');
+ print(cmOriginal.accuracy());
+
+ print('Experimental overall accuracy:');
+ print(cmExperiment.accuracy());
+
+ print('Accuracy change in percentage points:');
+ print(
+   ee.Number(cmExperiment.accuracy())
+     .subtract(cmOriginal.accuracy())
+     .multiply(100)
+ );
+
+ print('Original Kappa:');
+ print(cmOriginal.kappa());
+
+ print('Experimental Kappa:');
+ print(cmExperiment.kappa());
+
+ print('Original producer accuracy:');
+ print(cmOriginal.producersAccuracy());
+
+ print('Experimental producer accuracy:');
+ print(cmExperiment.producersAccuracy());
+
+ print('Original user accuracy:');
+ print(cmOriginal.consumersAccuracy());
+
+ print('Experimental user accuracy:');
+ print(cmExperiment.consumersAccuracy());
+
+ print('EXPERIMENT IS NOT YET ACCEPTED OR LOCKED');
+
+ // ============================================================
+ // 8. MAP COMPARISON
+ // ============================================================
+
+ Map.layers().reset();
+ Map.setOptions('SATELLITE');
+
+ var palette = [
+   'ff0000',  // Built-up
+   '008000',  // Vegetation
+   '0000ff',  // Water
+   'ffff00',  // Agricultural/Open
+   'd2b48c'   // Barren/Fallow
+ ];
+
+ Map.addLayer(
+   originalMap,
+   {min: 1, max: 5, palette: palette},
+   'ORIGINAL 2015 MLC',
+   true
+ );
+
+ Map.addLayer(
+   experimentalMap,
+   {min: 1, max: 5, palette: palette},
+   'EXPERIMENTAL 08F MLC',
+   false
+ );
+
+ Map.addLayer(
+   ROI.style({
+     color: 'ffffff',
+     fillColor: '00000000',
+     width: 2
+   }),
+   {},
+   'Study boundary',
+   false
+ );
+
+ Map.centerObject(roi, 10);
+
+ // ============================================================
+ // END OF STAGE 08F-2
+ // NO ASSET WRITES
+ // NO V2A RETRAINING
+ // NO NEW VALIDATION POLYGONS
+ // ============================================================

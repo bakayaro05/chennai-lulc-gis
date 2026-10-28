@@ -1,0 +1,54 @@
+
+ // ============================================================
+ // STAGE 07AC1 — FIND ORIGINAL 2025 CLASSIFICATION ASSET
+ // READ ONLY — NO EXPORTS
+ // ============================================================
+
+var ROOT = 'projects/assignment-482806/assets';
+
+print('==============================================');
+print('SEARCHING EARTH ENGINE ASSETS');
+print('==============================================');
+
+var result = ee.data.listAssets(ROOT);
+
+var assets = result.assets || [];
+
+var images = assets.filter(function(asset) {
+  return asset.type === 'IMAGE';
+});
+
+var candidates = images.filter(function(asset) {
+  return /2025|lulc|mlc|classif/i.test(asset.name);
+});
+
+var candidates2025 = candidates.filter(function(asset) {
+  return /2025/i.test(asset.name);
+});
+
+print('All likely classification image assets:');
+print(candidates);
+
+print('Assets with 2025 in the name:');
+print(candidates2025);
+
+print('Total IMAGE assets found:');
+print(images.length);
+
+print('Total likely classification assets found:');
+print(candidates.length);
+
+print('Folders or collections that may contain more assets:');
+
+print(
+  assets.filter(function(asset) {
+    return asset.type === 'FOLDER' ||
+           asset.type === 'IMAGE_COLLECTION';
+  })
+);
+
+print('==============================================');
+print('Copy the exact 2025 classification IMAGE ID.');
+print('The required raster must contain class values 1–5.');
+print('Do not select training polygons or predictor stacks.');
+print('==============================================');

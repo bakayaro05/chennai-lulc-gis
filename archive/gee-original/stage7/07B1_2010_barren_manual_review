@@ -1,0 +1,991 @@
+
+// ============================================================
+// CHENNAI LULC PROJECT
+// STAGE 07B1 — 2010 V2 MANUAL CLASS REVIEW
+// VERSION 3 — DYNAMIC POLYGON FOCUS
+// ============================================================
+//
+// PURPOSE:
+//
+// Manually review 2010 training candidates using:
+//
+// 1. Actual 2010 Landsat True Color
+// 2. 2010 SWIR-NIR-RED
+// 3. 2010 NDVI and NDBI
+// 4. Historical high-resolution imagery in Google Earth
+//
+// Automatically focus the selected polygon ID.
+//
+// IMPORTANT:
+// AUDIT ONLY.
+// NO TRAINING EXPORT.
+// NO MLC CLASSIFICATION.
+// NO VALIDATION ACCURACY CALCULATION.
+//
+// ============================================================
+
+
+// ============================================================
+// 1. PROJECT SETTINGS
+// ============================================================
+
+var ROOT =
+  'projects/assignment-482806/assets/';
+
+var CRS = 'EPSG:32644';
+
+var SCALE = 30;
+
+
+// ============================================================
+// USER SETTINGS — CHANGE ONLY THESE VALUES
+// ============================================================
+
+// 1 = Built-up
+// 2 = Vegetation
+// 3 = Water
+// 4 = Agricultural/Open
+// 5 = Barren/Fallow
+
+var REVIEW_CLASS_ID = 5;
+
+// Change to 61, 62, 63, 64, etc.
+// Script automatically locates the selected polygon.
+
+var FOCUS_POLY_ID = 65;
+
+
+// Map zoom for focused polygon.
+
+var FOCUS_ZOOM = 17;
+
+
+// ============================================================
+// 2. LOCKED PREDICTOR BANDS
+// ============================================================
+
+var BANDS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+// ============================================================
+// 3. LOAD LOCKED ASSETS
+// ============================================================
+
+var roiFC = ee.FeatureCollection(
+
+  ROOT + 'chennai_admin_study_area_clean'
+
+);
+
+var roi = roiFC.geometry();
+
+
+var stack2010 = ee.Image(
+
+  ROOT + 'chennai_predictor_stack_2010'
+
+)
+
+.select(BANDS)
+
+.clip(roi);
+
+
+var source2015 = ee.FeatureCollection(
+
+  ROOT + 'chennai_training_2015_final'
+
+);
+
+
+var validation2010 = ee.FeatureCollection(
+
+  ROOT + 'chennai_validation_polygons_2010_manual_master'
+
+);
+
+
+// ============================================================
+// 4. VALIDATION EXCLUSION
+// ============================================================
+//
+// Exclude candidate pixels inside or within 30 m
+// of the independent validation polygon locations.
+//
+// ============================================================
+
+var validationBuffer = validation2010
+
+  .geometry()
+
+  .buffer(30, 1);
+
+
+// ============================================================
+// 5. SELECT SOURCE TRAINING LOCATIONS
+// ============================================================
+
+var classSources = source2015.filter(
+
+  ee.Filter.eq(
+
+    'class_id',
+
+    REVIEW_CLASS_ID
+
+  )
+
+);
+
+
+var focusedSources = classSources.filter(
+
+  ee.Filter.eq(
+
+    'poly_id',
+
+    FOCUS_POLY_ID
+
+  )
+
+);
+
+
+// ============================================================
+// 6. SAMPLE USING ACTUAL 2010 PREDICTOR VALUES
+// ============================================================
+//
+// Source locations come from 2015.
+//
+// All spectral bands are resampled from 2010.
+//
+// ============================================================
+
+var sampled2010 = stack2010.sampleRegions({
+
+  collection: classSources,
+
+  properties: [
+
+    'class_id',
+    'class_name',
+    'poly_id'
+
+  ],
+
+  projection: ee.Projection(CRS),
+
+  scale: SCALE,
+
+  geometries: true,
+
+  tileScale: 8
+
+});
+
+
+// ============================================================
+// 7. REMOVE VALIDATION BUFFER OVERLAPS
+// ============================================================
+//
+// Filtering happens after 2010 sampling.
+//
+// This checks the 2010 sampled pixel centres.
+//
+// ============================================================
+
+var eligible2010 = sampled2010.filter(
+
+  ee.Filter.bounds(validationBuffer).not()
+
+);
+
+
+var excluded2010 = sampled2010.filterBounds(
+
+  validationBuffer
+
+);
+
+
+// ============================================================
+// 8. SELECT FOCUSED 2010 CANDIDATES
+// ============================================================
+
+var focused2010 = eligible2010.filter(
+
+  ee.Filter.eq(
+
+    'poly_id',
+
+    FOCUS_POLY_ID
+
+  )
+
+);
+
+
+// ============================================================
+// 9. PRINT HELPER
+// ============================================================
+//
+// Keep one argument per print() call
+// for compatibility with existing Code Editor setup.
+//
+// ============================================================
+
+function report(label, value) {
+
+  print(label);
+
+  print(value);
+
+}
+
+
+// ============================================================
+// 10. BASIC QA
+// ============================================================
+
+print('======================================');
+
+print('STAGE 07B1 — 2010 V2 MANUAL REVIEW');
+
+print('VERSION 3 — DYNAMIC POLYGON FOCUS');
+
+print('======================================');
+
+
+report(
+
+  'Selected class ID:',
+
+  REVIEW_CLASS_ID
+
+);
+
+
+report(
+
+  'Selected polygon ID:',
+
+  FOCUS_POLY_ID
+
+);
+
+
+report(
+
+  '2010 predictor bands:',
+
+  stack2010.bandNames()
+
+);
+
+
+report(
+
+  '2015 source locations for selected class:',
+
+  classSources.size()
+
+);
+
+
+report(
+
+  '2015 source locations by polygon ID:',
+
+  classSources.aggregate_histogram('poly_id')
+
+);
+
+
+// ============================================================
+// 11. SAMPLING QA
+// ============================================================
+
+print('======================================');
+
+print('2010 SAMPLE AVAILABILITY');
+
+print('======================================');
+
+
+report(
+
+  'Valid 2010 spectral samples:',
+
+  sampled2010.size()
+
+);
+
+
+report(
+
+  'Samples excluded by validation buffer:',
+
+  excluded2010.size()
+
+);
+
+
+report(
+
+  'Eligible 2010 candidates:',
+
+  eligible2010.size()
+
+);
+
+
+report(
+
+  'Eligible candidates by polygon ID:',
+
+  eligible2010.aggregate_histogram('poly_id')
+
+);
+
+
+// ============================================================
+// 12. FOCUSED POLYGON QA
+// ============================================================
+
+print('======================================');
+
+print('CURRENT FOCUSED POLYGON');
+
+print('======================================');
+
+
+report(
+
+  'FOCUS_POLY_ID:',
+
+  FOCUS_POLY_ID
+
+);
+
+
+report(
+
+  'Original 2015 source points:',
+
+  focusedSources.size()
+
+);
+
+
+report(
+
+  'Eligible 2010 candidate points:',
+
+  focused2010.size()
+
+);
+
+
+report(
+
+  'Focused spectral candidate examples:',
+
+  focused2010.limit(30)
+
+);
+
+
+// ============================================================
+// 13. MAP SETUP
+// ============================================================
+
+Map.layers().reset();
+
+// Terrain avoids mistaking a modern satellite basemap
+// for historical 2010 imagery.
+
+Map.setOptions('TERRAIN');
+
+Map.centerObject(roi, 10);
+
+
+// ============================================================
+// 14. ACTUAL 2010 TRUE COLOR
+// ============================================================
+
+Map.addLayer(
+
+  stack2010,
+
+  {
+
+    bands: [
+      'red',
+      'green',
+      'blue'
+    ],
+
+    min: 0.02,
+
+    max: 0.30
+
+  },
+
+  '2010 TRUE COLOR',
+
+  true
+
+);
+
+
+// ============================================================
+// 15. ACTUAL 2010 FALSE COLOR
+// ============================================================
+
+Map.addLayer(
+
+  stack2010,
+
+  {
+
+    bands: [
+      'swir1',
+      'nir',
+      'red'
+    ],
+
+    min: 0.02,
+
+    max: 0.35
+
+  },
+
+  '2010 SWIR-NIR-RED',
+
+  false
+
+);
+
+
+// ============================================================
+// 16. ACTUAL 2010 NDVI
+// ============================================================
+
+Map.addLayer(
+
+  stack2010.select('NDVI'),
+
+  {
+
+    min: -0.3,
+
+    max: 0.8,
+
+    palette: [
+
+      '8B4513',
+      'D9C689',
+      'FFFFCC',
+      '7FBF7B',
+      '006400'
+
+    ]
+
+  },
+
+  '2010 NDVI',
+
+  false
+
+);
+
+
+// ============================================================
+// 17. ACTUAL 2010 NDBI
+// ============================================================
+
+Map.addLayer(
+
+  stack2010.select('NDBI'),
+
+  {
+
+    min: -0.5,
+
+    max: 0.5,
+
+    palette: [
+
+      '2166AC',
+      'F7F7F7',
+      'B2182B'
+
+    ]
+
+  },
+
+  '2010 NDBI',
+
+  false
+
+);
+
+
+// ============================================================
+// 18. LOCKED STUDY AREA
+// ============================================================
+
+Map.addLayer(
+
+  roiFC.style({
+
+    color: 'FF0000',
+
+    fillColor: '00000000',
+
+    width: 2
+
+  }),
+
+  {},
+
+  'Locked Chennai Study Area',
+
+  false
+
+);
+
+
+// ============================================================
+// 19. VALIDATION POLYGONS
+// ============================================================
+
+Map.addLayer(
+
+  validation2010.style({
+
+    color: 'FF00FF',
+
+    fillColor: 'FF00FF11',
+
+    width: 2
+
+  }),
+
+  {},
+
+  'Reserved Validation Polygons',
+
+  false
+
+);
+
+
+// ============================================================
+// 20. ALL ELIGIBLE CLASS CANDIDATES
+// ============================================================
+//
+// Cyan = all eligible candidates.
+//
+// Hidden initially so focused yellow points
+// remain clearly distinguishable.
+//
+// ============================================================
+
+Map.addLayer(
+
+  eligible2010.style({
+
+    color: '00FFFF',
+
+    pointSize: 3,
+
+    width: 1
+
+  }),
+
+  {},
+
+  'ALL ELIGIBLE CLASS CANDIDATES',
+
+  false
+
+);
+
+
+// ============================================================
+// 21. FOCUSED POLYGON CANDIDATES
+// ============================================================
+//
+// Yellow = only selected polygon ID.
+//
+// ============================================================
+
+Map.addLayer(
+
+  focused2010.style({
+
+    color: 'FFFF00',
+
+    pointSize: 7,
+
+    width: 2
+
+  }),
+
+  {},
+
+  'FOCUS POLYGON ' + FOCUS_POLY_ID,
+
+  true
+
+);
+
+
+// ============================================================
+// 22. EXCLUDED CANDIDATES
+// ============================================================
+
+Map.addLayer(
+
+  excluded2010.style({
+
+    color: 'FF0000',
+
+    pointSize: 5
+
+  }),
+
+  {},
+
+  'Excluded 2010 Candidates',
+
+  false
+
+);
+
+
+// ============================================================
+// 23. AUTOMATIC POLYGON CENTER + GOOGLE EARTH COORDINATES
+// ============================================================
+//
+// Uses FOCUS_POLY_ID automatically.
+//
+// No hardcoded polygon 61 variables.
+//
+// Coordinates are printed in:
+//
+// Latitude, Longitude
+//
+// This order can be pasted into Google Earth.
+//
+// ============================================================
+
+print('======================================');
+
+print('GOOGLE EARTH — SELECTED POLYGON LOCATION');
+
+print('======================================');
+
+
+focused2010.size().evaluate(function(count, error) {
+
+  if (error) {
+
+    print('ERROR READING FOCUSED CANDIDATES:');
+
+    print(error);
+
+    return;
+
+  }
+
+  if (count === 0) {
+
+    print('NO ELIGIBLE CANDIDATES FOUND.');
+
+    print('Check the selected polygon ID.');
+
+    print('Also check validation buffer exclusions.');
+
+    return;
+
+  }
+
+  // ----------------------------------------
+  // Calculate centroid of eligible candidates
+  // ----------------------------------------
+
+  var focusCenter = focused2010
+
+    .geometry()
+
+    .centroid(1)
+
+    .transform('EPSG:4326', 1);
+
+
+  var coordinates = ee.List(
+
+    focusCenter.coordinates()
+
+  );
+
+
+  var longitude = ee.Number(
+
+    coordinates.get(0)
+
+  );
+
+
+  var latitude = ee.Number(
+
+    coordinates.get(1)
+
+  );
+
+
+  // ----------------------------------------
+  // Print focused location
+  // ----------------------------------------
+
+  print('CURRENT POLYGON ID:');
+
+  print(FOCUS_POLY_ID);
+
+
+  print('ELIGIBLE SAMPLE COUNT:');
+
+  print(count);
+
+
+  print('CENTRE COORDINATES — LONGITUDE, LATITUDE:');
+
+  print(coordinates);
+
+
+  // ----------------------------------------
+  // Google Earth search format
+  // ----------------------------------------
+
+  var googleEarthCoordinates = latitude
+
+    .format('%.7f')
+
+    .cat(', ')
+
+    .cat(
+
+      longitude.format('%.7f')
+
+    );
+
+
+  print('COPY THIS INTO GOOGLE EARTH SEARCH:');
+
+  print(googleEarthCoordinates);
+
+
+  // ----------------------------------------
+  // Show centre marker
+  // ----------------------------------------
+
+  Map.addLayer(
+
+    focusCenter,
+
+    {
+
+      color: 'FF0000'
+
+    },
+
+    'FOCUS CENTRE ' + FOCUS_POLY_ID,
+
+    true
+
+  );
+
+
+  // ----------------------------------------
+  // Automatically zoom to selected polygon
+  // ----------------------------------------
+
+  Map.centerObject(
+
+    focused2010,
+
+    FOCUS_ZOOM
+
+  );
+
+
+});
+
+
+// ============================================================
+// 24. CLICK TO INSPECT INDIVIDUAL CANDIDATES
+// ============================================================
+
+Map.onClick(function(coords) {
+
+  var location = ee.Geometry.Point([
+
+    coords.lon,
+
+    coords.lat
+
+  ]);
+
+
+  // Search eligible candidates within 75 metres.
+
+  var nearby = eligible2010.filterBounds(
+
+    location.buffer(75)
+
+  );
+
+
+  print('======================================');
+
+  print('CLICKED LOCATION');
+
+  print('======================================');
+
+  print(location);
+
+
+  print('NEARBY CANDIDATES WITHIN 75 M:');
+
+  print(nearby.limit(12));
+
+
+  // Also report nearby candidates of selected polygon.
+
+  var nearbyFocused = focused2010.filterBounds(
+
+    location.buffer(75)
+
+  );
+
+
+  print('NEARBY FOCUSED POLYGON CANDIDATES:');
+
+  print(nearbyFocused.limit(12));
+
+});
+
+
+// ============================================================
+// 25. MANUAL REVIEW REMINDERS
+// ============================================================
+
+print('======================================');
+
+print('MANUAL REVIEW STATUS');
+
+print('======================================');
+
+print('Use 2010 Landsat imagery as primary spectral evidence.');
+
+print('Compare with date-verified Google Earth historical imagery.');
+
+print('Record ACCEPT / PARTIAL / REJECT / UNCERTAIN.');
+
+print('Inspect ambiguous individual 30 m pixels.');
+
+print('Do not use current satellite basemap as 2010 truth.');
+
+print('Do not approve an entire polygon automatically.');
+
+print('Do not use validation accuracy to select training.');
+
+print('No training assets exported.');
+
+print('No MLC classification performed.');
+
+
+// ============================================================
+// END STAGE 07B1 — VERSION 3
+// ============================================================
+//
+// To inspect another source group:
+//
+// Change FOCUS_POLY_ID at top of script.
+//
+// Run again.
+//
+// The script will automatically:
+//
+// 1. Select the correct candidate points.
+// 2. Zoom to those points.
+// 3. Print their 2010 spectral information.
+// 4. Print Google Earth coordinates.
+// 5. Display focused points in yellow.
+//
+// ============================================================
+
+
+
+
+
+// ============================================================
+// STAGE 07B1 — DYNAMIC SPECTRAL QA
+// Automatically follows FOCUS_POLY_ID
+// ============================================================
+
+print('====================================');
+print('POLYGON ' + FOCUS_POLY_ID + ' — SPECTRAL QA');
+print('====================================');
+
+print('Currently selected polygon ID:');
+print(FOCUS_POLY_ID);
+
+print('Actual polygon IDs in sampled data:');
+print(focused2010.aggregate_histogram('poly_id'));
+
+print('Eligible sample count:');
+print(focused2010.size());
+
+print('NDVI statistics:');
+print(focused2010.aggregate_stats('NDVI'));
+
+print('NDBI statistics:');
+print(focused2010.aggregate_stats('NDBI'));
+
+print('NDWI statistics:');
+print(focused2010.aggregate_stats('NDWI'));
+
+print('Individual samples sorted by NDVI:');
+print(
+  focused2010
+    .select([
+      'poly_id',
+      'NDVI',
+      'NDWI',
+      'NDBI',
+      'red',
+      'nir',
+      'swir1'
+    ])
+    .sort('NDVI')
+);
+
+// ============================================================
+// END DYNAMIC SPECTRAL QA
+// ============================================================
+

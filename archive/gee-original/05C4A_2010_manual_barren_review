@@ -1,0 +1,422 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var barrenAdd2010 = /* color: #d63000 */ee.Geometry.MultiPolygon(
+        [[[[80.09569267074758, 12.945813188014284],
+           [80.09726980964834, 12.945525644149265],
+           [80.09750584404165, 12.946916307764518],
+           [80.09572485725576, 12.947345007013539]]],
+         [[[80.07175366774163, 12.934504624258938],
+           [80.07218282118401, 12.931723150837758],
+           [80.07419984236321, 12.931911371821826],
+           [80.07516543760858, 12.934379144922861]]],
+         [[[80.27042243195926, 13.133568618438408],
+           [80.26807281686222, 13.134864192067507],
+           [80.26663515283023, 13.133234275747068],
+           [80.26918861581241, 13.13177152112039]]],
+         [[[80.27688708866364, 13.139527789019015],
+           [80.27421560848481, 13.140311383896911],
+           [80.27411904896027, 13.13732326201053],
+           [80.276050239451, 13.136696378677195]]],
+         [[[80.31640532719156, 13.19449951027295],
+           [80.3179985593464, 13.19425926127229],
+           [80.31835261093637, 13.195382162182337],
+           [80.31686666714212, 13.19566941507472]]],
+         [[[80.28358436588289, 13.13054427800792],
+           [80.28516150478364, 13.130194258681536],
+           [80.28544581893922, 13.131301780812425],
+           [80.28458214763643, 13.131510746692182],
+           [80.28446413043977, 13.131056245676515],
+           [80.28370774749757, 13.130706227079713]]]]);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05C4A
+//
+// MANUAL 2010 BARREN/FALLOW REVIEW
+//
+// PURPOSE
+// -------
+// Automation has exhausted conservative Barren/Fallow recovery.
+//
+// Current Barren/Fallow candidates:
+//   59
+//
+// Target:
+//   120
+//
+// Remaining deficit:
+//   61
+//
+// This script is ONLY for visual/manual review.
+//
+// It displays:
+//   - 2010 true colour
+//   - NDVI
+//   - NDBI
+//   - current Barren/Fallow candidate points
+//   - Chennai ROI
+//
+// YOU will draw a few clean Barren/Fallow polygons.
+//
+// NO sampling.
+// NO validation.
+// NO classifier.
+// NO export.
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSETS
+// ================================================================
+
+var ROI_ASSET =
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean';
+
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var PASSB_REQA_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+
+var RESCUED_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_rescued_uncertain_05C2A';
+
+
+var EXPANSION_60M_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_targeted_expansion_05C3A';
+
+
+// ================================================================
+// 2. LOAD
+// ================================================================
+
+var roiFC =
+  ee.FeatureCollection(
+    ROI_ASSET
+  );
+
+
+var roi =
+  roiFC.geometry();
+
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  );
+
+
+var passB =
+  ee.FeatureCollection(
+    PASSB_REQA_ASSET
+  );
+
+
+var rescued =
+  ee.FeatureCollection(
+    RESCUED_ASSET
+  );
+
+
+var expansion60 =
+  ee.FeatureCollection(
+    EXPANSION_60M_ASSET
+  );
+
+
+// ================================================================
+// 3. CURRENT UNIQUE CANDIDATE POOL
+// ================================================================
+
+var currentCandidates =
+  passB
+    .merge(
+      rescued
+    )
+    .merge(
+      expansion60
+    )
+    .distinct(
+      [
+        'auth_pixel_key'
+      ]
+    );
+
+
+var currentBarren =
+  currentCandidates.filter(
+    ee.Filter.eq(
+      'class_id',
+      5
+    )
+  );
+
+
+// ================================================================
+// 4. BASIC QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05C4A — MANUAL BARREN/FALLOW REVIEW'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.String(
+    'Current Barren/Fallow candidates = '
+  )
+  .cat(
+    currentBarren.size()
+      .format('%d')
+  )
+);
+
+
+print(
+  'Current Barren source distribution'
+);
+
+
+print(
+  currentBarren.aggregate_histogram(
+    'poly_id'
+  )
+);
+
+
+// ================================================================
+// 5. MAP
+// ================================================================
+
+Map.layers().reset();
+
+
+Map.setOptions(
+  'SATELLITE'
+);
+
+
+// ------------------------------------------------
+// 2010 TRUE COLOUR
+// ------------------------------------------------
+
+Map.addLayer(
+
+  stack2010,
+
+  {
+
+    bands: [
+      'red',
+      'green',
+      'blue'
+    ],
+
+    min:
+      0.02,
+
+    max:
+      0.30
+
+  },
+
+  '2010 True Colour',
+
+  true
+
+);
+
+
+// ------------------------------------------------
+// 2010 NDVI
+// ------------------------------------------------
+
+Map.addLayer(
+
+  stack2010.select(
+    'NDVI'
+  ),
+
+  {
+
+    min:
+      -0.2,
+
+    max:
+      0.8,
+
+    palette: [
+      '8c510a',
+      'd8b365',
+      'f6e8c3',
+      'c7eae5',
+      '5ab4ac',
+      '01665e'
+    ]
+
+  },
+
+  '2010 NDVI',
+
+  false
+
+);
+
+
+// ------------------------------------------------
+// 2010 NDBI
+// ------------------------------------------------
+
+Map.addLayer(
+
+  stack2010.select(
+    'NDBI'
+  ),
+
+  {
+
+    min:
+      -0.5,
+
+    max:
+      0.5,
+
+    palette: [
+      '2166ac',
+      'f7f7f7',
+      'b2182b'
+    ]
+
+  },
+
+  '2010 NDBI',
+
+  false
+
+);
+
+
+// ------------------------------------------------
+// CURRENT BARREN/FALLOW CANDIDATES
+// ------------------------------------------------
+
+Map.addLayer(
+
+  currentBarren.style({
+
+    color:
+      'ff00ff',
+
+    pointSize:
+      5,
+
+    width:
+      1
+
+  }),
+
+  {},
+
+  'Current Barren/Fallow Candidates',
+
+  true
+
+);
+
+
+// ------------------------------------------------
+// ROI
+// ------------------------------------------------
+
+Map.addLayer(
+
+  roiFC.style({
+
+    color:
+      'ffff00',
+
+    fillColor:
+      '00000000',
+
+    width:
+      2
+
+  }),
+
+  {},
+
+  'Chennai ROI',
+
+  true
+
+);
+
+
+Map.centerObject(
+  roi,
+  10
+);
+
+
+// ================================================================
+// 6. INSTRUCTIONS
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  'MANUAL REVIEW INSTRUCTIONS'
+);
+
+print(
+  '========================================'
+);
+
+print(
+  '1. Inspect the 2010 True Colour image.'
+);
+
+print(
+  '2. Use NDVI and NDBI only as supporting evidence.'
+);
+
+print(
+  '3. Look for clearly barren / fallow / exposed-soil areas.'
+);
+
+print(
+  '4. Avoid built-up surfaces, active cropland, vegetation and water.'
+);
+
+print(
+  '5. Prefer several geographically separated small polygons.'
+);
+
+print(
+  '6. Avoid drawing one huge polygon.'
+);
+
+print(
+  '7. Do not draw polygons merely around the existing magenta points.'
+);
+
+print(
+  '8. Rename the drawn geometries as instructed before the next stage.'
+);
+
+print(
+  '========================================'
+);

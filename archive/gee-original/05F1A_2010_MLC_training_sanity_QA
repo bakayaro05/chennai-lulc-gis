@@ -1,0 +1,1252 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05F1
+//
+// 2010 ACTUAL GAUSSIAN MAXIMUM LIKELIHOOD CLASSIFICATION
+// + INDEPENDENT ACCURACY ASSESSMENT
+//
+// FINAL CORRECTED VERSION
+//
+// FIXES INCLUDED
+// --------------
+// 1. Covariance:
+//    ee.Reducer.covariance() receives ONE array-valued property
+//    created using FeatureCollection.makeArray().
+//
+// 2. Gaussian score band names:
+//    score_1 ... score_5 are passed as ordinary JavaScript strings.
+//    No server-side ee.String is used inside Image.rename().
+//
+// LOCKED INPUTS
+// -------------
+// Predictor stack:
+// projects/assignment-482806/assets/chennai_predictor_stack_2010
+//
+// Final training:
+// projects/assignment-482806/assets/chennai_training_2010_final
+//
+// Final independent validation:
+// projects/assignment-482806/assets/chennai_validation_2010_final
+//
+// METHODOLOGY
+// -----------
+// Actual multivariate Gaussian MLC:
+//
+// - 9-dimensional class mean vector
+// - full sample covariance matrix
+// - diagonal covariance regularization = 1e-6
+// - covariance determinant
+// - covariance inverse
+// - Mahalanobis quadratic term
+// - Gaussian log-likelihood discriminant
+// - equal class priors
+//
+// Equal priors and the common Gaussian normalization constant
+// are omitted from the argmax score because they are identical
+// for every class and therefore cannot change the winning class.
+//
+// IMPORTANT
+// ---------
+// Training and validation are LOCKED.
+// Do not alter either after seeing accuracy results.
+//
+// NO area calculation is performed in this script.
+//
+// This script creates ONE classification export task.
+// DO NOT START IT UNTIL THE ACCURACY OUTPUT HAS BEEN REVIEWED.
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSETS
+// ================================================================
+
+var ROI_ASSET =
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean';
+
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var TRAINING_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final';
+
+
+var VALIDATION_ASSET =
+  'projects/assignment-482806/assets/chennai_validation_2010_final';
+
+
+var OUTPUT_CLASSIFICATION_ASSET =
+  'projects/assignment-482806/assets/chennai_mlc_lulc_2010';
+
+
+// ================================================================
+// 2. LOCKED SETTINGS
+// ================================================================
+
+var ANALYSIS_CRS =
+  'EPSG:32644';
+
+
+var ANALYSIS_SCALE =
+  30;
+
+
+var MLC_REGULARIZATION =
+  1e-6;
+
+
+var MLC_BANDS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+var NUM_MLC_BANDS =
+  MLC_BANDS.length;
+
+
+var CLASS_IDS =
+  [1, 2, 3, 4, 5];
+
+
+var CLASS_NAMES = [
+
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+
+];
+
+
+// ================================================================
+// 3. LOAD LOCKED MATERIALIZED INPUTS
+// ================================================================
+
+var roiFC =
+  ee.FeatureCollection(
+    ROI_ASSET
+  );
+
+
+var roi =
+  roiFC.geometry();
+
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  )
+  .select(
+    MLC_BANDS
+  );
+
+
+var finalTraining2010 =
+  ee.FeatureCollection(
+    TRAINING_ASSET
+  );
+
+
+var finalValidation2010 =
+  ee.FeatureCollection(
+    VALIDATION_ASSET
+  );
+
+
+var stackProjection =
+  stack2010
+    .select(
+      'blue'
+    )
+    .projection();
+
+
+// ================================================================
+// 4. LOCKED INPUT QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05F1 — LOCKED INPUT QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    training_total:
+      finalTraining2010.size(),
+
+    validation_total:
+      finalValidation2010.size(),
+
+    predictor_band_count:
+      stack2010.bandNames().size()
+
+  })
+);
+
+
+print(
+  '2010 training class histogram'
+);
+
+
+print(
+  finalTraining2010.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+print(
+  '2010 validation class histogram'
+);
+
+
+print(
+  finalValidation2010.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+print(
+  'Predictor bands'
+);
+
+
+print(
+  stack2010.bandNames()
+);
+
+
+// ================================================================
+// 5. BUILD GAUSSIAN PARAMETERS FOR ONE CLASS
+// ================================================================
+//
+// Important Earth Engine detail:
+//
+// ee.Reducer.covariance() requires ONE array-valued input.
+//
+// Therefore:
+//
+// 9 scalar predictor properties
+//      ↓
+// FeatureCollection.makeArray()
+//      ↓
+// one property: mlc_vector
+//      ↓
+// Reducer.covariance()
+//
+// ================================================================
+
+function buildMlcClassParameters(
+  classId
+) {
+
+  // --------------------------------------------------------------
+  // LOCKED CLASS TRAINING SAMPLES
+  // --------------------------------------------------------------
+
+  var classSamples =
+    finalTraining2010
+
+      .filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      )
+
+      .filter(
+        ee.Filter.notNull(
+          MLC_BANDS
+        )
+      );
+
+
+  var trainingN =
+    classSamples.size();
+
+
+  // --------------------------------------------------------------
+  // 9-DIMENSIONAL MEAN VECTOR
+  //
+  // Shape explicitly becomes 9 x 1.
+  // --------------------------------------------------------------
+
+  var meanValues =
+    MLC_BANDS.map(
+      function(bandName) {
+
+        return classSamples.aggregate_mean(
+          bandName
+        );
+
+      }
+    );
+
+
+  var meanVector =
+    ee.Array([
+      meanValues
+    ])
+    .transpose();
+
+
+  // --------------------------------------------------------------
+  // CONVERT THE 9 SCALAR PROPERTIES TO ONE ARRAY PROPERTY
+  // --------------------------------------------------------------
+
+  var arraySamples =
+    classSamples.makeArray(
+      MLC_BANDS,
+      'mlc_vector'
+    );
+
+
+  // --------------------------------------------------------------
+  // FULL SAMPLE COVARIANCE MATRIX
+  //
+  // The covariance reducer receives ONE selector:
+  // mlc_vector
+  // --------------------------------------------------------------
+
+  var covarianceResult =
+    arraySamples.reduceColumns({
+
+      reducer:
+        ee.Reducer.covariance(),
+
+      selectors: [
+        'mlc_vector'
+      ]
+
+    });
+
+
+  // There is only one output from the reducer.
+  // values().get(0) avoids depending on the reducer output key name.
+
+  var covariance =
+    ee.Array(
+
+      ee.Dictionary(
+        covarianceResult
+      )
+      .values()
+      .get(
+        0
+      )
+
+    );
+
+
+  // --------------------------------------------------------------
+  // DIAGONAL COVARIANCE REGULARIZATION
+  //
+  // Sigma_reg = Sigma + lambda I
+  //
+  // lambda = 1e-6
+  // --------------------------------------------------------------
+
+  var identity =
+    ee.Array.identity(
+      NUM_MLC_BANDS
+    );
+
+
+  var regularizedCovariance =
+    covariance.add(
+
+      identity.multiply(
+        MLC_REGULARIZATION
+      )
+
+    );
+
+
+  // --------------------------------------------------------------
+  // DETERMINANT
+  // --------------------------------------------------------------
+
+  var determinant =
+    regularizedCovariance
+      .matrixDeterminant();
+
+
+  // --------------------------------------------------------------
+  // INVERSE
+  // --------------------------------------------------------------
+
+  var inverse =
+    regularizedCovariance
+      .matrixInverse();
+
+
+  // --------------------------------------------------------------
+  // RETURN PARAMETERS
+  // --------------------------------------------------------------
+
+  return ee.Dictionary({
+
+    class_id:
+      classId,
+
+    class_name:
+      CLASS_NAMES[
+        classId - 1
+      ],
+
+    training_n:
+      trainingN,
+
+    mean:
+      meanVector,
+
+    covariance:
+      regularizedCovariance,
+
+    determinant:
+      determinant,
+
+    inverse:
+      inverse
+
+  });
+
+}
+
+
+// ================================================================
+// 6. BUILD PARAMETERS FOR ALL FIVE CLASSES
+// ================================================================
+
+var mlcParams =
+  ee.List([
+
+    buildMlcClassParameters(
+      1
+    ),
+
+    buildMlcClassParameters(
+      2
+    ),
+
+    buildMlcClassParameters(
+      3
+    ),
+
+    buildMlcClassParameters(
+      4
+    ),
+
+    buildMlcClassParameters(
+      5
+    )
+
+  ]);
+
+
+// ================================================================
+// 7. GAUSSIAN PARAMETER QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05F1 — GAUSSIAN MLC PARAMETER QA'
+);
+
+print(
+  '========================================'
+);
+
+
+for (
+  var parameterIndex = 0;
+  parameterIndex < 5;
+  parameterIndex++
+) {
+
+  var parameterDictionary =
+    ee.Dictionary(
+      mlcParams.get(
+        parameterIndex
+      )
+    );
+
+
+  var determinant =
+    ee.Number(
+      parameterDictionary.get(
+        'determinant'
+      )
+    );
+
+
+  print(
+    ee.Dictionary({
+
+      class_id:
+        parameterIndex + 1,
+
+      class_name:
+        CLASS_NAMES[
+          parameterIndex
+        ],
+
+      training_n:
+        parameterDictionary.get(
+          'training_n'
+        ),
+
+      determinant:
+        determinant,
+
+      determinant_positive:
+        determinant.gt(
+          0
+        )
+
+    })
+  );
+
+}
+
+
+// ================================================================
+// 8. CREATE GAUSSIAN LOG-LIKELIHOOD SCORE IMAGE
+// ================================================================
+//
+// For equal priors:
+//
+// g_i(x) =
+//
+// -0.5 * [(x - mu_i)' Sigma_i^-1 (x - mu_i)]
+// -0.5 * ln(|Sigma_i|)
+//
+// Omitted terms:
+//
+// -(p/2) ln(2*pi)
+// ln(1/5)
+//
+// They are identical for every class and therefore cannot alter
+// the class selected by argmax.
+//
+// scoreBandName MUST be a normal JavaScript string:
+//
+// 'score_1'
+// 'score_2'
+// ...
+//
+// ================================================================
+
+function createMlcScoreImage(
+  classParams,
+  scoreBandName
+) {
+
+  classParams =
+    ee.Dictionary(
+      classParams
+    );
+
+
+  // --------------------------------------------------------------
+  // CLASS MEAN
+  // --------------------------------------------------------------
+
+  var meanVector =
+    ee.Array(
+      classParams.get(
+        'mean'
+      )
+    );
+
+
+  // --------------------------------------------------------------
+  // INVERSE COVARIANCE
+  // --------------------------------------------------------------
+
+  var inverseCovariance =
+    ee.Array(
+      classParams.get(
+        'inverse'
+      )
+    );
+
+
+  // --------------------------------------------------------------
+  // COVARIANCE DETERMINANT
+  // --------------------------------------------------------------
+
+  var determinant =
+    ee.Number(
+      classParams.get(
+        'determinant'
+      )
+    );
+
+
+  // --------------------------------------------------------------
+  // IMAGE PIXEL -> 9 x 1 ARRAY VECTOR
+  // --------------------------------------------------------------
+
+  var imageVector =
+    stack2010
+
+      .select(
+        MLC_BANDS
+      )
+
+      .toArray()
+
+      .toArray(
+        1
+      );
+
+
+  // --------------------------------------------------------------
+  // MEAN -> ARRAY IMAGE
+  // --------------------------------------------------------------
+
+  var meanImage =
+    ee.Image.constant(
+      meanVector
+    );
+
+
+  // --------------------------------------------------------------
+  // x - mu
+  // --------------------------------------------------------------
+
+  var difference =
+    imageVector.subtract(
+      meanImage
+    );
+
+
+  // --------------------------------------------------------------
+  // Sigma^-1 -> ARRAY IMAGE
+  // --------------------------------------------------------------
+
+  var inverseImage =
+    ee.Image.constant(
+      inverseCovariance
+    );
+
+
+  // --------------------------------------------------------------
+  // MAHALANOBIS QUADRATIC TERM
+  //
+  // (x - mu)' Sigma^-1 (x - mu)
+  // --------------------------------------------------------------
+
+  var transposeDifference =
+    difference.arrayTranspose();
+
+
+  var mahalanobis =
+    transposeDifference
+
+      .matrixMultiply(
+        inverseImage
+      )
+
+      .matrixMultiply(
+        difference
+      )
+
+      .arrayGet(
+        [0, 0]
+      );
+
+
+  // --------------------------------------------------------------
+  // GAUSSIAN LOG-LIKELIHOOD DISCRIMINANT
+  // --------------------------------------------------------------
+
+  var logDeterminantPenalty =
+    ee.Image.constant(
+
+      determinant
+        .log()
+        .multiply(
+          0.5
+        )
+
+    );
+
+
+  var score =
+    mahalanobis
+
+      .multiply(
+        -0.5
+      )
+
+      .subtract(
+        logDeterminantPenalty
+      )
+
+      .rename(
+        scoreBandName
+      );
+
+
+  return score;
+
+}
+
+
+// ================================================================
+// 9. CREATE FIVE CLASS SCORE IMAGES
+// ================================================================
+//
+// IMPORTANT:
+// Band names are CLIENT-SIDE literals.
+// No ee.String / Number.format is used.
+//
+// ================================================================
+
+var score1 =
+  createMlcScoreImage(
+    mlcParams.get(0),
+    'score_1'
+  );
+
+
+var score2 =
+  createMlcScoreImage(
+    mlcParams.get(1),
+    'score_2'
+  );
+
+
+var score3 =
+  createMlcScoreImage(
+    mlcParams.get(2),
+    'score_3'
+  );
+
+
+var score4 =
+  createMlcScoreImage(
+    mlcParams.get(3),
+    'score_4'
+  );
+
+
+var score5 =
+  createMlcScoreImage(
+    mlcParams.get(4),
+    'score_5'
+  );
+
+
+// ================================================================
+// 10. STACK FIVE GAUSSIAN SCORE BANDS
+// ================================================================
+
+var mlcScoreStack =
+  score1
+
+    .addBands(
+      score2
+    )
+
+    .addBands(
+      score3
+    )
+
+    .addBands(
+      score4
+    )
+
+    .addBands(
+      score5
+    );
+
+
+// ================================================================
+// 11. SCORE STACK QA
+// ================================================================
+
+print(
+  'Gaussian score bands'
+);
+
+
+print(
+  mlcScoreStack.bandNames()
+);
+
+
+// ================================================================
+// 12. ARGMAX -> FINAL CLASSIFICATION
+// ================================================================
+//
+// Score stack order:
+//
+// score_1 -> array index 0
+// score_2 -> array index 1
+// score_3 -> array index 2
+// score_4 -> array index 3
+// score_5 -> array index 4
+//
+// arrayArgmax returns 0-4.
+//
+// +1 converts to locked class IDs 1-5.
+//
+// ================================================================
+
+var classified2010 =
+  mlcScoreStack
+
+    .toArray()
+
+    .arrayArgmax()
+
+    .arrayGet(
+      [0]
+    )
+
+    .add(
+      1
+    )
+
+    .rename(
+      'classification'
+    )
+
+    .toInt8()
+
+    .clip(
+      roi
+    );
+
+
+// ================================================================
+// 13. TRAINING RESUBSTITUTION SANITY CHECK
+// ================================================================
+//
+// PURPOSE:
+//
+// This is NOT an independent accuracy assessment.
+//
+// It asks only:
+//
+// "Can the fitted Gaussian MLC correctly classify the samples
+//  from which its own Gaussian parameters were estimated?"
+//
+// If this is poor, investigate the model/training construction.
+//
+// If this is high while independent validation is poor, then
+// generalization/reference representativeness is the issue.
+//
+// NO EXPORT.
+// NO TRAINING MODIFICATION.
+// NO VALIDATION MODIFICATION.
+//
+// ================================================================
+
+var trainingPredictions =
+  classified2010.sampleRegions({
+
+    collection:
+      finalTraining2010,
+
+    properties: [
+
+      'class_id',
+      'class_name',
+      'poly_id',
+      'candidate_source',
+      'auth_pixel_key'
+
+    ],
+
+    scale:
+      ANALYSIS_SCALE,
+
+    projection:
+      stackProjection,
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+
+  });
+
+
+// ================================================================
+// 14. SAMPLING QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05F1A — TRAINING RESUBSTITUTION QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    expected_training_n:
+      600,
+
+    predicted_training_n:
+      trainingPredictions.size()
+
+  })
+);
+
+
+print(
+  'Actual training histogram'
+);
+
+
+print(
+  trainingPredictions.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+print(
+  'Predicted training histogram'
+);
+
+
+print(
+  trainingPredictions.aggregate_histogram(
+    'classification'
+  )
+);
+
+
+// ================================================================
+// 15. TRAINING CONFUSION MATRIX
+// ================================================================
+
+var trainingMatrix =
+  trainingPredictions.errorMatrix(
+
+    'class_id',
+
+    'classification',
+
+    [1, 2, 3, 4, 5]
+
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  'TRAINING RESUBSTITUTION RESULTS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'Training confusion matrix'
+);
+
+
+print(
+  trainingMatrix
+);
+
+
+print(
+  'Training resubstitution accuracy'
+);
+
+
+print(
+  trainingMatrix.accuracy()
+);
+
+
+print(
+  'Training resubstitution kappa'
+);
+
+
+print(
+  trainingMatrix.kappa()
+);
+
+
+print(
+  'Training producer accuracy'
+);
+
+
+print(
+  trainingMatrix.producersAccuracy()
+);
+
+
+print(
+  'Training user accuracy'
+);
+
+
+print(
+  trainingMatrix.consumersAccuracy()
+);
+
+
+// ================================================================
+// 16. CORRECT / INCORRECT COUNTS
+// ================================================================
+
+var trainingWithCorrect =
+  trainingPredictions.map(
+    function(feature) {
+
+      var actual =
+        ee.Number(
+          feature.get(
+            'class_id'
+          )
+        );
+
+
+      var predicted =
+        ee.Number(
+          feature.get(
+            'classification'
+          )
+        );
+
+
+      return feature.set(
+
+        'correct',
+
+        ee.Number(
+          ee.Algorithms.If(
+            actual.eq(
+              predicted
+            ),
+            1,
+            0
+          )
+        )
+
+      );
+
+    }
+  );
+
+
+var trainingCorrect =
+  trainingWithCorrect
+    .filter(
+      ee.Filter.eq(
+        'correct',
+        1
+      )
+    )
+    .size();
+
+
+var trainingIncorrect =
+  trainingWithCorrect
+    .filter(
+      ee.Filter.eq(
+        'correct',
+        0
+      )
+    )
+    .size();
+
+
+print(
+  'Correct training predictions'
+);
+
+
+print(
+  trainingCorrect
+);
+
+
+print(
+  'Incorrect training predictions'
+);
+
+
+print(
+  trainingIncorrect
+);
+
+
+// ================================================================
+// 17. CLASS-WISE TRAINING SANITY
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05F1A — CLASS-WISE TRAINING RESULTS'
+);
+
+print(
+  '========================================'
+);
+
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var classTraining =
+      trainingWithCorrect.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    var classCorrect =
+      classTraining.filter(
+        ee.Filter.eq(
+          'correct',
+          1
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        actual_n:
+          classTraining.size(),
+
+        correct_n:
+          classCorrect.size(),
+
+        incorrect_n:
+          classTraining
+            .size()
+            .subtract(
+              classCorrect.size()
+            ),
+
+        prediction_histogram:
+          classTraining.aggregate_histogram(
+            'classification'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 18. SOURCE-WISE TRAINING DIAGNOSTIC
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  'TRAINING SOURCE DIAGNOSTIC'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  trainingWithCorrect.aggregate_histogram(
+    'candidate_source'
+  )
+);
+
+
+// ================================================================
+// 19. FINAL MESSAGE
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05F1A COMPLETE — DIAGNOSTIC ONLY'
+);
+
+print(
+  'NO EXPORT TASK CREATED.'
+);
+
+print(
+  'NO TRAINING OR VALIDATION WAS MODIFIED.'
+);
+
+print(
+  'Send the training confusion matrix and accuracy results.'
+);
+
+print(
+  '========================================'
+);

@@ -1,0 +1,339 @@
+
+ // ============================================================
+ // STAGE 05A.2 — CHENNAI / THANJAVUR 2020
+ // SEASONAL DIAGNOSTICS
+ //
+ // READ ONLY: no retraining or changes to baseline.
+ // Monthly clear observations and NDVI/NDWI/NDBI profiles.
+ // ============================================================
+
+ var ROOT = 'projects/assignment-482806/assets/';
+
+ var CHENNAI_ROI = ee.FeatureCollection(
+   ROOT + 'chennai_admin_study_area_clean'
+ ).geometry();
+
+ var THANJAVUR_ROI = ee.FeatureCollection(
+   ROOT + 'tnj_city_trace_pilot_roi_2020'
+ ).geometry();
+
+ var CHENNAI_TRAIN = ee.FeatureCollection(
+   ROOT + 'chennai_training_2020_final'
+ );
+
+ var THANJAVUR_REF = ee.FeatureCollection(
+   ROOT + 'tnj_2020_reference_112_final_v1'
+ );
+
+ var CRS = 'EPSG:32644';
+ var SCALE = 30;
+
+ var CORE = [
+   'blue', 'green', 'red',
+   'nir', 'swir1', 'swir2'
+ ];
+
+ var CLASS_LABELS = [
+   'Built-up',
+   'Vegetation',
+   'Water',
+   'Agricultural/Open',
+   'Barren/Fallow'
+ ];
+
+ // ============================================================
+ // 1. SAME LANDSAT 8 PREPROCESSING
+ // ============================================================
+
+ function prepare(image) {
+
+   var qa = image.select('QA_PIXEL');
+   var sat = image.select('QA_RADSAT');
+
+   var clear = qa.bitwiseAnd(1 << 0).eq(0)
+     .and(qa.bitwiseAnd(1 << 1).eq(0))
+     .and(qa.bitwiseAnd(1 << 2).eq(0))
+     .and(qa.bitwiseAnd(1 << 3).eq(0))
+     .and(qa.bitwiseAnd(1 << 4).eq(0))
+     .and(qa.bitwiseAnd(1 << 5).eq(0))
+     .and(sat.eq(0));
+
+   return image.select(
+     [
+       'SR_B2', 'SR_B3', 'SR_B4',
+       'SR_B5', 'SR_B6', 'SR_B7'
+     ],
+     CORE
+   )
+   .multiply(0.0000275)
+   .add(-0.2)
+   .updateMask(clear)
+   .copyProperties(image, ['system:time_start']);
+ }
+
+ function collectionFor(roi) {
+
+   return ee.ImageCollection(
+     'LANDSAT/LC08/C02/T1_L2'
+   )
+   .filterBounds(roi)
+   .filterDate('2020-01-01', '2021-01-01')
+   .map(prepare);
+ }
+
+ var source = collectionFor(CHENNAI_ROI);
+ var target = collectionFor(THANJAVUR_ROI);
+
+ // ============================================================
+ // 2. MONTHLY COMPOSITE AND SPECTRAL INDICES
+ // ============================================================
+
+ var emptySix = ee.Image.constant([
+   0, 0, 0, 0, 0, 0
+ ])
+ .rename(CORE)
+ .updateMask(ee.Image.constant(0));
+
+ function monthlyStack(collection) {
+
+   var med = ee.Image(
+     ee.Algorithms.If(
+       collection.size().gt(0),
+       collection.median().select(CORE),
+       emptySix
+     )
+   );
+
+   var nir = med.select('nir');
+   var red = med.select('red');
+   var green = med.select('green');
+   var swir = med.select('swir1');
+
+   return med.addBands([
+     nir.subtract(red)
+       .divide(nir.add(red))
+       .rename('NDVI'),
+
+     green.subtract(nir)
+       .divide(green.add(nir))
+       .rename('NDWI'),
+
+     swir.subtract(nir)
+       .divide(swir.add(nir))
+       .rename('NDBI')
+   ]).select(['NDVI', 'NDWI', 'NDBI']);
+ }
+
+ // ============================================================
+ // 3. OBSERVATION COUNT AND COVERAGE
+ // ============================================================
+
+ function observationStats(collection, roi) {
+
+   var c = ee.Image(
+     ee.Algorithms.If(
+       collection.size().gt(0),
+       collection.select('red').count(),
+       ee.Image.constant(0).rename('red')
+     )
+   ).unmask(0).rename('count');
+
+   var r = c.reduceRegion({
+     reducer: ee.Reducer.mean().combine({
+       reducer2: ee.Reducer.percentile(
+         [10, 50, 90]
+       ),
+       sharedInputs: true
+     }),
+     geometry: roi,
+     crs: CRS,
+     scale: SCALE,
+     maxPixels: 1e9,
+     tileScale: 8
+   });
+
+   var coverage = c.gt(0).reduceRegion({
+     reducer: ee.Reducer.mean(),
+     geometry: roi,
+     crs: CRS,
+     scale: SCALE,
+     maxPixels: 1e9,
+     tileScale: 8
+   }).get('count');
+
+   return {
+     mean: r.get('count_mean'),
+     p10: r.get('count_p10'),
+     p50: r.get('count_p50'),
+     p90: r.get('count_p90'),
+     coverage: coverage
+   };
+ }
+
+ // ============================================================
+ // 4. MONTHLY SOURCE/TARGET COMPARISON
+ // ============================================================
+
+ var monthRows = [];
+ var classRows = [];
+
+ for (var month = 1; month <= 12; month++) {
+
+   var first = ee.Date.fromYMD(2020, month, 1);
+   var next = first.advance(1, 'month');
+
+   var sc = source.filterDate(first, next);
+   var tc = target.filterDate(first, next);
+
+   var sq = observationStats(sc, CHENNAI_ROI);
+   var tq = observationStats(tc, THANJAVUR_ROI);
+
+   monthRows.push(
+     ee.Feature(null, {
+       month: month,
+
+       chennai_intersecting_scenes: sc.size(),
+       tnj_intersecting_scenes: tc.size(),
+
+       chennai_avg_clear_observations: sq.mean,
+       tnj_avg_clear_observations: tq.mean,
+
+       chennai_clear_p10: sq.p10,
+       chennai_clear_p50: sq.p50,
+       chennai_clear_p90: sq.p90,
+
+       tnj_clear_p10: tq.p10,
+       tnj_clear_p50: tq.p50,
+       tnj_clear_p90: tq.p90,
+
+       chennai_coverage_fraction: sq.coverage,
+       tnj_coverage_fraction: tq.coverage
+     })
+   );
+
+   // ==========================================================
+   // 5. MONTHLY VALUES AT EXISTING REFERENCE LOCATIONS
+   // ==========================================================
+
+   var sourcePoints = monthlyStack(sc).sampleRegions({
+     collection: CHENNAI_TRAIN,
+     properties: ['class_id'],
+     projection: ee.Projection(CRS),
+     scale: SCALE,
+     geometries: false,
+     tileScale: 8
+   });
+
+   var targetPoints = monthlyStack(tc).sampleRegions({
+     collection: THANJAVUR_REF,
+     properties: ['reference_class'],
+     projection: ee.Projection(CRS),
+     scale: SCALE,
+     geometries: false,
+     tileScale: 8
+   });
+
+   for (var cls = 1; cls <= 5; cls++) {
+
+     var s = sourcePoints.filter(
+       ee.Filter.eq('class_id', cls)
+     );
+
+     var t = targetPoints.filter(
+       ee.Filter.eq('reference_class', cls)
+     );
+
+     classRows.push(
+       ee.Feature(null, {
+         month: month,
+         class_id: cls,
+         class_name: CLASS_LABELS[cls - 1],
+
+         chennai_n: s.size(),
+         thanjavur_n: t.size(),
+
+         chennai_ndvi: s.aggregate_mean('NDVI'),
+         thanjavur_ndvi: t.aggregate_mean('NDVI'),
+
+         chennai_ndwi: s.aggregate_mean('NDWI'),
+         thanjavur_ndwi: t.aggregate_mean('NDWI'),
+
+         chennai_ndbi: s.aggregate_mean('NDBI'),
+         thanjavur_ndbi: t.aggregate_mean('NDBI')
+       })
+     );
+   }
+ }
+
+ // ============================================================
+ // 6. DIAGNOSTIC OUTPUTS
+ // ============================================================
+
+ var monthlyTable = ee.FeatureCollection(monthRows);
+ var signatures = ee.FeatureCollection(classRows);
+
+ print('==============================================');
+ print('STAGE 05A.2 - MONTHLY TEMPORAL DIAGNOSTICS');
+ print('==============================================');
+
+ print('Source/target annual scenes:');
+ print(source.size());
+ print(target.size());
+
+ print('MONTHLY SCENE AND CLEAR-OBSERVATION QA:');
+ print(monthlyTable);
+
+ print('MONTHLY CLASS PROFILES (60 ROWS):');
+ print(signatures);
+
+ print('BUILT-UP MONTHLY PROFILES:');
+ print(
+   signatures.filter(
+     ee.Filter.eq('class_id', 1)
+   )
+ );
+
+ print('WATER MONTHLY PROFILES:');
+ print(
+   signatures.filter(
+     ee.Filter.eq('class_id', 3)
+   )
+ );
+
+ print('AGRICULTURAL/OPEN MONTHLY PROFILES:');
+ print(
+   signatures.filter(
+     ee.Filter.eq('class_id', 4)
+   )
+ );
+
+ // ============================================================
+ // 7. EXPORT DIAGNOSTIC REPORTS
+ // ============================================================
+
+ Export.table.toDrive({
+   collection: monthlyTable,
+   description:
+     'TNJ_STAGE05A2_MONTHLY_OBSERVATION_QA_2020',
+   fileNamePrefix:
+     'TNJ_STAGE05A2_MONTHLY_OBSERVATION_QA_2020',
+   fileFormat: 'CSV'
+ });
+
+ Export.table.toDrive({
+   collection: signatures,
+   description:
+     'TNJ_STAGE05A2_SEASONAL_CLASS_SIGNATURES_2020',
+   fileNamePrefix:
+     'TNJ_STAGE05A2_SEASONAL_CLASS_SIGNATURES_2020',
+   fileFormat: 'CSV'
+ });
+
+ print('==============================================');
+ print('STAGE 05A.2 READY');
+ print('==============================================');
+
+ print('No baseline assets or labels modified.');
+ print('Diagnostic use only.');
+ print('Do not tune adaptation using these labels');
+ print('and then evaluate on the same reference points.');

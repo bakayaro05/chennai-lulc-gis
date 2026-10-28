@@ -1,0 +1,455 @@
+
+// ============================================================
+// CHENNAI LULC — STAGE 07T
+// 2015 BUILT-UP OMISSION / IMAGE COVERAGE DIAGNOSTIC
+// READ ONLY. NO RETRAINING, EXPORTS OR RELABELLING.
+// ============================================================
+
+// 1. LOCKED CONFIGURATION
+
+var ROOT = 'projects/assignment-482806/assets/';
+var CRS = 'EPSG:32644';
+var SCALE = 30;
+var CLASSES = [1, 2, 3, 4, 5];
+
+var roi = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+).geometry();
+
+var model2015 = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2015'
+).select('classification');
+
+var training = ee.FeatureCollection(
+  ROOT + 'chennai_training_2015_final'
+);
+
+var validation = ee.FeatureCollection(
+  ROOT + 'chennai_validation_2015_final'
+);
+
+var projection = model2015.projection();
+
+print('=============================================');
+print('STAGE 07T — 2015 DIAGNOSTIC / READ ONLY');
+print('=============================================');
+
+print('2015 raster projection:');
+print(projection);
+
+print('2015 training points (expected 600):');
+print(training.size());
+
+print('2015 training by class (expected 120 each):');
+print(training.aggregate_histogram('class_id'));
+
+print('2015 validation points (expected 300):');
+print(validation.size());
+
+print('2015 validation by class (expected 60 each):');
+print(validation.aggregate_histogram('class_id'));
+
+print('Training feature property names:');
+print(training.first().propertyNames());
+
+
+// 2. TRAINING RESUBSTITUTION
+// This is NOT independent accuracy.
+
+var trainingPred = model2015.sampleRegions({
+  collection: training,
+  properties: ['class_id', 'poly_id'],
+  projection: projection,
+  scale: SCALE,
+  geometries: false,
+  tileScale: 8
+});
+
+var trainingCM = trainingPred.errorMatrix(
+  'class_id',
+  'classification',
+  CLASSES
+);
+
+
+// 3. SAVED 2015 VALIDATION
+// Previously examined; development diagnostic only.
+
+var valPred = model2015.sampleRegions({
+  collection: validation,
+  properties: ['class_id'],
+  projection: projection,
+  scale: SCALE,
+  geometries: false,
+  tileScale: 8
+});
+
+var validationCM = valPred.errorMatrix(
+  'class_id',
+  'classification',
+  CLASSES
+);
+
+print('=============================================');
+print('2015 TRAINING VS VALIDATION');
+print('=============================================');
+
+print('Training predictions (expected 600):');
+print(trainingPred.size());
+
+print('Training confusion matrix:');
+print(trainingCM);
+
+print('Training resubstitution OA (%):');
+print(
+  ee.Number(trainingCM.accuracy())
+    .multiply(100)
+);
+
+print('Validation predictions (expected 300):');
+print(valPred.size());
+
+print('2015 validation confusion matrix:');
+print(validationCM);
+
+print('2015 validation OA (%; expected 85.6667):');
+print(
+  ee.Number(validationCM.accuracy())
+    .multiply(100)
+);
+
+print('2015 validation producer accuracies:');
+print(validationCM.producersAccuracy());
+
+print('2015 validation user accuracies:');
+print(validationCM.consumersAccuracy());
+
+
+// 4. FOCUS ON BUILT-UP OMISSION ERRORS
+
+var builtValidation = valPred.filter(
+  ee.Filter.eq('class_id', 1)
+);
+
+print('=============================================');
+print('2015 BUILT-UP OMISSION PATTERNS');
+print('=============================================');
+
+print('Reference Built-up count (expected 60):');
+print(builtValidation.size());
+
+print('Reference Built-up -> predicted class counts:');
+print(
+  builtValidation.aggregate_histogram(
+    'classification'
+  )
+);
+
+print('2015 Built-up predicted Agricultural (expected 8):');
+print(
+  builtValidation.filter(
+    ee.Filter.eq('classification', 4)
+  ).size()
+);
+
+print('2015 Built-up predicted Vacant/Open (expected 3):');
+print(
+  builtValidation.filter(
+    ee.Filter.eq('classification', 5)
+  ).size()
+);
+
+
+// 5. CLASS SIGNATURE AND TRAINING SOURCE DIVERSITY
+// Uses saved 2015 training predictor properties.
+// No new training data are generated.
+
+var classSummary = ee.FeatureCollection(
+  [1, 4, 5].map(function(k) {
+
+    var sub = training.filter(
+      ee.Filter.eq('class_id', k)
+    );
+
+    return ee.Feature(null, {
+
+      class_id: k,
+      sample_count: sub.size(),
+
+      distinct_poly_id:
+        sub.aggregate_count_distinct('poly_id'),
+
+      NDVI_mean: sub.aggregate_mean('NDVI'),
+      NDVI_sd: sub.aggregate_total_sd('NDVI'),
+
+      NDBI_mean: sub.aggregate_mean('NDBI'),
+      NDWI_mean: sub.aggregate_mean('NDWI'),
+
+      red_mean: sub.aggregate_mean('red'),
+      nir_mean: sub.aggregate_mean('nir'),
+      swir1_mean: sub.aggregate_mean('swir1')
+
+    });
+
+  })
+);
+
+print('=============================================');
+print('2015 TRAINING CLASS 1, 4, 5 REPRESENTATION');
+print('=============================================');
+
+print(classSummary.sort('class_id'));
+
+print('Class 1 original poly_id distribution:');
+print(
+  training.filter(
+    ee.Filter.eq('class_id', 1)
+  ).aggregate_histogram('poly_id')
+);
+
+print('Class 4 original poly_id distribution:');
+print(
+  training.filter(
+    ee.Filter.eq('class_id', 4)
+  ).aggregate_histogram('poly_id')
+);
+
+print('Class 5 original poly_id distribution:');
+print(
+  training.filter(
+    ee.Filter.eq('class_id', 5)
+  ).aggregate_histogram('poly_id')
+);
+
+
+// 6. LANDSAT 8 VERSUS LANDSAT 7 AVAILABILITY
+// Only clear-observation counts are calculated.
+// No bands from different sensors are merged.
+
+var start = '2015-01-01';
+var end = '2016-01-01';
+
+var l8 = ee.ImageCollection(
+  'LANDSAT/LC08/C02/T1_L2'
+)
+.filterBounds(roi)
+.filterDate(start, end);
+
+var l7 = ee.ImageCollection(
+  'LANDSAT/LE07/C02/T1_L2'
+)
+.filterBounds(roi)
+.filterDate(start, end);
+
+
+// Same project QA masking principles.
+// L7 dropped-pixel flag is excluded.
+// L8 cirrus flag is also excluded.
+
+function clearCountFlag(image, sensor) {
+
+  var qa = image.select('QA_PIXEL');
+  var sat = image.select('QA_RADSAT');
+
+  var ok = qa.bitwiseAnd(1 << 0).eq(0)
+    .and(qa.bitwiseAnd(1 << 1).eq(0))
+    .and(qa.bitwiseAnd(1 << 3).eq(0))
+    .and(qa.bitwiseAnd(1 << 4).eq(0))
+    .and(qa.bitwiseAnd(1 << 5).eq(0))
+    .and(sat.eq(0));
+
+  if (sensor === 'L8') {
+
+    ok = ok.and(
+      qa.bitwiseAnd(1 << 2).eq(0)
+    );
+
+  } else {
+
+    ok = ok.and(
+      sat.bitwiseAnd(1 << 9).eq(0)
+    );
+
+  }
+
+  var srBand = sensor === 'L8'
+    ? 'SR_B4'
+    : 'SR_B3';
+
+  return ee.Image.constant(1)
+    .rename('clear')
+    .updateMask(ok)
+    .updateMask(
+      image.select(srBand).mask()
+    );
+
+}
+
+var l8Flags = l8.map(function(im) {
+  return clearCountFlag(im, 'L8');
+});
+
+var l7Flags = l7.map(function(im) {
+  return clearCountFlag(im, 'L7');
+});
+
+var n8 = l8Flags.count()
+  .unmask(0)
+  .clip(roi)
+  .rename('L8_count');
+
+var n7 = l7Flags.count()
+  .unmask(0)
+  .clip(roi)
+  .rename('L7_count');
+
+var together = l8Flags.merge(l7Flags)
+  .count()
+  .unmask(0)
+  .clip(roi)
+  .rename('L8_L7_count');
+
+
+// 7. COVERAGE STATISTICS
+
+var coverage = ee.Image.cat([
+
+  n8,
+  n7,
+  together,
+
+  n8.gte(3)
+    .toFloat()
+    .rename('L8_3plus_fraction'),
+
+  together.gte(3)
+    .toFloat()
+    .rename('Combined_3plus_fraction'),
+
+  n8.lte(1)
+    .toFloat()
+    .rename('L8_0or1_fraction'),
+
+  together.lte(1)
+    .toFloat()
+    .rename('Combined_0or1_fraction'),
+
+  n7.gt(0)
+    .toFloat()
+    .rename('Fraction_with_L7_observations')
+
+]).reduceRegion({
+
+  reducer: ee.Reducer.mean(),
+  geometry: roi,
+  crs: CRS,
+  scale: SCALE,
+  maxPixels: 1e9,
+  tileScale: 8
+
+});
+
+var percentiles = ee.Image.cat([
+  n8,
+  n7,
+  together
+]).reduceRegion({
+
+  reducer: ee.Reducer.percentile([
+    10, 25, 50, 75, 90
+  ]),
+
+  geometry: roi,
+  crs: CRS,
+  scale: SCALE,
+  maxPixels: 1e9,
+  tileScale: 8
+
+});
+
+print('=============================================');
+print('2015 LANDSAT IMAGE AVAILABILITY');
+print('=============================================');
+
+print('Landsat 8 scenes (previous count 19):');
+print(l8.size());
+
+print('Landsat 7 scenes (SLC-off):');
+print(l7.size());
+
+print('Clear pixel coverage means and fractions:');
+print(coverage);
+
+print('Clear pixel count percentiles:');
+print(percentiles);
+
+
+// 8. MAP — EXISTING DATA ONLY
+
+Map.layers().reset();
+Map.centerObject(roi, 10);
+
+Map.addLayer(
+  model2015,
+  {
+    min: 1,
+    max: 5,
+    palette: [
+      'ff0000',
+      '008000',
+      '0000ff',
+      'ffff00',
+      'd2b48c'
+    ]
+  },
+  '2015 LOCKED — DO NOT MODIFY',
+  true
+);
+
+Map.addLayer(
+  n8,
+  {
+    min: 0,
+    max: 12,
+    palette: [
+      'ffffff',
+      'ffff99',
+      '78c679',
+      '006837'
+    ]
+  },
+  '2015 L8 clear observations',
+  false
+);
+
+Map.addLayer(
+  together,
+  {
+    min: 0,
+    max: 20,
+    palette: [
+      'ffffff',
+      'ffff99',
+      '78c679',
+      '006837'
+    ]
+  },
+  '2015 L8+L7 clear observations',
+  false
+);
+
+
+// 9. STATUS
+
+print('=============================================');
+print('END STAGE 07T — DIAGNOSTIC ONLY');
+print('=============================================');
+
+print('The existing 2015 validation is a development benchmark.');
+print('No training, validation or raster assets changed.');
+print('No candidate model fitted.');
+print('No exports created.');
+
+// ============================================================
+// END STAGE 07T
+// ============================================================

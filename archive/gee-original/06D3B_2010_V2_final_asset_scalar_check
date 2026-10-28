@@ -1,0 +1,126 @@
+// ============================================================================
+// 06D3B — 2010 V2 FINAL MATERIALIZED ASSET SCALAR CHECK
+// ============================================================================
+// Tiny final verification only.
+// NO EXPORT.
+// ============================================================================
+
+var TRAINING_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final_v2';
+
+var training =
+  ee.FeatureCollection(TRAINING_ASSET);
+
+
+// ============================================================================
+// 1. DIRECT CLASS COUNTS
+// ============================================================================
+
+print('========================================');
+print('06D3B — FINAL CLASS COUNTS');
+print('========================================');
+
+print(
+  ee.String('Built-up (1) = ')
+    .cat(
+      training
+        .filter(ee.Filter.eq('class_id', 1))
+        .size()
+        .format('%d')
+    )
+);
+
+print(
+  ee.String('Vegetation (2) = ')
+    .cat(
+      training
+        .filter(ee.Filter.eq('class_id', 2))
+        .size()
+        .format('%d')
+    )
+);
+
+print(
+  ee.String('Water (3) = ')
+    .cat(
+      training
+        .filter(ee.Filter.eq('class_id', 3))
+        .size()
+        .format('%d')
+    )
+);
+
+print(
+  ee.String('Agricultural/Open (4) = ')
+    .cat(
+      training
+        .filter(ee.Filter.eq('class_id', 4))
+        .size()
+        .format('%d')
+    )
+);
+
+print(
+  ee.String('Barren/Fallow (5) = ')
+    .cat(
+      training
+        .filter(ee.Filter.eq('class_id', 5))
+        .size()
+        .format('%d')
+    )
+);
+
+
+// ============================================================================
+// 2. CLEAR COUNT
+// ============================================================================
+
+print('========================================');
+print('06D3B — CLEAR COUNT');
+print('========================================');
+
+print(
+  ee.String('Minimum clear_count = ')
+    .cat(
+      ee.Number(
+        training.aggregate_min('clear_count')
+      ).format('%.0f')
+    )
+);
+
+print(
+  ee.String('Maximum clear_count = ')
+    .cat(
+      ee.Number(
+        training.aggregate_max('clear_count')
+      ).format('%.0f')
+    )
+);
+
+print(
+  ee.String('Mean clear_count = ')
+    .cat(
+      ee.Number(
+        training.aggregate_mean('clear_count')
+      ).format('%.4f')
+    )
+);
+
+
+// ============================================================================
+// 3. TOTAL
+// ============================================================================
+
+print('========================================');
+
+print(
+  ee.String('TOTAL = ')
+    .cat(
+      training.size().format('%d')
+    )
+);
+
+print('EXPECTED: 120 / 120 / 120 / 120 / 120');
+print('EXPECTED TOTAL: 600');
+print('EXPECTED clear_count min >= 2');
+print('========================================');

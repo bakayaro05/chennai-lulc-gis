@@ -1,0 +1,200 @@
+
+ // =============================================================
+ // CHENNAI LULC — STAGE 08E FIXED
+ // ACTUAL 30 m PIXEL FOOTPRINTS — READ ONLY
+ // Corrects pixel-coordinate/metre projection mix-up.
+ // Optional KML export only. No raster modification.
+ // =============================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+var CRS = 'EPSG:32644';
+var UTM = ee.Projection(CRS);   // Metre coordinates, NOT raster pixels.
+var WGS = ee.Projection('EPSG:4326');
+var TX = [30, 0, 399060, 0, -30, 1463250];
+var ORIGIN_X = 399060;
+var ORIGIN_Y = 1463250;
+var CELL = 30;
+var EXPORT_KML = true;       // FIRST RUN: false
+
+var LOCATIONS = [
+  ['S01', 80.248916667, 12.892583333],
+  ['S02', 80.190361111, 12.963472222],
+  ['S03', 80.232666667, 13.144805556],
+  ['S04', 80.264722222, 13.070305556],
+  ['S05', 80.260250000, 13.081666667],
+  ['S06', 80.172638889, 12.967222222],
+  ['S07', 80.212805556, 13.034055556],
+  ['S08', 80.115000000, 12.917388889],
+  ['S09', 80.185222222, 13.006027778],
+  ['S10', 80.181305556, 13.104500000]
+];
+
+var img = ee.Image.cat([
+  ee.Image(ROOT + 'chennai_mlc_lulc_2010_L5L7_manual_exp_v1')
+    .select('classification').rename('class_2010'),
+  ee.Image(ROOT + 'chennai_mlc_lulc_2015')
+    .select('classification').rename('class_2015')
+]);
+
+function footprint(row) {
+  var siteId = row[0];
+  var lon = row[1];
+  var lat = row[2];
+  var gps = ee.Geometry.Point([lon, lat], WGS);
+
+  // Transform to METRE-based UTM, NOT ee.Projection(CRS, TX).
+  // Transforming to the latter returns affine pixel-space coords.
+  var xyMetres = gps.transform(UTM, 1).coordinates();
+  var x = ee.Number(xyMetres.get(0));
+  var y = ee.Number(xyMetres.get(1));
+
+  var column = x.subtract(ORIGIN_X).divide(CELL).floor();
+  var rasterRow = ee.Number(ORIGIN_Y).subtract(y).divide(CELL).floor();
+
+  var west = ee.Number(ORIGIN_X).add(column.multiply(CELL));
+  var east = west.add(CELL);
+  var north = ee.Number(ORIGIN_Y).subtract(rasterRow.multiply(CELL));
+  var south = north.subtract(CELL);
+
+  // Rectangle extent expressed in UTM METRES: 30m x 30m.
+  var cellUTM = ee.Geometry.Rectangle(
+    [west, south, east, north], UTM, false
+  );
+  var centerUTM = ee.Geometry.Point(
+    [west.add(15), south.add(15)], UTM
+  );
+
+  var byCenter = img.reduceRegion({
+    reducer: ee.Reducer.first(),
+    geometry: centerUTM,
+    crs: CRS,
+    crsTransform: TX,
+    maxPixels: 10000
+  });
+
+  var byOriginalPoint = img.reduceRegion({
+    reducer: ee.Reducer.first(),
+    geometry: gps,
+    crs: CRS,
+    crsTransform: TX,
+    maxPixels: 10000
+  });
+
+  return ee.Feature(cellUTM.transform(WGS, 1), {
+    name: siteId + ' - VERIFIED 30m CELL',
+    site_id: siteId,
+    source_lon: lon,
+    source_lat: lat,
+    pixel_col: column,
+    pixel_row: rasterRow,
+    width_m: CELL,
+    height_m: CELL,
+    area_m2: cellUTM.area(1),
+    point_to_cell_center_m: gps.distance(centerUTM, 1),
+    class_2010: byCenter.get('class_2010'),
+    class_2015: byCenter.get('class_2015'),
+    original_point_class_2010:
+      byOriginalPoint.get('class_2010'),
+    original_point_class_2015:
+      byOriginalPoint.get('class_2015'),
+    source_checked_2015:
+      'NO - VERIFY HISTORICAL 2015 PIXEL'
+  });
+}
+
+var cells = ee.FeatureCollection(LOCATIONS.map(footprint));
+
+var centers = ee.FeatureCollection(LOCATIONS.map(function(r) {
+  return ee.Feature(
+    ee.Geometry.Point([r[1], r[2]], WGS),
+    {site_id: r[0]}
+  );
+}));
+
+print('STAGE 08E FIXED: 30m PIXEL FOOTPRINT CHECK');
+print('Expected count: 10');
+print(cells.size());
+
+print('Expected area of EACH footprint about 900 m2:');
+print(cells.aggregate_array('area_m2'));
+
+print('Expected grid columns: S01 ~648, S02 ~437, S06 ~373');
+print('Grid columns:');
+print(cells.aggregate_array('pixel_col'));
+
+print('Original-point vs centre class consistency:');
+print(cells.select([
+  'site_id',
+  'pixel_col',
+  'pixel_row',
+  'area_m2',
+  'point_to_cell_center_m',
+  'class_2010',
+  'class_2015',
+  'original_point_class_2010',
+  'original_point_class_2015'
+]));
+
+Map.layers().reset();
+Map.setOptions('SATELLITE');
+
+Map.centerObject(
+  ee.Geometry.Point([80.190361111, 12.963472222]),
+  18
+);
+
+Map.addLayer(
+  cells.style({
+    color: '00ffff',
+    fillColor: '00ffff18',
+    width: 3
+  }),
+  {},
+  'TRUE 30 m CELLS (cyan)',
+  true
+);
+
+Map.addLayer(
+  centers.style({
+    color: 'ff0000',
+    pointSize: 5
+  }),
+  {},
+  'Source points (red)',
+  true
+);
+
+Map.addLayer(
+  img.select('class_2015'),
+  {
+    min: 1,
+    max: 5,
+    palette: [
+      'e53935',
+      '2e7d32',
+      '1976d2',
+      'fdd835',
+      'bcaaa4'
+    ]
+  },
+  '2015 original MLC (off initially)',
+  false,
+  0.5
+);
+
+if (EXPORT_KML) {
+  Export.table.toDrive({
+    collection: cells,
+    description: 'Chennai_08E_FIXED_True30mCell_KML',
+    folder: 'Chennai_LULC_Historical_Pixel_Audit',
+    fileNamePrefix: 'Chennai_2015_10_TRUE_30m_Cells',
+    fileFormat: 'KML'
+  });
+
+  print('KML task created.');
+  print('Start task, then import into Google Earth Pro.');
+} else {
+  print('Preview only. No export task created.');
+}
+
+print('Do not use older 08E yellow squares for labeling.');

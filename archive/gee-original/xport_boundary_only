@@ -1,0 +1,18 @@
+// Chennai LULC Stage 08: export only the official study boundary.
+// This does not change any classification or image asset.
+var studyBoundary = ee.FeatureCollection(
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean'
+);
+
+Map.centerObject(studyBoundary, 10);
+Map.addLayer(studyBoundary, {color: 'yellow'}, 'Official study boundary');
+
+Export.table.toDrive({
+  collection: studyBoundary,
+  description: 'Chennai_Study_Area_Boundary_Stage08',
+  folder: 'Chennai_LULC_Final4_Stage08',
+  fileNamePrefix: 'chennai_study_area',
+  fileFormat: 'GeoJSON'
+});
+
+print('One GeoJSON export task prepared. Start it in the Tasks tab.');

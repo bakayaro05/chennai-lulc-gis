@@ -1,0 +1,530 @@
+
+ // ============================================================
+ // CHENNAI LULC | STAGES 08G-6 + 08G-7
+ // 2015 GHSL SCREEN + 2025 DYNAMIC WORLD CORRECTION
+ // 2020 best fusion previously audited: 296.739518 km2
+ //
+ // READ ONLY. NO TRAINING, NO EXPORTS.
+ // NO ORIGINAL ASSET MODIFICATIONS.
+ // ============================================================
+
+ var ROOT = 'projects/assignment-482806/assets/';
+
+ var roi = ee.FeatureCollection(
+   ROOT + 'chennai_admin_study_area_clean'
+ ).geometry();
+
+ var GRID = [30,0,399060,0,-30,1463250];
+ var CRS = 'EPSG:32644';
+ var P = ee.Projection(CRS, GRID);
+
+ var palette = [
+   'ff0000','008000','0000ff','ffff00','d2b48c'
+ ];
+
+ var old15 = ee.Image(
+   ROOT + 'chennai_mlc_lulc_2015'
+ ).select(0).rename('original');
+
+ var old25 = ee.Image(
+   ROOT + 'chennai_mlc_lulc_2025_from_original_tif'
+ ).select(0).rename('original');
+
+ var val15 = ee.FeatureCollection(
+   ROOT + 'chennai_validation_2015_final'
+ );
+
+ var gaia = ee.Image(
+   'Tsinghua/FROM-GLC/GAIA/v10'
+ ).select('change_year_index').unmask(0);
+
+ var gaia15 = gaia.gte(4).and(gaia.lte(34));
+ var gaia18 = gaia.gte(1).and(gaia.lte(34));
+
+ // ============================================================
+ // HELPER FUNCTIONS
+ // ============================================================
+
+ function openBarren(image) {
+   return image.eq(4).or(image.eq(5));
+ }
+
+ function km2(mask, name, reference) {
+   return ee.Image.pixelArea()
+     .divide(1e6)
+     .updateMask(mask)
+     .updateMask(reference.mask())
+     .rename(name);
+ }
+
+ function sumAreas(image) {
+   return image.reduceRegion({
+     reducer: ee.Reducer.sum(),
+     geometry: roi,
+     crs: CRS,
+     crsTransform: GRID,
+     maxPixels: 1e8,
+     tileScale: 8
+   });
+ }
+
+ function fraction30(binary10, name) {
+   return binary10.toFloat()
+     .reduceResolution({
+       reducer: ee.Reducer.mean(),
+       maxPixels: 1024
+     })
+     .reproject({
+       crs: CRS,
+       crsTransform: GRID
+     })
+     .rename(name);
+ }
+
+ // ============================================================
+ // STAGE 08G-6 | 2015 STRICT BUILT-UP FUSION
+ //
+ // Three-source agreement:
+ // 1. GAIA impervious by 2015
+ // 2. WSF2015 >= 67% settlement coverage at 30 m
+ // 3. GHSL2015 >= 6000 m2 built surface / 100 m cell
+ //
+ // GHSL threshold is a fixed conservative screening rule.
+ // It is NOT calibrated on the validation points.
+ // ============================================================
+
+ var wsfRaw = ee.Image('DLR/WSF/WSF2015/v1');
+
+ // Select band 0 to avoid WSF / settlement name mismatch.
+
+ var wsfFraction = fraction30(
+   wsfRaw.select(0).unmask(0).gt(0),
+   'WSF_fraction30'
+ );
+
+ var ghsl15 = ee.Image(
+   'JRC/GHSL/P2023A/GHS_BUILT_S/2015'
+ ).select('built_surface').unmask(0);
+
+ var suspect15 = openBarren(old15);
+
+ var broad15Mask = suspect15
+   .and(gaia15)
+   .and(wsfFraction.gte(0.67));
+
+ var strict15Mask = broad15Mask
+   .and(ghsl15.gte(6000));
+
+ var broad15 = old15
+   .where(broad15Mask,1)
+   .rename('broad')
+   .toByte();
+
+ var strict15 = old15
+   .where(strict15Mask,1)
+   .rename('strict')
+   .toByte();
+
+ // ============================================================
+ // 2015 VALIDATION
+ // ============================================================
+
+ var paired15 = old15
+   .addBands([broad15,strict15])
+   .sampleRegions({
+     collection: val15,
+     properties: ['class_id'],
+     projection: P,
+     tileScale: 8,
+     geometries: false
+   })
+   .map(function(f) {
+
+     var truth = ee.Number(f.get('class_id'));
+     var before = ee.Number(f.get('original'));
+     var after = ee.Number(f.get('strict'));
+
+     return f.set({
+       delta: after.eq(truth)
+         .subtract(before.eq(truth))
+     });
+
+   });
+
+ var CLASSES = [1,2,3,4,5];
+
+ var cmOld15 = paired15.errorMatrix(
+   'class_id','original',CLASSES
+ );
+
+ var cmBroad15 = paired15.errorMatrix(
+   'class_id','broad',CLASSES
+ );
+
+ var cmStrict15 = paired15.errorMatrix(
+   'class_id','strict',CLASSES
+ );
+
+ var truthBU15 = paired15.filter(
+   ee.Filter.eq('class_id',1)
+ );
+
+ var truthOther15 = paired15.filter(
+   ee.Filter.neq('class_id',1)
+ );
+
+ // ============================================================
+ // 2015 CITYWIDE AREA
+ // ============================================================
+
+ var stats15 = sumAreas(ee.Image.cat([
+
+   km2(
+     old15.eq(1),
+     'original_2015_BU_km2',
+     old15
+   ),
+
+   km2(
+     broad15.eq(1),
+     'broad_2015_BU_km2',
+     old15
+   ),
+
+   km2(
+     strict15.eq(1),
+     'strict_2015_BU_km2',
+     old15
+   ),
+
+   km2(
+     strict15Mask,
+     'strict_new_BU_km2',
+     old15
+   ),
+
+   km2(
+     strict15Mask.and(old15.eq(4)),
+     'from_class4_km2',
+     old15
+   ),
+
+   km2(
+     strict15Mask.and(old15.eq(5)),
+     'from_class5_km2',
+     old15
+   ),
+
+   km2(
+     broad15Mask.and(strict15Mask.not()),
+     'GHSL_rejected_broad_km2',
+     old15
+   )
+
+ ]));
+
+ print('========================================');
+ print('STAGE 08G-6 | 2015 STRICT FUSION');
+ print('========================================');
+
+ print('GHSL 2015 >= 6000 m2 / 100m cell');
+ print('WSF settlement fraction >= 0.67');
+
+ print('Validation count (expected 300):');
+ print(paired15.size());
+
+ print('2015 ORIGINAL MATRIX:');
+ print(cmOld15);
+
+ print('2015 BROAD MATRIX:');
+ print(cmBroad15);
+
+ print('2015 STRICT MATRIX:');
+ print(cmStrict15);
+
+ print('2015 ACCURACY:');
+ print(ee.Dictionary({
+   original: cmOld15.accuracy(),
+   broad: cmBroad15.accuracy(),
+   strict: cmStrict15.accuracy()
+ }));
+
+ print('2015 BUILT-UP RECALL:');
+ print(ee.Dictionary({
+   original: cmOld15.producersAccuracy().get([0,0]),
+   broad: cmBroad15.producersAccuracy().get([0,0]),
+   strict: cmStrict15.producersAccuracy().get([0,0])
+ }));
+
+ print('2015 BUILT-UP TP / FP:');
+ print(ee.Dictionary({
+
+   original_TP: truthBU15.filter(
+     ee.Filter.eq('original',1)
+   ).size(),
+
+   strict_TP: truthBU15.filter(
+     ee.Filter.eq('strict',1)
+   ).size(),
+
+   original_FP: truthOther15.filter(
+     ee.Filter.eq('original',1)
+   ).size(),
+
+   strict_FP: truthOther15.filter(
+     ee.Filter.eq('strict',1)
+   ).size()
+
+ }));
+
+ print('2015 PAIRED CHANGES:');
+ print(ee.Dictionary({
+
+   improved: paired15.filter(
+     ee.Filter.eq('delta',1)
+   ).size(),
+
+   worsened: paired15.filter(
+     ee.Filter.eq('delta',-1)
+   ).size()
+
+ }));
+
+ print('2015 CITYWIDE AREAS km2:');
+ print(stats15);
+
+ // ============================================================
+ // STAGE 08G-7 | 2025 DYNAMIC WORLD CORRECTION
+ //
+ // Uses actual 2025 Dynamic World observations.
+ //
+ // Strong:
+ // >= 6 observations per 10m pixel
+ // median P(built) >= 0.65
+ // >= 67% of 30m pixel strongly Built-up
+ //
+ // Very strong:
+ // median P(built) >= 0.80
+ // >= 89% of 30m pixel very strongly Built-up
+ //
+ // Conservative candidate requires GAIA 2018 support.
+ // Extended candidate includes DW-only very strong areas.
+ // ============================================================
+
+ var dw = ee.ImageCollection(
+   'GOOGLE/DYNAMICWORLD/V1'
+ )
+ .filterBounds(roi)
+ .filterDate('2025-01-01','2026-01-01')
+ .select('built');
+
+ var proj10 = ee.Projection(CRS).atScale(10);
+
+ var dwCount = dw.count()
+   .setDefaultProjection(proj10);
+
+ var dwMedian = dw.median()
+   .setDefaultProjection(proj10);
+
+ var enoughObservations = dwCount.gte(6);
+
+ var strongFraction = fraction30(
+   dwMedian.gte(0.65)
+     .and(enoughObservations)
+     .unmask(0),
+   'DW2025_strong_fraction30'
+ );
+
+ var veryStrongFraction = fraction30(
+   dwMedian.gte(0.80)
+     .and(enoughObservations)
+     .unmask(0),
+   'DW2025_very_strong_fraction30'
+ );
+
+ var dwStrong = strongFraction.gte(0.67);
+ var dwVeryStrong = veryStrongFraction.gte(0.89);
+
+ var suspect25 = openBarren(old25);
+
+ // Conservative:
+ // historically impervious by 2018 AND 2025 DW support.
+
+ var legacy25Mask = suspect25
+   .and(gaia18)
+   .and(dwStrong);
+
+ // Additional strong 2025 evidence without GAIA.
+ // These pixels are less certain: absence from GAIA
+ // is NOT proof that construction occurred after 2018.
+
+ var extra25Mask = suspect25
+   .and(gaia18.not())
+   .and(dwVeryStrong);
+
+ var conservative25 = old25
+   .where(legacy25Mask,1)
+   .rename('conservative25')
+   .toByte();
+
+ var extended25 = old25
+   .where(legacy25Mask.or(extra25Mask),1)
+   .rename('extended25')
+   .toByte();
+
+ // ============================================================
+ // 2025 CITYWIDE AREA
+ // ============================================================
+
+ var stats25 = sumAreas(ee.Image.cat([
+
+   km2(
+     old25.eq(1),
+     'original_2025_BU_km2',
+     old25
+   ),
+
+   km2(
+     conservative25.eq(1),
+     'conservative_2025_BU_km2',
+     old25
+   ),
+
+   km2(
+     extended25.eq(1),
+     'extended_2025_BU_km2',
+     old25
+   ),
+
+   km2(
+     legacy25Mask,
+     'GAIA2018_and_DW_added_km2',
+     old25
+   ),
+
+   km2(
+     extra25Mask,
+     'DW_only_added_km2',
+     old25
+   ),
+
+   km2(
+     legacy25Mask.and(old25.eq(4)),
+     'legacy_from_class4_km2',
+     old25
+   ),
+
+   km2(
+     legacy25Mask.and(old25.eq(5)),
+     'legacy_from_class5_km2',
+     old25
+   ),
+
+   km2(
+     extra25Mask.and(old25.eq(4)),
+     'DW_only_from_class4_km2',
+     old25
+   ),
+
+   km2(
+     extra25Mask.and(old25.eq(5)),
+     'DW_only_from_class5_km2',
+     old25
+   )
+
+ ]));
+
+ print('========================================');
+ print('STAGE 08G-7 | 2025 DYNAMIC WORLD');
+ print('========================================');
+
+ print('Dynamic World 2025 scene count:');
+ print(dw.size());
+
+ print('2025 CITYWIDE AREAS km2:');
+ print(stats25);
+
+ print('2025 independent validation not calculated:');
+ print('Final 2025 validation-point asset ID has not been confirmed.');
+
+ print('DW-only corrections are lower-confidence candidates.');
+ print('Do not treat them as confirmed new construction.');
+
+ print('========================================');
+ print('HISTORICAL COMPARISON CHECKPOINT');
+ print('========================================');
+
+ print('2020 leading fusion area from Stage 08G-4C:');
+ print('296.7395182942291 km2');
+
+ print('All new classifications are experimental.');
+ print('No asset modified. No export performed.');
+
+ // ============================================================
+ // MAP DISPLAY
+ // ============================================================
+
+ Map.layers().reset();
+ Map.setOptions('SATELLITE');
+
+ Map.addLayer(
+   old15,
+   {min:1,max:5,palette:palette},
+   '2015 ORIGINAL',
+   true
+ );
+
+ Map.addLayer(
+   strict15,
+   {min:1,max:5,palette:palette},
+   '2015 STRICT GHSL FUSION',
+   false
+ );
+
+ Map.addLayer(
+   strict15Mask.selfMask(),
+   {palette:['00ffff']},
+   '2015 NEW BUILT-UP',
+   false
+ );
+
+ Map.addLayer(
+   old25,
+   {min:1,max:5,palette:palette},
+   '2025 ORIGINAL',
+   false
+ );
+
+ Map.addLayer(
+   conservative25,
+   {min:1,max:5,palette:palette},
+   '2025 CONSERVATIVE FUSION',
+   false
+ );
+
+ Map.addLayer(
+   extended25,
+   {min:1,max:5,palette:palette},
+   '2025 EXTENDED FUSION',
+   false
+ );
+
+ Map.addLayer(
+   legacy25Mask.selfMask(),
+   {palette:['00ffff']},
+   '2025 GAIA + DW ADDITIONS',
+   false
+ );
+
+ Map.addLayer(
+   extra25Mask.selfMask(),
+   {palette:['ff00ff']},
+   '2025 DW-ONLY ADDITIONS',
+   false
+ );
+
+ Map.centerObject(roi,10);
+
+ // ============================================================
+ // END STAGES 08G-6 / 08G-7
+ // ============================================================

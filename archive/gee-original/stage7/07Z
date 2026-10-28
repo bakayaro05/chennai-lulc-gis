@@ -1,0 +1,316 @@
+
+ // =============================================================
+ // CHENNAI LULC — STAGE 07Z
+ // FINAL 2010 CLASS 4 / CLASS 5 DIAGNOSTIC
+ //
+ // Existing 2010 L5+L7 MLC and archived reference samples.
+ // READ ONLY — NO EXPORTS, RETRAINING OR RELABELLING.
+ // =============================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var GRID = ee.Projection(
+  'EPSG:32644',
+  [30, 0, 399060, 0, -30, 1463250]
+);
+
+var roi = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+).geometry();
+
+var training = ee.FeatureCollection(
+  ROOT + 'chennai_training_2010_L5L7_manual_exp_v1'
+);
+
+var validation = ee.FeatureCollection(
+  ROOT + 'chennai_validation_2010_final'
+);
+
+var stack = ee.Image(
+  ROOT + 'chennai_predictor_stack_2010_L5L7_exp_v1'
+).select([
+  'blue', 'green', 'red',
+  'nir', 'swir1', 'swir2',
+  'NDVI', 'NDWI', 'NDBI'
+]);
+
+var classification = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2010_L5L7_manual_exp_v1'
+).select('classification').rename('predicted');
+
+// =============================================================
+// A. TRAINING CLASS SIGNATURES
+// =============================================================
+
+function classProfile(classId) {
+
+  var subset = training.filter(
+    ee.Filter.eq('class_id', classId)
+  );
+
+  return ee.Feature(null, {
+    class_id: classId,
+    sample_count: subset.size(),
+    source_sites:
+      subset.aggregate_count_distinct('site_id'),
+    NDVI_mean: subset.aggregate_mean('NDVI'),
+    NDBI_mean: subset.aggregate_mean('NDBI'),
+    NDWI_mean: subset.aggregate_mean('NDWI'),
+    red_mean: subset.aggregate_mean('red'),
+    swir1_mean: subset.aggregate_mean('swir1')
+  });
+
+}
+
+var classProfiles = ee.FeatureCollection([
+  classProfile(1),
+  classProfile(4),
+  classProfile(5)
+]);
+
+// =============================================================
+// B. INDIVIDUAL TRAINING SITE PROFILES
+// =============================================================
+
+function siteProfiles(classId) {
+
+  var subset = training.filter(
+    ee.Filter.eq('class_id', classId)
+  );
+
+  var ids = ee.List(
+    subset.aggregate_array('site_id')
+  ).distinct().sort();
+
+  return ee.FeatureCollection(ids.map(function(id) {
+
+    var site = subset.filter(
+      ee.Filter.eq('site_id', id)
+    );
+
+    return ee.Feature(null, {
+      site_id: id,
+      class_id: classId,
+      samples: site.size(),
+      NDVI_mean: site.aggregate_mean('NDVI'),
+      NDBI_mean: site.aggregate_mean('NDBI'),
+      NDWI_mean: site.aggregate_mean('NDWI'),
+      red_mean: site.aggregate_mean('red'),
+      swir1_mean: site.aggregate_mean('swir1')
+    });
+
+  }));
+
+}
+
+var agriculturalSites = siteProfiles(4);
+var vacantSites = siteProfiles(5);
+
+// =============================================================
+// C. PREDICT EXISTING VALIDATION LOCATIONS
+// =============================================================
+
+var validationPred = stack
+  .addBands(classification)
+  .sampleRegions({
+    collection: validation,
+    properties: ['class_id'],
+    projection: GRID,
+    scale: 30,
+    geometries: true,
+    tileScale: 8
+  })
+  .map(function(f) {
+
+    var coords = ee.List(
+      f.geometry()
+       .transform('EPSG:4326', 1)
+       .coordinates()
+    );
+
+    return f.set({
+      longitude: coords.get(0),
+      latitude: coords.get(1)
+    });
+
+  });
+
+var cm = validationPred.errorMatrix(
+  'class_id',
+  'predicted',
+  [1, 2, 3, 4, 5]
+);
+
+// =============================================================
+// D. CHOOSE HISTORICAL REVIEW CANDIDATES
+//
+// These are EXISTING validation locations.
+// Do not move them into training or change their labels
+// based on classifier predictions.
+// =============================================================
+
+function reviewCases(actualClass, mappedClass) {
+
+  return validationPred
+    .filter(ee.Filter.eq('class_id', actualClass))
+    .filter(ee.Filter.eq('predicted', mappedClass))
+    .randomColumn(
+      'audit_random',
+      20101018,
+      'uniform',
+      ['latitude', 'longitude']
+    )
+    .sort('audit_random')
+    .limit(5)
+    .select([
+      'class_id',
+      'predicted',
+      'latitude',
+      'longitude',
+      'NDVI',
+      'NDBI',
+      'NDWI'
+    ]);
+
+}
+
+var vacantToAgri = reviewCases(5, 4);
+var vacantToVegetation = reviewCases(5, 2);
+var agriToVacant = reviewCases(4, 5);
+var agriToBuilt = reviewCases(4, 1);
+
+// =============================================================
+// E. CONSOLE RESULTS
+// =============================================================
+
+print('=============================================');
+print('STAGE 07Z — FINAL 2010 CLASS DIAGNOSTIC');
+print('=============================================');
+
+print('2010 training pixels (expected 600):');
+print(training.size());
+
+print('2010 validation points (expected 300):');
+print(validation.size());
+
+print('Validation predictions (expected 300):');
+print(validationPred.size());
+
+print('Original 2010 confusion matrix:');
+print(cm);
+
+print('Original 2010 accuracy (%):');
+print(ee.Number(cm.accuracy()).multiply(100));
+
+print('=============================================');
+print('CLASS 1, 4, 5 TRAINING SIGNATURES');
+print('=============================================');
+
+print(classProfiles);
+
+print('Class 4 — Agricultural training sites:');
+print(agriculturalSites);
+
+print('Class 5 — Vacant/Open training sites:');
+print(vacantSites);
+
+print('=============================================');
+print('CLASS 5 REFERENCE ERROR DISTRIBUTION');
+print('=============================================');
+
+print(
+  validationPred
+    .filter(ee.Filter.eq('class_id', 5))
+    .aggregate_histogram('predicted')
+);
+
+print('=============================================');
+print('HISTORICAL REVIEW CANDIDATES');
+print('=============================================');
+
+print('Actual Vacant/Open -> Agricultural:');
+print(vacantToAgri);
+
+print('Actual Vacant/Open -> Vegetation:');
+print(vacantToVegetation);
+
+print('Actual Agricultural -> Vacant/Open:');
+print(agriToVacant);
+
+print('Actual Agricultural -> Built-up:');
+print(agriToBuilt);
+
+// =============================================================
+// F. MAP
+// =============================================================
+
+Map.layers().reset();
+Map.centerObject(roi, 10);
+Map.setOptions('SATELLITE');
+
+Map.addLayer(
+  classification,
+  {
+    min: 1,
+    max: 5,
+    palette: [
+      'ff0000',
+      '008000',
+      '0000ff',
+      'ffff00',
+      'd2b48c'
+    ]
+  },
+  '2010 L5+L7 ORIGINAL MLC',
+  true,
+  0.7
+);
+
+Map.addLayer(
+  vacantToAgri.style({
+    color: 'ff00ff',
+    pointSize: 6,
+    width: 2
+  }),
+  {},
+  'Review: Vacant -> Agricultural',
+  true
+);
+
+Map.addLayer(
+  vacantToVegetation.style({
+    color: '00ffff',
+    pointSize: 6,
+    width: 2
+  }),
+  {},
+  'Review: Vacant -> Vegetation',
+  true
+);
+
+Map.addLayer(
+  agriToVacant.style({
+    color: 'ffff00',
+    pointSize: 6,
+    width: 2
+  }),
+  {},
+  'Review: Agricultural -> Vacant',
+  false
+);
+
+Map.addLayer(
+  agriToBuilt.style({
+    color: 'ffffff',
+    pointSize: 6,
+    width: 2
+  }),
+  {},
+  'Review: Agricultural -> Built-up',
+  false
+);
+
+print('=============================================');
+print('END STAGE 07Z — READ ONLY');
+print('No original samples or assets modified.');
+print('=============================================');

@@ -1,0 +1,482 @@
+
+// ============================================================
+// CHENNAI LULC | STAGE 08F-4B
+// CORRECTED, POINT-ONLY SNIC SNAPSHOT AUDIT
+// No Landsat/SNIC rerun. No exports or original asset writes.
+// ============================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+var SNAPSHOT = ROOT + 'chennai_08f4a_X3_point_snapshot_v1';
+var records = ee.FeatureCollection(SNAPSHOT);
+var training = records.filter(ee.Filter.eq('split', 'training'));
+var validation = records.filter(ee.Filter.eq('split', 'validation'));
+
+var BANDS = [
+  'blue', 'green', 'red', 'nir', 'swir1', 'swir2',
+  'NDVI', 'NDWI', 'NDBI',
+  'segment_NDBI_mean', 'segment_red_sd'
+];
+var IDS = [1, 2, 3, 4, 5];
+var RIDGE = 1e-6;
+
+// ============================================================
+// 1. REFIT 11-FEATURE GAUSSIAN MLC TO SAVED TRAINING VALUES
+// ============================================================
+
+function parameters(id) {
+
+  var subset = training.filter(
+    ee.Filter.eq('class_id', id)
+  );
+
+  var mean = ee.Array([
+    BANDS.map(function(b) {
+      return subset.aggregate_mean(b);
+    })
+  ]).transpose();
+
+  var vectorized = subset.makeArray(BANDS, 'vector');
+
+  var covariance = ee.Array(
+    vectorized.reduceColumns({
+      reducer: ee.Reducer.covariance()
+        .setOutputs(['covariance']),
+      selectors: ['vector']
+    }).get('covariance')
+  );
+
+  var regularized = covariance.add(
+    ee.Array.identity(BANDS.length).multiply(RIDGE)
+  );
+
+  return ee.Dictionary({
+    n: subset.size(),
+    mean: mean,
+    determinant: regularized.matrixDeterminant(),
+    inverse: regularized.matrixInverse()
+  });
+}
+
+var fitted = ee.List(IDS.map(parameters));
+
+var trainingSegments = ee.List(
+  training.aggregate_array('segment_id')
+).distinct();
+
+// ============================================================
+// 2. CLASSIFY SAVED VALIDATION POINTS
+// ============================================================
+
+function predict(feature) {
+
+  var f = ee.Feature(feature);
+
+  var x = ee.Array([
+    BANDS.map(function(b) {
+      return ee.Number(f.get(b));
+    })
+  ]).transpose();
+
+  var scores = ee.List.sequence(0, 4).map(function(i) {
+
+    var p = ee.Dictionary(
+      fitted.get(ee.Number(i))
+    );
+
+    var d = x.subtract(
+      ee.Array(p.get('mean'))
+    );
+
+    var m = d.transpose()
+      .matrixMultiply(
+        ee.Array(p.get('inverse'))
+      )
+      .matrixMultiply(d)
+      .get([0, 0]);
+
+    var det = ee.Number(
+      p.get('determinant')
+    );
+
+    return ee.Number(m).multiply(-0.5)
+      .subtract(
+        det.max(1e-300).log().multiply(0.5)
+      );
+  });
+
+  var highest = ee.Number(
+    scores.reduce(ee.Reducer.max())
+  );
+
+  var predicted = ee.Number(
+    scores.indexOf(highest)
+  ).add(1);
+
+  var actual = ee.Number(
+    f.get('class_id')
+  );
+
+  var old = ee.Number(
+    f.get('baseline')
+  );
+
+  var oldOK = old.eq(actual);
+  var newOK = predicted.eq(actual);
+
+  // IMPORTANT FIX:
+  // ee.Number.eq() produces numeric 1 or 0.
+  // Store the correctness change as a NUMBER:
+  //
+  // +1 = previously wrong, now correct
+  //  0 = correctness unchanged
+  // -1 = previously correct, now wrong
+
+  return f.set({
+
+    candidate: predicted,
+
+    shared_segment: ee.Number(
+      ee.Algorithms.If(
+        trainingSegments.contains(
+          f.get('segment_id')
+        ),
+        1,
+        0
+      )
+    ),
+
+    correctness_delta: newOK.subtract(oldOK),
+
+    prediction_changed: predicted.neq(old)
+
+  });
+}
+
+var paired = validation.map(predict);
+
+var outside = paired.filter(
+  ee.Filter.eq('shared_segment', 0)
+);
+
+var inside = paired.filter(
+  ee.Filter.eq('shared_segment', 1)
+);
+
+// ============================================================
+// 3. PAIRED ACCURACY COMPARISON
+// ============================================================
+
+function report(title, fc) {
+
+  var baselineCM = fc.errorMatrix(
+    'class_id',
+    'baseline',
+    IDS
+  );
+
+  var candidateCM = fc.errorMatrix(
+    'class_id',
+    'candidate',
+    IDS
+  );
+
+  var actualBuiltup = fc.filter(
+    ee.Filter.eq('class_id', 1)
+  );
+
+  var nonBuiltup = fc.filter(
+    ee.Filter.neq('class_id', 1)
+  );
+
+  // FIXED: Filter numeric +1 and -1.
+
+  var gains = fc.filter(
+    ee.Filter.eq('correctness_delta', 1)
+  );
+
+  var losses = fc.filter(
+    ee.Filter.eq('correctness_delta', -1)
+  );
+
+  print('======== ' + title + ' ========');
+
+  print('Number of reference pixels:');
+  print(fc.size());
+
+  print('Reference class distribution:');
+  print(fc.aggregate_histogram('class_id'));
+
+  print('Original confusion matrix:');
+  print(baselineCM);
+
+  print('Snapshot SNIC confusion matrix:');
+  print(candidateCM);
+
+  print('Accuracy comparison:');
+
+  print(
+    ee.Dictionary({
+
+      original: baselineCM.accuracy(),
+
+      snapshot_snic: candidateCM.accuracy(),
+
+      change_percentage_points:
+        ee.Number(candidateCM.accuracy())
+          .subtract(baselineCM.accuracy())
+          .multiply(100)
+
+    })
+  );
+
+  print('TRUE paired transitions:');
+
+  print(
+    ee.Dictionary({
+
+      became_correct: gains.size(),
+
+      became_wrong: losses.size(),
+
+      changed_predicted_class: fc.filter(
+        ee.Filter.eq('prediction_changed', 1)
+      ).size()
+
+    })
+  );
+
+  print('Built-up performance:');
+
+  print(
+    ee.Dictionary({
+
+      actual_builtup: actualBuiltup.size(),
+
+      original_correct_builtup:
+        actualBuiltup.filter(
+          ee.Filter.eq('baseline', 1)
+        ).size(),
+
+      snic_correct_builtup:
+        actualBuiltup.filter(
+          ee.Filter.eq('candidate', 1)
+        ).size(),
+
+      original_false_builtup:
+        nonBuiltup.filter(
+          ee.Filter.eq('baseline', 1)
+        ).size(),
+
+      snic_false_builtup:
+        nonBuiltup.filter(
+          ee.Filter.eq('candidate', 1)
+        ).size(),
+
+      builtup_became_correct:
+        actualBuiltup.filter(
+          ee.Filter.eq('correctness_delta', 1)
+        ).size(),
+
+      builtup_became_wrong:
+        actualBuiltup.filter(
+          ee.Filter.eq('correctness_delta', -1)
+        ).size()
+
+    })
+  );
+}
+
+// ============================================================
+// 4. ARCHIVED SPECTRAL CHECKS
+// ============================================================
+
+var spectralChecks = training.map(function(f) {
+
+  return f.set({
+
+    delta_red: ee.Number(f.get('red'))
+      .subtract(
+        ee.Number(f.get('archive_red'))
+      ).abs(),
+
+    delta_ndbi: ee.Number(f.get('NDBI'))
+      .subtract(
+        ee.Number(f.get('archive_NDBI'))
+      ).abs()
+
+  });
+});
+
+// ============================================================
+// 5. QUALITY ASSURANCE
+// ============================================================
+
+print('===========================================');
+print('STAGE 08F-4B: CORRECTED SNAPSHOT AUDIT');
+print('===========================================');
+
+print('Input snapshot:');
+print(SNAPSHOT);
+
+print('Sample totals (expected 900, 600, 300):');
+
+print(
+  ee.Dictionary({
+
+    all: records.size(),
+
+    training: training.size(),
+
+    validation: validation.size()
+
+  })
+);
+
+print('Training class counts (120 each):');
+print(training.aggregate_histogram('class_id'));
+
+print('Maximum spectral deltas (expected 0):');
+
+print(
+  ee.Dictionary({
+
+    red: spectralChecks.aggregate_max('delta_red'),
+
+    NDBI: spectralChecks.aggregate_max('delta_ndbi')
+
+  })
+);
+
+print('Segment split from SNAPSHOT:');
+
+print(
+  ee.Dictionary({
+
+    unique_training_segment_ids:
+      trainingSegments.size(),
+
+    shared_validation_pixels:
+      inside.size(),
+
+    nonshared_validation_pixels:
+      outside.size()
+
+  })
+);
+
+// ============================================================
+// 6. GAUSSIAN COVARIANCE DIAGNOSTICS
+// ============================================================
+
+print('Covariance determinants of snapshot model:');
+
+IDS.forEach(function(id, i) {
+
+  print('Class ' + id + ':');
+
+  print(
+    ee.Dictionary(
+      fitted.get(i)
+    ).get('determinant')
+  );
+
+});
+
+// ============================================================
+// 7. AUDIT ALL THREE GROUPS
+// ============================================================
+
+report('ALL 300', paired);
+
+report('NONSHARED', outside);
+
+report('SHARED', inside);
+
+// ============================================================
+// 8. IDENTIFY CORRECTED BUILT-UP PIXELS
+// ============================================================
+
+print('NEWLY CORRECT BUILT-UP POINTS, SNAPSHOT:');
+
+print(
+  paired
+    .filter(ee.Filter.eq('class_id', 1))
+    .filter(ee.Filter.eq('correctness_delta', 1))
+    .select([
+      'source_index',
+      'source_poly_id',
+      'class_id',
+      'baseline',
+      'candidate',
+      'segment_id',
+      'shared_segment'
+    ])
+);
+
+print('NEWLY WRONG BUILT-UP POINTS, SNAPSHOT:');
+
+print(
+  paired
+    .filter(ee.Filter.eq('class_id', 1))
+    .filter(ee.Filter.eq('correctness_delta', -1))
+    .select([
+      'source_index',
+      'source_poly_id',
+      'class_id',
+      'baseline',
+      'candidate',
+      'segment_id',
+      'shared_segment'
+    ])
+);
+
+// ============================================================
+// 9. LIST ALL CHANGED CLASS PREDICTIONS
+// ============================================================
+
+print('ALL CHANGED VALIDATION PIXELS (FIRST 30):');
+
+print(
+  paired
+    .filter(ee.Filter.eq('prediction_changed', 1))
+    .select([
+      'source_index',
+      'class_id',
+      'baseline',
+      'candidate',
+      'segment_id',
+      'shared_segment',
+      'correctness_delta'
+    ])
+    .limit(30)
+);
+
+// ============================================================
+// 10. FINAL EXPERIMENT STATUS
+// ============================================================
+
+print('===========================================');
+print('STAGE 08F-4B AUDIT EXECUTION FINISHED');
+print('===========================================');
+
+print('ORIGINAL X3 RASTER RUN:');
+print('258/300 correct');
+print('51 Built-up correct');
+print('33 shared validation points');
+
+print('SNAPSHOT X3 RUN:');
+print('257/300 correct');
+print('50 Built-up correct');
+print('31 shared validation points');
+
+print('THIS DISCREPANCY IS NOT YET RESOLVED.');
+
+print('Do not accept or export an experimental map.');
+print('Original 2015 classification remains locked.');
+
+print('No Landsat or SNIC recalculation.');
+print('No assets exported or modified.');
+
+// ============================================================
+// END STAGE 08F-4B
+// ============================================================

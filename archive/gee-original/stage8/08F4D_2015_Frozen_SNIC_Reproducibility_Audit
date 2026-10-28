@@ -1,0 +1,264 @@
+
+// ============================================================
+// CHENNAI LULC | STAGE 08F-4D
+// X3 FROZEN SNIC RASTER: POINT REPRODUCIBILITY AUDIT
+// Uses the already completed 12-band raster export.
+// No new segmentation. No exports. Originals unchanged.
+// ============================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+var FROZEN_ASSET = ROOT + 'chennai_08f4c_X3_SNIC_frozen_11bands_segments_v1';
+var SNAPSHOT_ASSET = ROOT + 'chennai_08f4a_X3_point_snapshot_v1';
+
+var frozen = ee.Image(FROZEN_ASSET);
+var snapshot = ee.FeatureCollection(SNAPSHOT_ASSET);
+var trainingRef = ee.FeatureCollection(ROOT + 'chennai_training_2015_final');
+var validationRef = ee.FeatureCollection(ROOT + 'chennai_validation_2015_final');
+var baseline = ee.Image(ROOT + 'chennai_mlc_lulc_2015')
+  .select(0).rename('baseline');
+var grid = baseline.projection();
+
+var BANDS9 = [
+  'blue', 'green', 'red', 'nir', 'swir1', 'swir2',
+  'NDVI', 'NDWI', 'NDBI'
+];
+var BANDS11 = BANDS9.concat(['segment_NDBI_mean', 'segment_red_sd']);
+var IDS = [1, 2, 3, 4, 5];
+var REGULARIZATION = 1e-6;
+
+// 1. Reuse original sample locations with permanent matching keys.
+function tagTraining(f) {
+  return f.set({
+    split: 'training',
+    source_index: f.id(),
+    join_key: ee.String('training:').cat(ee.String(f.id())),
+    archive_red: f.get('red'),
+    archive_NDBI: f.get('NDBI')
+  });
+}
+function tagValidation(f) {
+  return f.set({
+    split: 'validation',
+    source_index: f.id(),
+    join_key: ee.String('validation:').cat(ee.String(f.id()))
+  });
+}
+
+var samplingImage = frozen.select(BANDS11.concat(['segment_id']))
+  .addBands(baseline);
+
+var sampledTraining = samplingImage.sampleRegions({
+  collection: trainingRef.map(tagTraining),
+  properties: [
+    'split', 'source_index', 'join_key', 'class_id', 'poly_id',
+    'archive_red', 'archive_NDBI'
+  ],
+  projection: grid,
+  geometries: false,
+  tileScale: 16
+});
+
+var sampledValidation = samplingImage.sampleRegions({
+  collection: validationRef.map(tagValidation),
+  properties: ['split', 'source_index', 'join_key', 'class_id', 'val_poly_id'],
+  projection: grid,
+  geometries: false,
+  tileScale: 16
+});
+
+var sampledAll = sampledTraining.merge(sampledValidation);
+
+// 2. Compare frozen raster samples to the earlier point snapshot.
+// Each match uses split + ORIGINAL source feature ID.
+var snapshotWithKeys = snapshot.map(function(f) {
+  return f.set('join_key',
+    ee.String(f.get('split')).cat(':').cat(ee.String(f.get('source_index')))
+  );
+});
+
+var matched = ee.FeatureCollection(ee.Join.inner().apply(
+  sampledAll,
+  snapshotWithKeys,
+  ee.Filter.equals({leftField: 'join_key', rightField: 'join_key'})
+)).map(function(pair) {
+  var newPoint = ee.Feature(pair.get('primary'));
+  var oldPoint = ee.Feature(pair.get('secondary'));
+  var largestSpectralDelta = ee.Number(0);
+  BANDS9.forEach(function(b) {
+    largestSpectralDelta = largestSpectralDelta.max(
+      ee.Number(newPoint.get(b)).subtract(ee.Number(oldPoint.get(b))).abs()
+    );
+  });
+  return ee.Feature(null, {
+    split: newPoint.get('split'),
+    source_index: newPoint.get('source_index'),
+    class_id: newPoint.get('class_id'),
+    spectral_max_delta: largestSpectralDelta,
+    ndbi_context_delta: ee.Number(newPoint.get('segment_NDBI_mean'))
+      .subtract(ee.Number(oldPoint.get('segment_NDBI_mean'))).abs(),
+    red_texture_delta: ee.Number(newPoint.get('segment_red_sd'))
+      .subtract(ee.Number(oldPoint.get('segment_red_sd'))).abs(),
+    segment_same: ee.Number(newPoint.get('segment_id'))
+      .eq(ee.Number(oldPoint.get('segment_id')))
+  });
+});
+
+// 3. Archive reconstruction QA.
+var spectralQA = sampledTraining.map(function(f) {
+  return f.set({
+    red_delta: ee.Number(f.get('red'))
+      .subtract(ee.Number(f.get('archive_red'))).abs(),
+    NDBI_delta: ee.Number(f.get('NDBI'))
+      .subtract(ee.Number(f.get('archive_NDBI'))).abs()
+  });
+});
+
+// 4. Fit the same 11-dimensional Gaussian MLC using frozen pixels.
+function modelForClass(id) {
+  var fc = sampledTraining.filter(ee.Filter.eq('class_id', id));
+  var mean = ee.Array([
+    BANDS11.map(function(b) { return fc.aggregate_mean(b); })
+  ]).transpose();
+  var vectors = fc.makeArray(BANDS11, 'feature_vector');
+  var covariance = ee.Array(vectors.reduceColumns({
+    reducer: ee.Reducer.covariance().setOutputs(['covariance']),
+    selectors: ['feature_vector']
+  }).get('covariance'));
+  var reg = covariance.add(
+    ee.Array.identity(BANDS11.length).multiply(REGULARIZATION)
+  );
+  return ee.Dictionary({
+    count: fc.size(),
+    mean: mean,
+    determinant: reg.matrixDeterminant(),
+    inverse: reg.matrixInverse()
+  });
+}
+var models = ee.List(IDS.map(modelForClass));
+
+// 5. Predict at 300 validation points: NO full-area classifier.
+function predict(f) {
+  f = ee.Feature(f);
+  var x = ee.Array([
+    BANDS11.map(function(b) { return ee.Number(f.get(b)); })
+  ]).transpose();
+  var scores = ee.List.sequence(0, 4).map(function(i) {
+    var p = ee.Dictionary(models.get(ee.Number(i)));
+    var d = x.subtract(ee.Array(p.get('mean')));
+    var dist = d.transpose()
+      .matrixMultiply(ee.Array(p.get('inverse')))
+      .matrixMultiply(d).get([0, 0]);
+    return ee.Number(dist).multiply(-0.5)
+      .subtract(ee.Number(p.get('determinant'))
+        .max(1e-300).log().multiply(0.5));
+  });
+  var best = ee.Number(scores.reduce(ee.Reducer.max()));
+  var candidate = ee.Number(scores.indexOf(best)).add(1);
+  var actual = ee.Number(f.get('class_id'));
+  var old = ee.Number(f.get('baseline'));
+  return f.set({
+    candidate: candidate,
+    correctness_delta: candidate.eq(actual).subtract(old.eq(actual)),
+    prediction_changed: candidate.neq(old)
+  });
+}
+var paired = sampledValidation.map(predict);
+
+// 6. Same-segment membership based on FROZEN segment IDs.
+// This is a diagnostic; do not treat it as a fresh validation set.
+var trainIDs = ee.List(sampledTraining.aggregate_array('segment_id')).distinct();
+paired = paired.map(function(f) {
+  return f.set('shared_segment', ee.Number(
+    ee.Algorithms.If(trainIDs.contains(f.get('segment_id')), 1, 0)
+  ));
+});
+var shared = paired.filter(ee.Filter.eq('shared_segment', 1));
+var nonshared = paired.filter(ee.Filter.eq('shared_segment', 0));
+
+function report(label, fc) {
+  var oldCM = fc.errorMatrix('class_id', 'baseline', IDS);
+  var newCM = fc.errorMatrix('class_id', 'candidate', IDS);
+  var actualBuiltup = fc.filter(ee.Filter.eq('class_id', 1));
+  var notBuiltup = fc.filter(ee.Filter.neq('class_id', 1));
+  print('-------- ' + label + ' --------');
+  print('Count:', fc.size());
+  print('Class counts:', fc.aggregate_histogram('class_id'));
+  print('Original confusion matrix:', oldCM);
+  print('Frozen SNIC confusion matrix:', newCM);
+  print('Overall accuracy:', ee.Dictionary({
+    original: oldCM.accuracy(), snic: newCM.accuracy(),
+    change_pp: ee.Number(newCM.accuracy())
+      .subtract(oldCM.accuracy()).multiply(100)
+  }));
+  print('Paired changes:', ee.Dictionary({
+    newly_correct: fc.filter(ee.Filter.eq('correctness_delta', 1)).size(),
+    newly_wrong: fc.filter(ee.Filter.eq('correctness_delta', -1)).size(),
+    changed_prediction: fc.filter(ee.Filter.eq('prediction_changed', 1)).size()
+  }));
+  print('Built-up:', ee.Dictionary({
+    actual: actualBuiltup.size(),
+    original_TP: actualBuiltup.filter(ee.Filter.eq('baseline', 1)).size(),
+    frozen_TP: actualBuiltup.filter(ee.Filter.eq('candidate', 1)).size(),
+    original_FP: notBuiltup.filter(ee.Filter.eq('baseline', 1)).size(),
+    frozen_FP: notBuiltup.filter(ee.Filter.eq('candidate', 1)).size(),
+    builtup_gains: actualBuiltup.filter(ee.Filter.eq('correctness_delta', 1)).size(),
+    builtup_losses: actualBuiltup.filter(ee.Filter.eq('correctness_delta', -1)).size()
+  }));
+}
+
+// 7. Console outputs. Confirm QA before scientific interpretation.
+print('===============================================');
+print('STAGE 08F-4D | FROZEN SNIC RASTER AUDIT');
+print('===============================================');
+print('Raster:', FROZEN_ASSET);
+print('Frozen raster projection:', frozen.select('red').projection());
+print('Original projection:', grid);
+print('Frozen raster bands (expected 12):', frozen.bandNames());
+print('Original training / frozen sample counts:',
+  trainingRef.size(), sampledTraining.size());
+print('Frozen training balance:', sampledTraining.aggregate_histogram('class_id'));
+print('Original validation / frozen sample counts:',
+  validationRef.size(), sampledValidation.size());
+print('Archive max red difference (expected 0):',
+  spectralQA.aggregate_max('red_delta'));
+print('Archive max NDBI difference (expected 0):',
+  spectralQA.aggregate_max('NDBI_delta'));
+
+print('---------- SNAPSHOT vs FROZEN POINT MATCHES ----------');
+print('Matching original IDs (expected 900):', matched.size());
+print('Matched by split:', matched.aggregate_histogram('split'));
+print('Maximum spectral difference:', matched.aggregate_max('spectral_max_delta'));
+print('Maximum segment NDBI difference:', matched.aggregate_max('ndbi_context_delta'));
+print('Maximum segment red texture difference:', matched.aggregate_max('red_texture_delta'));
+print('Different segment IDs:', matched.filter(ee.Filter.eq('segment_same', 0)).size());
+print('Segment-ID differences by split:',
+  matched.filter(ee.Filter.eq('segment_same', 0)).aggregate_histogram('split'));
+
+print('---------- FROZEN MODEL ----------');
+for (var c = 0; c < 5; c++) {
+  print('Class ' + IDS[c] + ' count and determinant:', ee.Dictionary({
+    count: ee.Dictionary(models.get(c)).get('count'),
+    determinant: ee.Dictionary(models.get(c)).get('determinant')
+  }));
+}
+print('Frozen training distinct segments:', trainIDs.size());
+print('Frozen shared/nonshared validation:', shared.size(), nonshared.size());
+report('ALL 300', paired);
+report('NONSHARED', nonshared);
+report('SHARED', shared);
+
+print('Corrected Built-up validation points:');
+print(paired.filter(ee.Filter.eq('class_id', 1))
+  .filter(ee.Filter.eq('correctness_delta', 1))
+  .select(['source_index', 'val_poly_id', 'class_id', 'baseline',
+    'candidate', 'segment_id', 'shared_segment']));
+print('Worsened Built-up validation points:');
+print(paired.filter(ee.Filter.eq('class_id', 1))
+  .filter(ee.Filter.eq('correctness_delta', -1))
+  .select(['source_index', 'val_poly_id', 'class_id', 'baseline',
+    'candidate', 'segment_id', 'shared_segment']));
+print('No asset exported; original 2015 remains locked.');
+
+// ============================================================
+// END STAGE 08F-4D
+// ============================================================

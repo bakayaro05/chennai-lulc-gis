@@ -1,0 +1,734 @@
+
+// ============================================================
+// CHENNAI LULC | STAGE 08F-4A | X3 SNIC ROBUSTNESS AUDIT
+// Same 2015 X3 model and settings as Stage 08F-4.
+// Paired recheck on all 300, 267 non-shared, 33 shared points.
+// Read only; original assets unchanged; no exports.
+// ============================================================
+
+// ============================================================
+// 1. ORIGINAL LOCKED PROJECT ASSETS
+// ============================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var study = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+);
+
+var roi = study.geometry();
+
+var training = ee.FeatureCollection(
+  ROOT + 'chennai_training_2015_final'
+);
+
+var validation = ee.FeatureCollection(
+  ROOT + 'chennai_validation_2015_final'
+);
+
+var original = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2015'
+).select(0).rename('baseline');
+
+var grid = original.projection();
+
+var BANDS9 = [
+  'blue', 'green', 'red',
+  'nir', 'swir1', 'swir2',
+  'NDVI', 'NDWI', 'NDBI'
+];
+
+var BANDS11 = BANDS9.concat([
+  'segment_NDBI_mean',
+  'segment_red_sd'
+]);
+
+var CLASSES = [1, 2, 3, 4, 5];
+
+var REGULARIZATION = 1e-6;
+
+// ============================================================
+// 2. REBUILD ORIGINAL 2015 LANDSAT COMPOSITE
+// ============================================================
+
+function prep(image) {
+
+  var qa = image.select('QA_PIXEL');
+
+  var clear = qa.bitwiseAnd(63).eq(0)
+    .and(image.select('QA_RADSAT').eq(0));
+
+  return image.select(
+      [
+        'SR_B2', 'SR_B3', 'SR_B4',
+        'SR_B5', 'SR_B6', 'SR_B7'
+      ],
+      [
+        'blue', 'green', 'red',
+        'nir', 'swir1', 'swir2'
+      ]
+    )
+    .multiply(0.0000275)
+    .subtract(0.2)
+    .updateMask(clear)
+    .copyProperties(image, ['system:time_start']);
+
+}
+
+function addIndices(image) {
+
+  var red = image.select('red');
+  var green = image.select('green');
+  var nir = image.select('nir');
+  var swir1 = image.select('swir1');
+
+  return image.addBands([
+
+    nir.subtract(red)
+      .divide(nir.add(red))
+      .rename('NDVI'),
+
+    green.subtract(nir)
+      .divide(green.add(nir))
+      .rename('NDWI'),
+
+    swir1.subtract(nir)
+      .divide(swir1.add(nir))
+      .rename('NDBI')
+
+  ]).select(BANDS9);
+
+}
+
+var scenes = ee.ImageCollection(
+  'LANDSAT/LC08/C02/T1_L2'
+)
+  .filterBounds(roi)
+  .filterDate('2015-01-01', '2016-01-01')
+  .map(prep);
+
+var spectral = addIndices(
+  scenes.median()
+).reproject(grid);
+
+// ============================================================
+// 3. RECREATE EXACT STAGE 08F-4 SNIC SEGMENTATION
+// ============================================================
+
+// Same settings as the completed experiment.
+// Do not change or tune these parameters.
+
+var snic = ee.Algorithms.Image.Segmentation.SNIC({
+
+  image: spectral,
+
+  size: 5,
+
+  compactness: 0.1,
+
+  connectivity: 8,
+
+  neighborhoodSize: 64
+
+}).reproject(grid);
+
+var segments = snic.select('clusters')
+  .rename('segment_id');
+
+var segmentMeanNDBI = snic.select('NDBI_mean')
+  .rename('segment_NDBI_mean');
+
+var segmentRedSD = spectral.select('red')
+  .addBands(snic.select('clusters'))
+  .reduceConnectedComponents({
+
+    reducer: ee.Reducer.stdDev(),
+
+    labelBand: 'clusters',
+
+    maxSize: 256
+
+  })
+  .rename('segment_red_sd');
+
+// ============================================================
+// 4. CONSTRUCT ORIGINAL 11-BAND FEATURE STACK
+// ============================================================
+
+var stack = spectral
+  .addBands([
+    segmentMeanNDBI,
+    segmentRedSD
+  ])
+  .select(BANDS11)
+  .clip(roi);
+
+var trainSample = stack
+  .addBands(segments.clip(roi))
+  .sampleRegions({
+
+    collection: training,
+
+    properties: [
+      'class_id',
+      'poly_id'
+    ],
+
+    projection: grid,
+
+    geometries: false,
+
+    tileScale: 16
+
+  });
+
+// ============================================================
+// 5. RECREATE STAGE 08F-4 GAUSSIAN MLC
+// ============================================================
+
+function classModel(id) {
+
+  var points = trainSample.filter(
+    ee.Filter.eq('class_id', id)
+  );
+
+  var mean = ee.Array([
+
+    BANDS11.map(function(b) {
+      return points.aggregate_mean(b);
+    })
+
+  ]).transpose();
+
+  var vec = points.makeArray(
+    BANDS11,
+    'features'
+  );
+
+  var cov = ee.Array(
+    vec.reduceColumns({
+
+      reducer: ee.Reducer.covariance()
+        .setOutputs(['covariance']),
+
+      selectors: ['features']
+
+    }).get('covariance')
+  );
+
+  var reg = cov.add(
+    ee.Array.identity(11)
+      .multiply(REGULARIZATION)
+  );
+
+  return ee.Dictionary({
+
+    mean: mean,
+
+    inverse: reg.matrixInverse(),
+
+    determinant: reg.matrixDeterminant()
+
+  });
+
+}
+
+var models = ee.List(
+  CLASSES.map(classModel)
+);
+
+var pixelVector = stack
+  .toArray()
+  .toArray(1);
+
+function score(p, name) {
+
+  p = ee.Dictionary(p);
+
+  var mu = ee.Image.constant(
+    ee.Array(p.get('mean'))
+  );
+
+  var inv = ee.Image.constant(
+    ee.Array(p.get('inverse'))
+  );
+
+  var determinant = ee.Number(
+    p.get('determinant')
+  );
+
+  var d = pixelVector.subtract(mu);
+
+  var mahalanobis = d.arrayTranspose()
+    .matrixMultiply(inv)
+    .matrixMultiply(d)
+    .arrayGet([0, 0]);
+
+  return mahalanobis.multiply(-0.5)
+    .subtract(
+
+      ee.Image.constant(
+
+        determinant.max(1e-300)
+          .log()
+          .multiply(0.5)
+
+      )
+
+    )
+    .rename(name);
+
+}
+
+var scores = ee.Image.cat([
+
+  score(models.get(0), 's1'),
+
+  score(models.get(1), 's2'),
+
+  score(models.get(2), 's3'),
+
+  score(models.get(3), 's4'),
+
+  score(models.get(4), 's5')
+
+]);
+
+var candidate = scores
+  .toArray()
+  .arrayArgmax()
+  .arrayGet([0])
+  .add(1)
+  .rename('candidate')
+  .toInt8()
+  .clip(roi);
+
+// ============================================================
+// 6. IDENTIFY SEGMENTS CONTAINING TRAINING POINTS
+// ============================================================
+
+var trainSegments = ee.List(
+  trainSample.aggregate_array('segment_id')
+).distinct();
+
+// ============================================================
+// 7. CREATE PAIRED VALIDATION DATA
+// ============================================================
+
+// Sample original and experimental classifications together.
+// This preserves exact point-to-point comparisons.
+
+var paired = original
+  .addBands(candidate)
+  .addBands(segments.clip(roi))
+  .sampleRegions({
+
+    collection: validation,
+
+    properties: [
+      'class_id',
+      'val_poly_id'
+    ],
+
+    projection: grid,
+
+    geometries: true,
+
+    tileScale: 16
+
+  })
+  .map(function(f) {
+
+    var truth = ee.Number(
+      f.get('class_id')
+    );
+
+    var oldLabel = ee.Number(
+      f.get('baseline')
+    );
+
+    var newLabel = ee.Number(
+      f.get('candidate')
+    );
+
+    var oldOK = ee.Number(
+      ee.Algorithms.If(
+        oldLabel.eq(truth),
+        1,
+        0
+      )
+    );
+
+    var newOK = ee.Number(
+      ee.Algorithms.If(
+        newLabel.eq(truth),
+        1,
+        0
+      )
+    );
+
+    var change = newOK.subtract(oldOK);
+
+    var shared = ee.Number(
+      ee.Algorithms.If(
+
+        trainSegments.contains(
+          f.get('segment_id')
+        ),
+
+        1,
+
+        0
+
+      )
+    );
+
+    return f.set({
+
+      old_correct: oldOK,
+
+      new_correct: newOK,
+
+      improved: ee.Number(
+        ee.Algorithms.If(
+          change.eq(1),
+          1,
+          0
+        )
+      ),
+
+      worsened: ee.Number(
+        ee.Algorithms.If(
+          change.eq(-1),
+          1,
+          0
+        )
+      ),
+
+      shared_segment: shared
+
+    });
+
+  });
+
+// ============================================================
+// 8. DIVIDE VALIDATION INTO TWO SUBSETS
+// ============================================================
+
+// Non-shared: validation points in segments without
+// any of the original 600 training points.
+
+var nonshared = paired.filter(
+  ee.Filter.eq('shared_segment', 0)
+);
+
+// Shared: validation points that occupy the
+// same SNIC segment as a training point.
+
+var shared = paired.filter(
+  ee.Filter.eq('shared_segment', 1)
+);
+
+// ============================================================
+// 9. REUSABLE ACCURACY AUDIT FUNCTION
+// ============================================================
+
+function audit(label, fc) {
+
+  var order = [1, 2, 3, 4, 5];
+
+  var cmOriginal = fc.errorMatrix(
+    'class_id',
+    'baseline',
+    order
+  );
+
+  var cmSNIC = fc.errorMatrix(
+    'class_id',
+    'candidate',
+    order
+  );
+
+  var arrayOriginal = ee.Array(
+    cmOriginal.array()
+  );
+
+  var arraySNIC = ee.Array(
+    cmSNIC.array()
+  );
+
+  var nBuilt = fc.filter(
+    ee.Filter.eq('class_id', 1)
+  ).size();
+
+  var tpOriginal = ee.Number(
+    arrayOriginal.get([0, 0])
+  );
+
+  var tpSNIC = ee.Number(
+    arraySNIC.get([0, 0])
+  );
+
+  var fpOriginal = fc
+    .filter(ee.Filter.neq('class_id', 1))
+    .filter(ee.Filter.eq('baseline', 1))
+    .size();
+
+  var fpSNIC = fc
+    .filter(ee.Filter.neq('class_id', 1))
+    .filter(ee.Filter.eq('candidate', 1))
+    .size();
+
+  print(
+    '------------------- ' +
+    label +
+    ' -------------------'
+  );
+
+  print('Count:');
+  print(fc.size());
+
+  print('Class balance:');
+  print(
+    fc.aggregate_histogram('class_id')
+  );
+
+  print('Baseline confusion matrix:');
+  print(cmOriginal);
+
+  print('SNIC confusion matrix:');
+  print(cmSNIC);
+
+  print('Baseline versus SNIC overall accuracy:');
+
+  print(
+    ee.Dictionary({
+
+      baseline: cmOriginal.accuracy(),
+
+      snic: cmSNIC.accuracy()
+
+    })
+  );
+
+  print('Overall accuracy change (percentage points):');
+
+  print(
+    ee.Number(cmSNIC.accuracy())
+      .subtract(
+        cmOriginal.accuracy()
+      )
+      .multiply(100)
+  );
+
+  print('Paired gains and regressions:');
+
+  print(
+    ee.Dictionary({
+
+      gains: fc
+        .filter(ee.Filter.eq('improved', 1))
+        .size(),
+
+      regressions: fc
+        .filter(ee.Filter.eq('worsened', 1))
+        .size()
+
+    })
+  );
+
+  print('Built-up reference count, baseline TP, SNIC TP:');
+
+  print(
+    ee.Dictionary({
+
+      actual: nBuilt,
+
+      baseline: tpOriginal,
+
+      snic: tpSNIC
+
+    })
+  );
+
+  print('Built-up false positives: baseline versus SNIC:');
+
+  print(
+    ee.Dictionary({
+
+      baseline: fpOriginal,
+
+      snic: fpSNIC
+
+    })
+  );
+
+  print('Built-up-specific gains and regressions:');
+
+  print(
+    ee.Dictionary({
+
+      gains: fc
+        .filter(ee.Filter.eq('class_id', 1))
+        .filter(ee.Filter.eq('improved', 1))
+        .size(),
+
+      regressions: fc
+        .filter(ee.Filter.eq('class_id', 1))
+        .filter(ee.Filter.eq('worsened', 1))
+        .size()
+
+    })
+  );
+
+}
+
+// ============================================================
+// 10. CONSOLE OUTPUT
+// ============================================================
+
+print('=========================================');
+print('STAGE 08F-4A | PAIRED SNIC SPATIAL AUDIT');
+print('=========================================');
+
+print('2015 Landsat scenes (expected 19):');
+print(scenes.size());
+
+print('Training count (expected 600):');
+print(trainSample.size());
+
+print('Paired validation count (expected 300):');
+print(paired.size());
+
+print('Shared validation count (previously 33):');
+print(shared.size());
+
+print('Nonshared validation count (previously 267):');
+print(nonshared.size());
+
+// Audit all original validation points.
+
+audit(
+  'ALL 300',
+  paired
+);
+
+// Audit validation points outside training segments.
+
+audit(
+  'NONSHARED SEGMENTS',
+  nonshared
+);
+
+// Audit validation points sharing training segments.
+
+audit(
+  'SHARED SEGMENTS',
+  shared
+);
+
+// ============================================================
+// 11. IDENTIFY NEWLY CORRECTED BUILT-UP PIXELS
+// ============================================================
+
+print(
+  'Newly corrected Built-up pixels with shared_segment flag:'
+);
+
+print(
+  paired
+    .filter(ee.Filter.eq('class_id', 1))
+    .filter(ee.Filter.eq('improved', 1))
+    .select([
+      'class_id',
+      'baseline',
+      'candidate',
+      'segment_id',
+      'shared_segment',
+      'val_poly_id'
+    ])
+);
+
+print(
+  'Newly worsened Built-up pixels, if any:'
+);
+
+print(
+  paired
+    .filter(ee.Filter.eq('class_id', 1))
+    .filter(ee.Filter.eq('worsened', 1))
+    .select([
+      'class_id',
+      'baseline',
+      'candidate',
+      'segment_id',
+      'shared_segment',
+      'val_poly_id'
+    ])
+);
+
+print('=========================================');
+print('STAGE 08F-4A AUDIT FINISHED');
+print('Subset comparisons are diagnostics.');
+print('They are NOT independent fresh validation.');
+print('DO NOT ADOPT OR EXPORT X3 YET.');
+print('NO ORIGINAL ASSETS WERE MODIFIED.');
+print('=========================================');
+
+// ============================================================
+// 12. MAP VISUALIZATION
+// ============================================================
+
+Map.layers().reset();
+
+Map.setOptions('SATELLITE');
+
+var colors = [
+  'ff0000',
+  '008000',
+  '0000ff',
+  'ffff00',
+  'd2b48c'
+];
+
+Map.addLayer(
+  original,
+  {
+    min: 1,
+    max: 5,
+    palette: colors
+  },
+  'Original 2015',
+  true
+);
+
+Map.addLayer(
+  candidate,
+  {
+    min: 1,
+    max: 5,
+    palette: colors
+  },
+  'X3 SNIC 2015',
+  false
+);
+
+Map.addLayer(
+  paired
+    .filter(ee.Filter.eq('class_id', 1))
+    .filter(ee.Filter.eq('improved', 1))
+    .style({
+      color: '00ff00',
+      pointSize: 7
+    }),
+  {},
+  'Corrected Built-up points',
+  false
+);
+
+Map.centerObject(roi, 10);
+
+// ============================================================
+// END OF STAGE 08F-4A
+// NO ASSET EXPORTS OR OVERWRITES
+// ============================================================

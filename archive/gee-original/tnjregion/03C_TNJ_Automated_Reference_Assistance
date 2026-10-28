@@ -1,0 +1,393 @@
+
+ // ============================================================
+ // CHENNAI -> THANJAVUR GAUSSIAN MLC BENCHMARK
+ //
+ // STAGE 03C - AUTOMATED REFERENCE ASSISTANCE
+ // CORRECTED CHECKPOINT ASSET VERSION
+ //
+ // Preserves manually reviewed reference labels.
+ // Creates automated suggestions for unreviewed points.
+ //
+ // IMPORTANT:
+ // Automatic suggestions are NOT independent ground truth.
+ // No model retraining or MLC modification.
+ // ============================================================
+
+ var ROOT = 'projects/assignment-482806/assets/';
+
+ // CORRECTED: ACTUAL UPLOADED CHECKPOINT ASSET
+ var CHECKPOINT =
+   ROOT + 'tnj_2020_manual_checkpoint';
+
+ var OUTPUT =
+   ROOT + 'tnj_2020_assisted_reference_queue_v1';
+
+ var ROI = ee.FeatureCollection(
+   ROOT + 'tnj_city_trace_pilot_roi_2020'
+ ).geometry();
+
+ var manualPoints = ee.FeatureCollection(CHECKPOINT);
+
+ // ============================================================
+ // 1. CHECK MANUAL CHECKPOINT BEFORE PROCESSING
+ // ============================================================
+
+ print('==========================================');
+ print('CHECKPOINT INPUT VALIDATION');
+ print('==========================================');
+
+ print('Checkpoint asset:');
+ print(CHECKPOINT);
+
+ print('Total checkpoint features - expect 252:');
+ print(manualPoints.size());
+
+ print('Available properties:');
+ print(manualPoints.first().propertyNames());
+
+ print('Reference class histogram:');
+ print(
+   manualPoints.aggregate_histogram('reference_class')
+ );
+
+ print('Manually completed points:');
+ print(
+   manualPoints.filter(
+     ee.Filter.inList(
+       'reference_class',
+       [1, 2, 3, 4, 5]
+     )
+   ).size()
+ );
+
+ print('First checkpoint geometry:');
+ print(manualPoints.first().geometry());
+
+ // ============================================================
+ // 2. ESA WORLDCOVER 2020
+ // ============================================================
+
+ var esa = ee.ImageCollection(
+   'ESA/WorldCover/v100'
+ ).first().select('Map');
+
+ // ESA -> Chennai five-class mapping
+ //
+ // 10 Trees          -> 2 Vegetation
+ // 20 Shrubland      -> 2 Vegetation
+ // 30 Grassland      -> 2 Vegetation
+ // 40 Cropland       -> 4 Agricultural/Open
+ // 50 Built-up       -> 1 Built-up
+ // 60 Bare/Sparse    -> 5 Barren/Fallow
+ // 80 Water          -> 3 Water
+ //
+ // All others unresolved (0).
+
+ var esaCandidate = esa.remap(
+   [10, 20, 30, 40, 50, 60, 80],
+   [ 2,  2,  2,  4,  1,  5,  3],
+   0
+ ).rename('esa_candidate').toByte();
+
+ // ============================================================
+ // 3. DYNAMIC WORLD 2020
+ // ============================================================
+
+ var dw = ee.ImageCollection(
+   'GOOGLE/DYNAMICWORLD/V1'
+ )
+ .filterBounds(ROI)
+ .filterDate('2020-01-01', '2021-01-01');
+
+ print('Dynamic World 2020 scene count:');
+ print(dw.size());
+
+ var dwBands = [
+   'water',
+   'trees',
+   'grass',
+   'flooded_vegetation',
+   'crops',
+   'shrub_and_scrub',
+   'built',
+   'bare',
+   'snow_and_ice'
+ ];
+
+ var meanProbs = dw.select(dwBands).mean();
+
+ var dwIndex = meanProbs
+   .toArray()
+   .arrayArgmax()
+   .arrayGet([0]);
+
+ // Dynamic World -> Chennai five-class mapping
+ //
+ // 0 Water       -> 3
+ // 1 Trees       -> 2
+ // 2 Grass       -> 2
+ // 4 Crops       -> 4
+ // 5 Shrub       -> 2
+ // 6 Built       -> 1
+ // 7 Bare        -> 5
+ //
+ // Other classes unresolved.
+
+ var dwCandidate = dwIndex.remap(
+   [0, 1, 2, 4, 5, 6, 7],
+   [3, 2, 2, 4, 2, 1, 5],
+   0
+ ).rename('dw_candidate').toByte();
+
+ var dwConfidence = meanProbs
+   .reduce(ee.Reducer.max())
+   .rename('dw_mean_probability');
+
+ var dwCount = dw
+   .select('label')
+   .count()
+   .rename('dw_scene_count');
+
+ // ============================================================
+ // 4. PREPARE SUPPORTING IMAGE
+ // ============================================================
+
+ var supporting = ee.Image.cat([
+   esaCandidate,
+   dwCandidate,
+   dwConfidence,
+   dwCount
+ ]).unmask(0);
+
+ // ============================================================
+ // 5. SAMPLE AUTOMATED REFERENCE PRODUCTS
+ // ============================================================
+
+ var sampled = supporting.reduceRegions({
+   collection: manualPoints,
+   reducer: ee.Reducer.first(),
+   crs: 'EPSG:32644',
+   scale: 30,
+   tileScale: 8
+ });
+
+ // ============================================================
+ // 6. GENERATE CANDIDATES
+ // ============================================================
+
+ var assisted = sampled.map(function(feature) {
+
+   var manual = ee.Number(
+     feature.get('reference_class')
+   );
+
+   var esaClass = ee.Number(
+     feature.get('esa_candidate')
+   );
+
+   var dwClass = ee.Number(
+     feature.get('dw_candidate')
+   );
+
+   var probability = ee.Number(
+     feature.get('dw_mean_probability')
+   );
+
+   var observations = ee.Number(
+     feature.get('dw_scene_count')
+   );
+
+   var isManual = manual.gte(1)
+     .and(manual.lte(5));
+
+   // Conservative provisional screening rule:
+   // - ESA and Dynamic World agree
+   // - Candidate class is valid
+   // - DW mean class probability >= 0.65
+   // - At least five DW observations
+
+   var agreement = esaClass.eq(dwClass)
+     .and(esaClass.gt(0))
+     .and(probability.gte(0.65))
+     .and(observations.gte(5));
+
+   // NEVER overwrite the manual reference_class.
+
+   var candidate = ee.Number(
+     ee.Algorithms.If(
+       isManual,
+       -1,
+       ee.Algorithms.If(
+         agreement,
+         esaClass,
+         -1
+       )
+     )
+   );
+
+   var state = ee.String(
+     ee.Algorithms.If(
+       isManual,
+       'MANUAL_COMPLETE',
+       ee.Algorithms.If(
+         agreement,
+         'PROXY_AGREEMENT_UNVERIFIED',
+         'REVIEW_REQUIRED'
+       )
+     )
+   );
+
+   return feature.set({
+     auto_candidate: candidate,
+     auto_candidate_status: state,
+     auto_not_ground_truth: 1,
+     screening_probability_threshold: 0.65
+   });
+
+ });
+
+ // ============================================================
+ // 7. AUTOMATION QUALITY ASSURANCE
+ // ============================================================
+
+ print('==========================================');
+ print('AUTOMATED REFERENCE ASSISTANCE QA');
+ print('==========================================');
+
+ print('Total points - expect 252:');
+ print(assisted.size());
+
+ var completed = assisted.filter(
+   ee.Filter.eq(
+     'auto_candidate_status',
+     'MANUAL_COMPLETE'
+   )
+ );
+
+ var suggested = assisted.filter(
+   ee.Filter.eq(
+     'auto_candidate_status',
+     'PROXY_AGREEMENT_UNVERIFIED'
+   )
+ );
+
+ var remaining = assisted.filter(
+   ee.Filter.eq(
+     'auto_candidate_status',
+     'REVIEW_REQUIRED'
+   )
+ );
+
+ print('Manually completed points:');
+ print(completed.size());
+
+ print('Automated candidates - NOT VERIFIED:');
+ print(suggested.size());
+
+ print('Require manual review:');
+ print(remaining.size());
+
+ print('Reference class distribution:');
+ print(
+   assisted.aggregate_histogram('reference_class')
+ );
+
+ print('Automated candidate distribution:');
+ print(
+   suggested.aggregate_histogram('auto_candidate')
+ );
+
+ print('Complete review status distribution:');
+ print(
+   assisted.aggregate_histogram(
+     'auto_candidate_status'
+   )
+ );
+
+ // ============================================================
+ // 8. VISUALISATION
+ // ============================================================
+
+ Map.layers().reset();
+
+ Map.setOptions('SATELLITE');
+
+ Map.centerObject(ROI, 12);
+
+ Map.addLayer(
+   completed.style({
+     color: '00ff00',
+     pointSize: 5
+   }),
+   {},
+   'Manually reviewed',
+   true
+ );
+
+ Map.addLayer(
+   suggested.style({
+     color: 'ffff00',
+     pointSize: 5
+   }),
+   {},
+   'Automated suggestions - unverified',
+   true
+ );
+
+ Map.addLayer(
+   remaining.style({
+     color: 'ff0000',
+     pointSize: 5
+   }),
+   {},
+   'Manual review required',
+   true
+ );
+
+ Map.addLayer(
+   ee.FeatureCollection(
+     ROOT + 'tnj_city_trace_pilot_roi_2020'
+   ).style({
+     color: 'ffffff',
+     fillColor: '00000000',
+     width: 2
+   }),
+   {},
+   'Thanjavur City ROI',
+   true
+ );
+
+ // ============================================================
+ // 9. EXPORT ASSISTED QUEUE
+ // ============================================================
+
+ Export.table.toAsset({
+   collection: assisted,
+   description:
+     'TNJ_2020_ASSISTED_REFERENCE_QUEUE_V1',
+   assetId: OUTPUT
+ });
+
+ Export.table.toDrive({
+   collection: assisted,
+   description:
+     'TNJ_2020_ASSISTED_REFERENCE_BACKUP',
+   fileNamePrefix:
+     'tnj_2020_assisted_reference_queue_v1',
+   fileFormat: 'CSV'
+ });
+
+ // ============================================================
+ // 10. FINAL INSTRUCTIONS
+ // ============================================================
+
+ print('==========================================');
+ print('STAGE 03C SCRIPT FINISHED');
+ print('==========================================');
+
+ print('Review console results before exporting.');
+ print('Expected total: 252.');
+ print('Expected manual count: approximately 51.');
+ print('Manual labels have not been overwritten.');
+ print('Automatic candidates are unverified.');
+ print('Start the NEW export task if QA passes.');

@@ -1,0 +1,625 @@
+
+ // ================================================================
+ // CHENNAI LULC — STAGE 08D
+ // 2015 HISTORICAL-SITE GAUSSIAN MLC DIAGNOSTIC
+ //
+ // READ ONLY
+ // No training, exports, or asset modifications.
+ //
+ // Original 2015 five-class model, NOT experimental V2A.
+ // ================================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var CRS = 'EPSG:32644';
+
+var TRANSFORM = [
+  30, 0, 399060,
+  0, -30, 1463250
+];
+
+var GRID = ee.Projection(CRS, TRANSFORM);
+
+var BANDS = [
+  'blue', 'green', 'red',
+  'nir', 'swir1', 'swir2',
+  'NDVI', 'NDWI', 'NDBI'
+];
+
+var CLASSES = [1, 2, 3, 4, 5];
+
+var roiFC = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+);
+
+var roi = roiFC.geometry();
+
+// ================================================================
+// 1. TEN HISTORICALLY REVIEWED LOCATIONS
+//
+// Coordinates transcribed from your Google Earth Pro screenshots.
+//
+// The visual descriptions are preliminary observations.
+// They are NOT final 30 m reference labels.
+//
+// Date fields retain the actual screenshot imagery dates.
+// ================================================================
+
+var LOCATIONS = [
+
+  [
+    'S01', 80.248916667, 12.892583333,
+    '2015-01-21', '2010-06-15',
+    'Mixed residences, trees and open plots'
+  ],
+
+  [
+    'S02', 80.190361111, 12.963472222,
+    '2015-01-21', '2010-06-15',
+    'Dense homes near Madipakkam Lake'
+  ],
+
+  [
+    'S03', 80.232666667, 13.144805556,
+    '2015-01-21', '2011-04-05',
+    'Industrial and residential, road/bare ground at pin'
+  ],
+
+  [
+    'S04', 80.264722222, 13.070305556,
+    '2015-01-21', '2011-04-05',
+    'Dense established residential area'
+  ],
+
+  [
+    'S05', 80.260250000, 13.081666667,
+    '2015-01-21', '2011-04-05',
+    'Residential buildings near Periyar Thidal'
+  ],
+
+  [
+    'S06', 80.172638889, 12.967222222,
+    '2015-03-04', '2010-06-15',
+    'Open/cleared plot with limited buildings at pin'
+  ],
+
+  [
+    'S07', 80.212805556, 13.034055556,
+    '2015-02-24', '2011-04-05',
+    'Residential street and nearby buildings'
+  ],
+
+  [
+    'S08', 80.115000000, 12.917388889,
+    '2015-03-04', '2011-04-05',
+    'Homes beside woodland and playground'
+  ],
+
+  [
+    'S09', 80.185222222, 13.006027778,
+    '2015-03-04', '2011-08-17',
+    'Institutional buildings and wooded surroundings'
+  ],
+
+  [
+    'S10', 80.181305556, 13.104500000,
+    '2015-03-04', '2011-05-16',
+    'Dense residential neighbourhood'
+  ]
+
+];
+
+var sites = ee.FeatureCollection(
+  LOCATIONS.map(function(row) {
+
+    return ee.Feature(
+      ee.Geometry.Point([
+        row[1],
+        row[2]
+      ]),
+      {
+        site_id: row[0],
+        longitude: row[1],
+        latitude: row[2],
+        image_date_2015: row[3],
+        earlier_image_date: row[4],
+        visual_context_only: row[5],
+        reference_2015: 'PENDING_PIXEL_FOOTPRINT_CHECK'
+      }
+    );
+
+  })
+);
+
+// ================================================================
+// 2. ORIGINAL SAVED CLASSIFICATIONS
+// ================================================================
+
+var original2015 = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2015'
+).select('classification')
+ .rename('saved_2015_5class');
+
+var original2010 = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2010_L5L7_manual_exp_v1'
+).select('classification')
+ .rename('saved_2010_5class');
+
+var reported2015 = ee.Image(
+  ROOT + 'chennai_lulc4_2015_v1'
+).select('classification')
+ .rename('saved_2015_4class');
+
+var training = ee.FeatureCollection(
+  ROOT + 'chennai_training_2015_final'
+);
+
+// ================================================================
+// 3. RECONSTRUCT ORIGINAL 2015 PREDICTOR STACK
+//
+// Landsat 8 Collection 2 Level 2
+// Annual median
+// Six reflectance bands + three indices
+//
+// Same method as archived Stage 07AB.
+// ================================================================
+
+function prepL8(image) {
+
+  var qa = image.select('QA_PIXEL');
+  var sat = image.select('QA_RADSAT');
+
+  var clear = qa.bitwiseAnd(1 << 0).eq(0)
+    .and(qa.bitwiseAnd(1 << 1).eq(0))
+    .and(qa.bitwiseAnd(1 << 2).eq(0))
+    .and(qa.bitwiseAnd(1 << 3).eq(0))
+    .and(qa.bitwiseAnd(1 << 4).eq(0))
+    .and(qa.bitwiseAnd(1 << 5).eq(0))
+    .and(sat.eq(0));
+
+  return image.select(
+    [
+      'SR_B2', 'SR_B3', 'SR_B4',
+      'SR_B5', 'SR_B6', 'SR_B7'
+    ],
+    [
+      'blue', 'green', 'red',
+      'nir', 'swir1', 'swir2'
+    ]
+  )
+  .multiply(0.0000275)
+  .add(-0.2)
+  .updateMask(clear);
+
+}
+
+function addIndices(image) {
+
+  var nir = image.select('nir');
+  var red = image.select('red');
+  var green = image.select('green');
+  var swir = image.select('swir1');
+
+  return image.addBands([
+
+    nir.subtract(red)
+      .divide(nir.add(red))
+      .rename('NDVI'),
+
+    green.subtract(nir)
+      .divide(green.add(nir))
+      .rename('NDWI'),
+
+    swir.subtract(nir)
+      .divide(swir.add(nir))
+      .rename('NDBI')
+
+  ]);
+
+}
+
+var scenes = ee.ImageCollection(
+  'LANDSAT/LC08/C02/T1_L2'
+)
+.filterBounds(roi)
+.filterDate(
+  '2015-01-01',
+  '2016-01-01'
+);
+
+var predictor2015 = addIndices(
+  scenes.map(prepL8).median()
+).select(BANDS);
+
+// ================================================================
+// 4. SAMPLE ORIGINAL CLASSIFICATIONS + SPECTRAL VALUES
+//
+// Extract ONLY 10 pixels.
+// No full-region Gaussian score imagery.
+// ================================================================
+
+var cellImage = ee.Image.cat([
+
+  original2010,
+
+  original2015,
+
+  reported2015,
+
+  predictor2015
+
+]);
+
+var sampled = cellImage.sampleRegions({
+
+  collection: sites,
+
+  properties: [
+    'site_id',
+    'longitude',
+    'latitude',
+    'image_date_2015',
+    'earlier_image_date',
+    'visual_context_only',
+    'reference_2015'
+  ],
+
+  projection: GRID,
+
+  geometries: true,
+
+  tileScale: 8
+
+});
+
+// ================================================================
+// 5. ORIGINAL GAUSSIAN CLASS PARAMETERS
+//
+// Five classes, nine features.
+// Covariance regularization: +1e-6 I
+// Equal class priors.
+// ================================================================
+
+function gaussianParams(classId) {
+
+  var data = training.filter(
+    ee.Filter.eq('class_id', classId)
+  );
+
+  var mean = ee.Array([
+    BANDS.map(function(b) {
+      return data.aggregate_mean(b);
+    })
+  ]).transpose();
+
+  var covariance = ee.Array(
+
+    data.makeArray(
+      BANDS,
+      'mlc_values'
+    ).reduceColumns({
+
+      reducer: ee.Reducer.covariance()
+        .setOutputs(['covariance']),
+
+      selectors: ['mlc_values']
+
+    }).get('covariance')
+
+  ).add(
+    ee.Array.identity(9).multiply(1e-6)
+  );
+
+  return ee.Dictionary({
+
+    mu: mean,
+
+    inverse: covariance.matrixInverse(),
+
+    logdet: ee.Number(
+      covariance.matrixDeterminant()
+    ).max(1e-300).log()
+
+  });
+
+}
+
+var PARAMETERS = {};
+
+CLASSES.forEach(function(classId) {
+
+  PARAMETERS[classId] = gaussianParams(classId);
+
+});
+
+// ================================================================
+// 6. GAUSSIAN SCORE AT ONE SAMPLED PIXEL
+// ================================================================
+
+function scorePoint(x, classId) {
+
+  var p = PARAMETERS[classId];
+
+  var delta = x.subtract(
+    ee.Array(p.get('mu'))
+  );
+
+  var distance2 = delta.transpose()
+    .matrixMultiply(
+      ee.Array(p.get('inverse'))
+    )
+    .matrixMultiply(delta)
+    .get([0, 0]);
+
+  return ee.Number(distance2)
+    .multiply(-0.5)
+    .subtract(
+      ee.Number(p.get('logdet')).multiply(0.5)
+    );
+
+}
+
+// ================================================================
+// 7. EVALUATE ALL TEN REVIEWED PIXELS
+// ================================================================
+
+var results = sampled.map(function(f) {
+
+  var x = ee.Array(
+    ee.List(BANDS).map(function(b) {
+      return ee.Number(f.get(b));
+    })
+  ).reshape([9, 1]);
+
+  var s1 = scorePoint(x, 1);
+  var s2 = scorePoint(x, 2);
+  var s3 = scorePoint(x, 3);
+  var s4 = scorePoint(x, 4);
+  var s5 = scorePoint(x, 5);
+
+  var scores = [
+    s1, s2, s3, s4, s5
+  ];
+
+  var winner = ee.Number(1);
+  var best = s1;
+
+  for (var i = 1; i < CLASSES.length; i++) {
+
+    var better = ee.Number(
+      scores[i]
+    ).gt(best);
+
+    winner = ee.Number(
+      ee.Algorithms.If(
+        better,
+        CLASSES[i],
+        winner
+      )
+    );
+
+    best = best.max(
+      ee.Number(scores[i])
+    );
+
+  }
+
+  var archived = ee.Number(
+    f.get('saved_2015_5class')
+  );
+
+  var openScore = s4.max(s5);
+
+  // Positive: Built-up preferred over both open classes.
+  // Negative: at least one open class preferred to Built-up.
+  // This is NOT a probability or accuracy percentage.
+
+  var margin = s1.subtract(openScore);
+
+  var openWinner = ee.Number(
+    ee.Algorithms.If(
+      s4.gte(s5),
+      4,
+      5
+    )
+  );
+
+  return f.set({
+
+    gaussian_rebuilt_class: winner,
+
+    score_matches_saved: winner.eq(archived),
+
+    score_1_built: s1,
+
+    score_2_vegetation: s2,
+
+    score_3_water: s3,
+
+    score_4_agricultural: s4,
+
+    score_5_barren: s5,
+
+    strongest_open_class: openWinner,
+
+    built_minus_open_margin: margin,
+
+    saved2015_is_open:
+      archived.eq(4).or(archived.eq(5)),
+
+    mapped_disagreement_2010_built_2015_open:
+      ee.Number(
+        f.get('saved_2010_5class')
+      ).eq(1).and(
+        archived.eq(4).or(archived.eq(5))
+      )
+
+  });
+
+}).sort('site_id');
+
+// ================================================================
+// 8. CONSOLE REPORT
+//
+// Every print() has exactly ONE argument.
+// ================================================================
+
+print('==================================================');
+print('STAGE 08D — 2015 HISTORICAL-SITE DIAGNOSTIC');
+print('==================================================');
+
+print('Sites supplied (expected 10):');
+print(sites.size());
+
+print('2015 Landsat 8 scene count (expected 19):');
+print(scenes.size());
+
+print('Original 2015 training count (expected 600):');
+print(training.size());
+
+print('2015 original training class histogram:');
+print(training.aggregate_histogram('class_id'));
+
+print('Successfully sampled site pixels (expected 10):');
+print(sampled.size());
+
+print('Rebuilt Gaussian versus saved MLC mismatches (expect 0):');
+
+print(
+  results.filter(
+    ee.Filter.eq('score_matches_saved', false)
+  ).size()
+);
+
+print('Sites: 2010 Built-up -> 2015 Open:');
+
+print(
+  results.filter(
+    ee.Filter.eq(
+      'mapped_disagreement_2010_built_2015_open',
+      true
+    )
+  ).aggregate_array('site_id')
+);
+
+print('==================================================');
+print('COMPLETE TEN-SITE RESULTS');
+print('==================================================');
+
+print(results);
+
+print('Class 1 = Built-up');
+print('Class 2 = Vegetation');
+print('Class 3 = Water');
+print('Class 4 = Agricultural/Open');
+print('Class 5 = Barren/Fallow');
+
+print('Built-up minus Open margin:');
+print('Positive = Built-up preferred over Classes 4 and 5.');
+print('Negative = an Open class preferred over Built-up.');
+print('Vegetation/Water may still have the highest overall score.');
+
+print('Visual descriptions are NOT verified pixel labels.');
+print('Check exact 30 m footprints before setting reference labels.');
+
+print('If fewer than 10 sites sampled, inspect masks/coordinates.');
+print('If Gaussian mismatches are nonzero, stop score interpretation.');
+
+// ================================================================
+// 9. MAP — ONLY SAVED RASTERS + TEN LOCATIONS
+// ================================================================
+
+Map.layers().reset();
+
+Map.setOptions('SATELLITE');
+
+Map.centerObject(sites, 11);
+
+Map.addLayer(
+
+  original2015,
+
+  {
+    min: 1,
+    max: 5,
+    palette: [
+      'e53935',
+      '2e7d32',
+      '1976d2',
+      'fdd835',
+      'bcaaa4'
+    ]
+  },
+
+  '2015 ORIGINAL five-class MLC',
+
+  false,
+
+  0.65
+
+);
+
+Map.addLayer(
+
+  original2010,
+
+  {
+    min: 1,
+    max: 5,
+    palette: [
+      'e53935',
+      '2e7d32',
+      '1976d2',
+      'fdd835',
+      'bcaaa4'
+    ]
+  },
+
+  '2010 ORIGINAL five-class MLC - provisional',
+
+  false,
+
+  0.65
+
+);
+
+Map.addLayer(
+
+  sites.style({
+    color: 'ffffff',
+    pointSize: 7,
+    width: 2
+  }),
+
+  {},
+
+  '10 Historical Review Locations',
+
+  true
+
+);
+
+Map.addLayer(
+
+  roiFC.style({
+    color: 'ffff00',
+    fillColor: '00000000',
+    width: 1
+  }),
+
+  {},
+
+  'Chennai Study Boundary',
+
+  true
+
+);
+
+// ================================================================
+// END
+// ================================================================
+
+print('==================================================');
+print('END STAGE 08D');
+print('READ ONLY — NO EXPORTS OR RETRAINING');
+print('==================================================');

@@ -1,0 +1,157 @@
+
+// ========================================================
+// CHENNAI LULC - STAGE 08G-3A
+// NEW RF BUILT-UP AREA AND CHANGE AUDIT
+//
+// Run ONLY after 08G-3 experimental export COMPLETES.
+// Uses materialized rasters; no classifier recomputation.
+// READ ONLY - NO EXPORTS OR ORIGINAL ASSET MODIFICATIONS.
+// ========================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var roi = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+).geometry();
+
+var original = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2015'
+).select(0).rename('original');
+
+var experiment = ee.Image(
+  ROOT + 'chennai_2015_08G3_gaia_assisted_RF_experimental_v1'
+).select(0).rename('experimental');
+
+var gaia = ee.Image(
+  'Tsinghua/FROM-GLC/GAIA/v10'
+).select('change_year_index').unmask(0);
+
+var gaia2015 = gaia.gte(4).and(gaia.lte(34));
+
+var originalBU = original.eq(1);
+var experimentalBU = experiment.eq(1);
+
+var gainedBU = experimentalBU.and(originalBU.not());
+var lostBU = originalBU.and(experimentalBU.not());
+
+var originalOpen = original.eq(4).or(original.eq(5));
+var experimentOpen = experiment.eq(4).or(experiment.eq(5));
+
+var gaiaMismatchOriginal = gaia2015.and(originalOpen);
+var gaiaMismatchExperiment = gaia2015.and(experimentOpen);
+
+// Only assess pixels valid in both maps.
+var commonMask = original.mask().and(experiment.mask());
+
+function areaBand(mask, name) {
+  return ee.Image.pixelArea()
+    .divide(1e6)
+    .updateMask(mask)
+    .updateMask(commonMask)
+    .rename(name);
+}
+
+var areaStack = ee.Image.cat([
+  areaBand(originalBU, 'original_BU_km2'),
+  areaBand(experimentalBU, 'experimental_RF_BU_km2'),
+
+  areaBand(gainedBU, 'new_BU_from_other_classes_km2'),
+  areaBand(lostBU, 'original_BU_lost_in_RF_km2'),
+
+  areaBand(
+    gainedBU.and(original.eq(4)),
+    'RF_BU_gained_from_AgriculturalOpen_km2'
+  ),
+
+  areaBand(
+    gainedBU.and(original.eq(5)),
+    'RF_BU_gained_from_BarrenFallow_km2'
+  ),
+
+  areaBand(
+    gaiaMismatchOriginal,
+    'original_GAIA2015_open_barren_disagreement_km2'
+  ),
+
+  areaBand(
+    gaiaMismatchExperiment,
+    'RF_GAIA2015_open_barren_disagreement_km2'
+  ),
+
+  areaBand(commonMask, 'common_valid_area_km2')
+]);
+
+var summary = areaStack.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: roi,
+  crs: 'EPSG:32644',
+  crsTransform: [30, 0, 399060, 0, -30, 1463250],
+  maxPixels: 1e8,
+  tileScale: 8
+});
+
+print('==========================================');
+print('STAGE 08G-3A | CITYWIDE BUILT-UP AREA AUDIT');
+print('==========================================');
+
+print('Original 2015 projection:');
+print(original.projection());
+
+print('New RF experimental projection:');
+print(experiment.projection());
+
+print('AREA SUMMARY - km2:');
+print(summary);
+
+print('IMPORTANT: GAIA disagreement is not accuracy.');
+print('This experiment is not an accepted LULC replacement.');
+print('Original 2015 MLC remains unchanged.');
+
+// ========================================================
+// MAP COMPARISON
+// ========================================================
+
+var palette = [
+  'ff0000',
+  '008000',
+  '0000ff',
+  'ffff00',
+  'd2b48c'
+];
+
+Map.layers().reset();
+Map.setOptions('SATELLITE');
+
+Map.addLayer(
+  original,
+  {min: 1, max: 5, palette: palette},
+  '2015 ORIGINAL MLC',
+  true
+);
+
+Map.addLayer(
+  experiment,
+  {min: 1, max: 5, palette: palette},
+  '2015 EXPERIMENTAL RF',
+  false
+);
+
+Map.addLayer(
+  gainedBU.selfMask(),
+  {palette: ['00ffff']},
+  'NEW RF Built-up locations',
+  false
+);
+
+Map.addLayer(
+  lostBU.selfMask(),
+  {palette: ['ff00ff']},
+  'Built-up lost by RF',
+  false
+);
+
+Map.centerObject(roi, 10);
+
+// ========================================================
+// END STAGE 08G-3A
+// ========================================================

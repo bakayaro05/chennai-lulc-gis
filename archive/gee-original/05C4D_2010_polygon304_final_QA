@@ -1,0 +1,1124 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var barrenAdd2010 = 
+    /* color: #d63000 */
+    /* shown: false */
+    ee.Geometry.MultiPolygon(
+        [[[[80.09569267074758, 12.945813188014284],
+           [80.09726980964834, 12.945525644149265],
+           [80.09750584404165, 12.946916307764518],
+           [80.09572485725576, 12.947345007013539]]],
+         [[[80.07175366774163, 12.934504624258938],
+           [80.07218282118401, 12.931723150837758],
+           [80.07419984236321, 12.931911371821826],
+           [80.07516543760858, 12.934379144922861]]],
+         [[[80.27042243195926, 13.133568618438408],
+           [80.26807281686222, 13.134864192067507],
+           [80.26663515283023, 13.133234275747068],
+           [80.26918861581241, 13.13177152112039]]],
+         [[[80.27688708866364, 13.139527789019015],
+           [80.27421560848481, 13.140311383896911],
+           [80.27411904896027, 13.13732326201053],
+           [80.276050239451, 13.136696378677195]]],
+         [[[80.31640532719156, 13.19449951027295],
+           [80.3179985593464, 13.19425926127229],
+           [80.31835261093637, 13.195382162182337],
+           [80.31686666714212, 13.19566941507472]]],
+         [[[80.28358436588289, 13.13054427800792],
+           [80.28516150478364, 13.130194258681536],
+           [80.28544581893922, 13.131301780812425],
+           [80.28458214763643, 13.131510746692182],
+           [80.28446413043977, 13.131056245676515],
+           [80.28370774749757, 13.130706227079713]]]]);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05C4D
+//
+// POLYGON 304 FINAL MANUAL-BARREN QA
+//
+// PURPOSE
+// -------
+// Evaluate ONLY manually reviewed polygon 304.
+//
+// We retain:
+//   - clear_count >= 2
+//   - nearest 2010-native class = Barren/Fallow
+//   - margin >= 0.25
+//   - >= 5 valid local neighbours
+//   - local agreement >= 5/9
+//   - no existing candidate-pixel overlap
+//
+// We DO NOT require distance <= 1.25.
+//
+// Reason:
+// Polygon 304 is independently manually identified as Barren/Fallow,
+// and represents a potentially different Barren subtype from the
+// narrow historical signature.
+//
+// QA ONLY.
+// NO EXPORT.
+// NO FINAL TRAINING YET.
+// ================================================================
+
+
+// ================================================================
+// 1. REQUIRED IMPORT
+// ================================================================
+
+barrenAdd2010;
+
+
+// ================================================================
+// 2. ASSETS
+// ================================================================
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+var QA_05A_ASSET =
+  'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A';
+
+var PASSB_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+var RESCUED_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_rescued_uncertain_05C2A';
+
+var EXPANSION_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_targeted_expansion_05C3A';
+
+
+// ================================================================
+// 3. SETTINGS
+// ================================================================
+
+var SCALE = 30;
+
+var BARREN_CLASS_ID = 5;
+
+var REQUIRED_NEW_BARREN = 61;
+
+var MARGIN_THRESHOLD = 0.25;
+
+var MIN_CLEAR = 2;
+
+var MIN_LOCAL_VALID = 5;
+
+var MIN_LOCAL_FRACTION = 5 / 9;
+
+var EPSILON = 1e-6;
+
+
+var PREDICTORS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+var CLASS_IDS =
+  [1, 2, 3, 4, 5];
+
+
+// ================================================================
+// 4. LOAD DATA
+// ================================================================
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  );
+
+
+var qa05A =
+  ee.FeatureCollection(
+    QA_05A_ASSET
+  );
+
+
+var currentCandidates =
+  ee.FeatureCollection(
+    PASSB_ASSET
+  )
+
+  .merge(
+    ee.FeatureCollection(
+      RESCUED_ASSET
+    )
+  )
+
+  .merge(
+    ee.FeatureCollection(
+      EXPANSION_ASSET
+    )
+  )
+
+  .distinct(
+    [
+      'auth_pixel_key'
+    ]
+  );
+
+
+var stackProjection =
+  stack2010
+    .select('blue')
+    .projection();
+
+
+// ================================================================
+// 5. EXTRACT ONLY MANUAL POLYGON 304
+// ================================================================
+//
+// Original:
+// 301 = geometry index 0
+// 302 = index 1
+// 303 = index 2
+// 304 = index 3
+//
+// ================================================================
+
+var parts =
+  ee.Geometry(
+    barrenAdd2010
+  )
+  .geometries();
+
+
+var polygon304Geometry =
+  ee.Geometry(
+    parts.get(
+      3
+    )
+  );
+
+
+var polygon304 =
+  ee.FeatureCollection([
+
+    ee.Feature(
+      polygon304Geometry,
+      {
+
+        class_id:
+          5,
+
+        class_name:
+          'Barren/Fallow',
+
+        poly_id:
+          304,
+
+        source:
+          'manual_2010_barren_304'
+
+      }
+    )
+
+  ]);
+
+
+// ================================================================
+// 6. REBUILD 2010-NATIVE SIGNATURES
+// ================================================================
+
+var stableAnchors =
+  qa05A.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'STABLE'
+    )
+  );
+
+
+var nativeSeeds =
+  stack2010
+    .select(
+      PREDICTORS
+    )
+    .sampleRegions({
+
+      collection:
+        stableAnchors,
+
+      properties: [
+        'class_id'
+      ],
+
+      scale:
+        SCALE,
+
+      projection:
+        stackProjection,
+
+      geometries:
+        false,
+
+      tileScale:
+        4
+
+    });
+
+
+function buildSignature(classId) {
+
+  var fc =
+    nativeSeeds.filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    );
+
+
+  var means =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          fc.aggregate_mean(
+            band
+          )
+        );
+
+      }
+    );
+
+
+  var sds =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          fc.aggregate_sample_sd(
+            band
+          )
+        )
+        .max(
+          EPSILON
+        );
+
+      }
+    );
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      means:
+        ee.List(
+          means
+        ),
+
+      sds:
+        ee.List(
+          sds
+        )
+
+    }
+  );
+
+}
+
+
+var signatures =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      buildSignature
+    )
+  );
+
+
+// ================================================================
+// 7. DISTANCE FUNCTION
+// ================================================================
+
+function distanceToClass(
+  image,
+  classId
+) {
+
+  var signature =
+    ee.Feature(
+      signatures
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+        .first()
+    );
+
+
+  var meanImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'means'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    );
+
+
+  var sdImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'sds'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    )
+    .max(
+      EPSILON
+    );
+
+
+  return image
+    .select(
+      PREDICTORS
+    )
+    .subtract(
+      meanImage
+    )
+    .divide(
+      sdImage
+    )
+    .pow(2)
+    .reduce(
+      ee.Reducer.mean()
+    )
+    .sqrt()
+    .rename(
+      'd' + classId
+    );
+
+}
+
+
+// ================================================================
+// 8. DISTANCE IMAGES
+// ================================================================
+
+var d1 = distanceToClass(stack2010, 1);
+var d2 = distanceToClass(stack2010, 2);
+var d3 = distanceToClass(stack2010, 3);
+var d4 = distanceToClass(stack2010, 4);
+var d5 = distanceToClass(stack2010, 5);
+
+
+var distanceImages = [
+  d1,
+  d2,
+  d3,
+  d4,
+  d5
+];
+
+
+var distanceStack =
+  ee.Image.cat(
+    distanceImages
+  );
+
+
+// ================================================================
+// 9. BEST + SECOND-BEST CLASS
+// ================================================================
+
+var bestDist =
+  d1.rename(
+    'best_dist'
+  );
+
+
+var bestClass =
+  ee.Image.constant(
+    1
+  )
+  .rename(
+    'best_class'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+var secondDist =
+  ee.Image.constant(
+    9999
+  )
+  .rename(
+    'second_dist'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+for (
+  var i = 1;
+  i < CLASS_IDS.length;
+  i++
+) {
+
+  var currentClass =
+    CLASS_IDS[i];
+
+
+  var currentDistance =
+    distanceImages[i];
+
+
+  var better =
+    currentDistance.lt(
+      bestDist
+    );
+
+
+  var previousBest =
+    bestDist;
+
+
+  var updatedSecond =
+    secondDist.where(
+      better,
+      previousBest
+    );
+
+
+  var currentAsSecond =
+    currentDistance.where(
+      better,
+      9999
+    );
+
+
+  updatedSecond =
+    updatedSecond.min(
+      currentAsSecond
+    );
+
+
+  bestDist =
+    previousBest
+      .where(
+        better,
+        currentDistance
+      )
+      .rename(
+        'best_dist'
+      );
+
+
+  bestClass =
+    bestClass
+      .where(
+        better,
+        currentClass
+      )
+      .rename(
+        'best_class'
+      );
+
+
+  secondDist =
+    updatedSecond.rename(
+      'second_dist'
+    );
+
+}
+
+
+var margin =
+  secondDist
+    .subtract(
+      bestDist
+    )
+    .rename(
+      'margin'
+    );
+
+
+// ================================================================
+// 10. LOCAL CONSISTENCY
+// ================================================================
+
+var kernel3x3 =
+  ee.Kernel.square({
+
+    radius:
+      1,
+
+    units:
+      'pixels',
+
+    normalize:
+      false
+
+  });
+
+
+var localValidN =
+  bestClass
+    .reduceNeighborhood({
+
+      reducer:
+        ee.Reducer.count(),
+
+      kernel:
+        kernel3x3,
+
+      skipMasked:
+        true
+
+    })
+    .rename(
+      'local_valid_n'
+    );
+
+
+var localSameN =
+  ee.Image.constant(
+    0
+  )
+  .rename(
+    'local_same_n'
+  )
+  .updateMask(
+    bestClass.mask()
+  );
+
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var count =
+      bestClass
+        .eq(
+          classId
+        )
+        .reduceNeighborhood({
+
+          reducer:
+            ee.Reducer.sum(),
+
+          kernel:
+            kernel3x3,
+
+          skipMasked:
+            true
+
+        });
+
+
+    localSameN =
+      localSameN.where(
+        bestClass.eq(
+          classId
+        ),
+        count
+      );
+
+  }
+);
+
+
+var localFraction =
+  localSameN
+    .divide(
+      localValidN.max(
+        1
+      )
+    )
+    .rename(
+      'local_fraction'
+    );
+
+
+// ================================================================
+// 11. AUTHORITATIVE PIXEL KEY
+// ================================================================
+
+var pixelXY =
+  ee.Image.pixelCoordinates(
+    stackProjection
+  )
+  .rename(
+    [
+      'auth_px',
+      'auth_py'
+    ]
+  );
+
+
+// ================================================================
+// 12. SAMPLE POLYGON 304
+// ================================================================
+
+var qaImage =
+  stack2010
+    .select(
+      PREDICTORS
+    )
+    .addBands(
+      distanceStack
+    )
+    .addBands(
+      bestClass
+    )
+    .addBands(
+      margin
+    )
+    .addBands(
+      stack2010.select(
+        'clear_count'
+      )
+    )
+    .addBands(
+      localValidN
+    )
+    .addBands(
+      localFraction
+    )
+    .addBands(
+      pixelXY
+    );
+
+
+var samples304 =
+  qaImage.sampleRegions({
+
+    collection:
+      polygon304,
+
+    properties: [
+      'class_id',
+      'class_name',
+      'poly_id',
+      'source'
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      stackProjection,
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+
+  });
+
+
+// ================================================================
+// 13. PIXEL KEYS
+// ================================================================
+
+samples304 =
+  samples304.map(
+    function(feature) {
+
+      var px =
+        ee.Number(
+          feature.get(
+            'auth_px'
+          )
+        );
+
+
+      var py =
+        ee.Number(
+          feature.get(
+            'auth_py'
+          )
+        );
+
+
+      return feature.set(
+        'auth_pixel_key',
+
+        px.format(
+          '%.0f'
+        )
+        .cat(
+          '_'
+        )
+        .cat(
+          py.format(
+            '%.0f'
+          )
+        )
+
+      );
+
+    }
+  )
+  .distinct(
+    [
+      'auth_pixel_key'
+    ]
+  );
+
+
+// ================================================================
+// 14. REMOVE CURRENT-POOL DUPLICATES
+// ================================================================
+
+var currentKeys =
+  ee.List(
+    currentCandidates.aggregate_array(
+      'auth_pixel_key'
+    )
+  );
+
+
+samples304 =
+  samples304.map(
+    function(feature) {
+
+      var duplicate =
+        currentKeys.contains(
+          feature.get(
+            'auth_pixel_key'
+          )
+        );
+
+
+      return feature.set(
+        'already_exists',
+
+        ee.Number(
+          ee.Algorithms.If(
+            duplicate,
+            1,
+            0
+          )
+        )
+
+      );
+
+    }
+  );
+
+
+// ================================================================
+// 15. CREATE PROGRESSIVE QA LEVELS
+// ================================================================
+//
+// LEVEL 1:
+// clear + new + nearest class Barren
+//
+// LEVEL 2:
+// Level 1 + margin >= 0.25
+//
+// LEVEL 3:
+// Level 2 + local valid >= 5
+//             local Barren agreement >= 5/9
+//
+// LEVEL 3 is our preferred final manual candidate pool.
+//
+// ================================================================
+
+var evaluated304 =
+  samples304.map(
+    function(feature) {
+
+      var clear =
+        ee.Number(
+          feature.get(
+            'clear_count'
+          )
+        )
+        .gte(
+          MIN_CLEAR
+        );
+
+
+      var newPixel =
+        ee.Number(
+          feature.get(
+            'already_exists'
+          )
+        )
+        .eq(
+          0
+        );
+
+
+      var classBarren =
+        ee.Number(
+          feature.get(
+            'best_class'
+          )
+        )
+        .eq(
+          BARREN_CLASS_ID
+        );
+
+
+      var marginOkay =
+        ee.Number(
+          feature.get(
+            'margin'
+          )
+        )
+        .gte(
+          MARGIN_THRESHOLD
+        );
+
+
+      var localNOkay =
+        ee.Number(
+          feature.get(
+            'local_valid_n'
+          )
+        )
+        .gte(
+          MIN_LOCAL_VALID
+        );
+
+
+      var localFractionOkay =
+        ee.Number(
+          feature.get(
+            'local_fraction'
+          )
+        )
+        .gte(
+          MIN_LOCAL_FRACTION
+        );
+
+
+      var level1 =
+        clear
+          .and(
+            newPixel
+          )
+          .and(
+            classBarren
+          );
+
+
+      var level2 =
+        level1
+          .and(
+            marginOkay
+          );
+
+
+      var level3 =
+        level2
+          .and(
+            localNOkay
+          )
+          .and(
+            localFractionOkay
+          );
+
+
+      return feature.set({
+
+        manual_level1:
+          ee.Number(
+            ee.Algorithms.If(
+              level1,
+              1,
+              0
+            )
+          ),
+
+        manual_level2:
+          ee.Number(
+            ee.Algorithms.If(
+              level2,
+              1,
+              0
+            )
+          ),
+
+        manual_level3:
+          ee.Number(
+            ee.Algorithms.If(
+              level3,
+              1,
+              0
+            )
+          )
+
+      });
+
+    }
+  );
+
+
+// ================================================================
+// 16. FILTER LEVELS
+// ================================================================
+
+var level1Candidates =
+  evaluated304.filter(
+    ee.Filter.eq(
+      'manual_level1',
+      1
+    )
+  );
+
+
+var level2Candidates =
+  evaluated304.filter(
+    ee.Filter.eq(
+      'manual_level2',
+      1
+    )
+  );
+
+
+var level3Candidates =
+  evaluated304.filter(
+    ee.Filter.eq(
+      'manual_level3',
+      1
+    )
+  );
+
+
+// ================================================================
+// 17. QA OUTPUT
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05C4D — POLYGON 304 FINAL QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    total_unique_pixels_304:
+      samples304.size(),
+
+    current_pool_duplicates:
+      samples304
+        .filter(
+          ee.Filter.eq(
+            'already_exists',
+            1
+          )
+        )
+        .size(),
+
+    nearest_class_barren:
+      samples304
+        .filter(
+          ee.Filter.eq(
+            'best_class',
+            5
+          )
+        )
+        .size(),
+
+    level1_clear_new_nearest_barren:
+      level1Candidates.size(),
+
+    level2_plus_margin:
+      level2Candidates.size(),
+
+    level3_plus_local_consistency:
+      level3Candidates.size(),
+
+    required_new_barren:
+      REQUIRED_NEW_BARREN
+
+  })
+);
+
+
+print(
+  'LEVEL 3 mean Barren distance'
+);
+
+
+print(
+  level3Candidates.aggregate_mean(
+    'd5'
+  )
+);
+
+
+print(
+  'LEVEL 3 mean margin'
+);
+
+
+print(
+  level3Candidates.aggregate_mean(
+    'margin'
+  )
+);
+
+
+print(
+  'LEVEL 3 mean local fraction'
+);
+
+
+print(
+  level3Candidates.aggregate_mean(
+    'local_fraction'
+  )
+);
+
+
+print(
+  '========================================'
+);
+
+print(
+  '05C4D COMPLETE — QA ONLY'
+);
+
+print(
+  'NO EXPORT.'
+);
+
+print(
+  'DO NOT RUN AGAIN.'
+);
+
+print(
+  'Send the QA dictionary back for review.'
+);
+
+print(
+  '========================================'
+);

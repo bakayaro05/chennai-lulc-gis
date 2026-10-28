@@ -1,0 +1,470 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var barren2010_01 = /* color: #d63000 */ee.Geometry.Polygon(
+        [[[80.25169287009501, 13.190568420208626],
+          [80.25202546401286, 13.187528681779455],
+          [80.25664959235453, 13.187946517480855],
+          [80.25641355796122, 13.191268285903186]]]);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+ // ================================================================
+ // CHENNAI LULC | STAGE 07B2 | 2010 NATIVE CLASS-5 SITE AUDIT
+ // VERSION 1 | COPY-PASTE INTO GOOGLE EARTH ENGINE CODE EDITOR
+ // ================================================================
+ // PURPOSE: Draw multiple NEW 2010 Barren/Fallow site polygons and
+ // inspect their candidate pixels in one batch.
+ // NO final training export, NO automatic historical approval, NO MLC.
+ // Locked: ROI, Landsat 5 stack, nine bands, EPSG:32644, 30 m.
+ // ================================================================
+
+ // ---------- A. LOCKED SETTINGS ----------
+ var ROOT = 'projects/assignment-482806/assets/';
+ var CRS = 'EPSG:32644';
+ var SCALE = 30;
+ var PROJ = ee.Projection(CRS).atScale(SCALE);
+ var CLASS_ID = 5;
+ var TARGET_PIXELS = 120;
+ var SITE_CAP_FOR_PLANNING = 30;
+ // 60 m centre-to-validation-buffer clearance is deliberately more
+ // conservative than the 30 m minimum project separation rule.
+ // The final footprint/independence check will run again in 07C.
+ var VALIDATION_BUFFER_M = 60;
+ var BANDS = [
+   'blue','green','red','nir','swir1','swir2',
+   'NDVI','NDWI','NDBI'
+ ];
+
+ // ---------- B. LOCKED ASSETS ----------
+ var studyArea = ee.FeatureCollection(
+   ROOT + 'chennai_admin_study_area_clean');
+ var roi = studyArea.geometry();
+ var stack2010 = ee.Image(
+   ROOT + 'chennai_predictor_stack_2010').select(BANDS).clip(roi);
+ var validation2010 = ee.FeatureCollection(
+   ROOT + 'chennai_validation_polygons_2010_manual_master');
+ var forbidden = validation2010.geometry().buffer(
+   VALIDATION_BUFFER_M, 1);
+
+ // ---------- C. DRAWING SLOTS ----------
+ // GEE: Polygon tool -> +new layer -> rename layer -> Geometry import.
+ // Use barren2010_01, barren2010_02, ... one site per imported layer.
+ // Add additional sites later, without deleting or replacing old sites.
+ // Status is UNREVIEWED until you verify target-year land cover using
+ // the 2010 Landsat + dated historical high-resolution references.
+ // The historical_date field must be an acquisition date, not a guess.
+ var SITE_CONFIG = [
+   {id:'B2010_01', geometry:typeof barren2010_01 === 'undefined' ? null : barren2010_01,
+    status:'UNREVIEWED', historical_date:'UNVERIFIED', notes:'NOT_RECORDED'},
+   {id:'B2010_02', geometry:typeof barren2010_02 === 'undefined' ? null : barren2010_02,
+    status:'UNREVIEWED', historical_date:'UNVERIFIED', notes:'NOT_RECORDED'},
+   {id:'B2010_03', geometry:typeof barren2010_03 === 'undefined' ? null : barren2010_03,
+    status:'UNREVIEWED', historical_date:'UNVERIFIED', notes:'NOT_RECORDED'},
+   {id:'B2010_04', geometry:typeof barren2010_04 === 'undefined' ? null : barren2010_04,
+    status:'UNREVIEWED', historical_date:'UNVERIFIED', notes:'NOT_RECORDED'},
+   {id:'B2010_05', geometry:typeof barren2010_05 === 'undefined' ? null : barren2010_05,
+    status:'UNREVIEWED', historical_date:'UNVERIFIED', notes:'NOT_RECORDED'},
+   {id:'B2010_06', geometry:typeof barren2010_06 === 'undefined' ? null : barren2010_06,
+    status:'UNREVIEWED', historical_date:'UNVERIFIED', notes:'NOT_RECORDED'},
+   {id:'B2010_07', geometry:typeof barren2010_07 === 'undefined' ? null : barren2010_07,
+    status:'UNREVIEWED', historical_date:'UNVERIFIED', notes:'NOT_RECORDED'},
+   {id:'B2010_08', geometry:typeof barren2010_08 === 'undefined' ? null : barren2010_08,
+    status:'UNREVIEWED', historical_date:'UNVERIFIED', notes:'NOT_RECORDED'}
+ ];
+
+ // ---------- D. BASE MAP: GENUINE 2010 IMAGERY ----------
+
+// ============================================================
+// STAGE 07B2 — 2010 HISTORICAL WORKSPACE
+// Display actual 2010 Landsat imagery for drawing
+// ============================================================
+
+Map.layers().reset();
+
+// Disable the Google Satellite basemap.
+Map.setOptions('TERRAIN');
+
+Map.centerObject(roi, 11);
+
+Map.drawingTools().setShown(true);
+
+// DARK BACKGROUND
+// Prevent modern satellite imagery from appearing through
+// missing or masked 2010 Landsat pixels inside the ROI.
+
+var historicalBackground = ee.Image.constant(0)
+  .clip(roi);
+
+Map.addLayer(
+  historicalBackground,
+  {
+    min: 0,
+    max: 1,
+    palette: ['151515']
+  },
+  'BACKGROUND — NO MODERN SATELLITE',
+  true,
+  1
+);
+
+// ============================================================
+// ACTUAL 2010 LANDSAT TRUE COLOR — PRIMARY DRAWING LAYER
+// ============================================================
+
+Map.addLayer(
+  stack2010,
+  {
+    bands: ['red', 'green', 'blue'],
+    min: 0.02,
+    max: 0.30,
+    gamma: 1.15
+  },
+  '2010 TRUE COLOR — DRAW HERE',
+  true,
+  1
+);
+
+// 2010 False Color
+Map.addLayer(
+  stack2010,
+  {
+    bands: ['swir1', 'nir', 'red'],
+    min: 0.02,
+    max: 0.35
+  },
+  '2010 SWIR-NIR-RED',
+  false
+);
+
+// 2010 NDVI
+Map.addLayer(
+  stack2010.select('NDVI'),
+  {
+    min: -0.3,
+    max: 0.8,
+    palette: [
+      '8B4513',
+      'D9C689',
+      'FFFFCC',
+      '7FBF7B',
+      '006400'
+    ]
+  },
+  '2010 NDVI',
+  false
+);
+
+// 2010 NDBI
+Map.addLayer(
+  stack2010.select('NDBI'),
+  {
+    min: -0.5,
+    max: 0.5,
+    palette: [
+      '2166AC',
+      'F7F7F7',
+      'B2182B'
+    ]
+  },
+  '2010 NDBI',
+  false
+);
+
+// Study area boundary
+Map.addLayer(
+  studyArea.style({
+    color: 'FF0000',
+    fillColor: '00000000',
+    width: 2
+  }),
+  {},
+  'Locked Chennai ROI',
+  false
+);
+
+// Independent validation polygons
+Map.addLayer(
+  validation2010.style({
+    color: 'FF00FF',
+    fillColor: 'FF00FF11',
+    width: 2
+  }),
+  {},
+  'Reserved validation polygons',
+  false
+);
+
+// Conservative exclusion buffer
+Map.addLayer(
+  forbidden,
+  {color: 'FF00FF'},
+  'Validation exclusion buffer',
+  false
+);
+
+// ============================================================
+// END 2010 HISTORICAL WORKSPACE
+// Continue with Section E of the original script.
+// ============================================================
+
+
+ // ---------- E. CLEAR-OBSERVATION QA (NOT A PREDICTOR) ----------
+ // Reconstruct count with the locked Landsat-5 QA_PIXEL + QA_RADSAT
+ // rules. Does NOT change the saved nine-band predictor stack.
+ function countableClearL5(image) {
+   var qa = image.select('QA_PIXEL');
+   var sat = image.select('QA_RADSAT');
+   var clear = qa.bitwiseAnd(1 << 0).eq(0)
+     .and(qa.bitwiseAnd(1 << 1).eq(0))
+     .and(qa.bitwiseAnd(1 << 3).eq(0))
+     .and(qa.bitwiseAnd(1 << 4).eq(0))
+     .and(qa.bitwiseAnd(1 << 5).eq(0))
+     .and(sat.eq(0));
+   return image.select('SR_B3').updateMask(clear);
+ }
+ var scenes2010 = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')
+   .filterBounds(roi).filterDate('2010-01-01','2011-01-01');
+ var clearCount = scenes2010.map(countableClearL5).count()
+   .rename('clear_obs_2010').clip(roi);
+ Map.addLayer(clearCount, {min:0,max:7,
+   palette:['AA0000','E69F00','FFFF80','4DAF4A','125A28']
+ }, '2010 clear observations (QA only)', false);
+
+ // ---------- F. FIND DRAWN SITE IMPORTS ----------
+ var activeSites = SITE_CONFIG.filter(function(s) {
+   return s.geometry !== null;
+ });
+ print('========================================');
+ print('07B2 | 2010 NATIVE BARREN/FALLOW SITE AUDIT');
+ print('2010 Landsat source scene count:');
+ print(scenes2010.size());
+ print('2010 predictor bands:');
+ print(stack2010.bandNames());
+ print('Number of site imports detected:');
+ print(activeSites.length);
+ print('Site imports not yet marked REVIEWED_SITE:');
+ print(activeSites.filter(function(s) {
+   return s.status !== 'REVIEWED_SITE';
+ }).length);
+
+ if (activeSites.length === 0) {
+   print('NO NEW SITES YET. This is expected on first run.');
+   print('Draw 5-8 separate homogeneous polygons on the 2010 map.');
+   print('Name imported Geometry layers barren2010_01, barren2010_02, ...');
+   print('Compare each with dated historical Google Earth imagery.');
+   print('Keep independent validation areas untouched.');
+   print('Save script and re-run after drawing.');
+ } else {
+   // ---------- G. REGISTER SITE GEOMETRIES ----------
+   var features = activeSites.map(function(s) {
+     return ee.Feature(s.geometry, {
+       class_id: CLASS_ID,
+       class_name: 'Barren/Fallow',
+       site_id: s.id,
+       review_status: s.status,
+       historical_date: s.historical_date,
+       notes: s.notes,
+       source: '2010_native_07B2_candidate',
+       target_year: 2010
+     });
+   });
+   var sites = ee.FeatureCollection(features);
+   var siteIndex = sites.map(function(f) {
+     f = ee.Feature(f);
+     var xy = ee.List(f.geometry().centroid(1).coordinates());
+     var search = ee.Number(xy.get(1)).format('%.7f')
+       .cat(', ').cat(ee.Number(xy.get(0)).format('%.7f'));
+     return f.set({
+       'area_km2': f.geometry().area(1).divide(1e6),
+       'google_earth_lat_lon': search
+     });
+   });
+   Map.addLayer(sites.style({
+     color:'FFEA00',fillColor:'FFEA0022',width:2
+   }), {}, 'New 2010 site polygons', true);
+
+   // ---------- H. 30 M PIXEL SAMPLING, WITH EXTRA QA BANDS ----------
+   var gridXY = ee.Image.pixelCoordinates(PROJ)
+     .rename(['grid_x','grid_y']);
+   var qaImage = stack2010.addBands(clearCount).addBands(gridXY);
+   var allSamples = qaImage.sampleRegions({
+     collection: sites,
+     properties:[
+       'class_id','class_name','site_id','review_status',
+       'historical_date','notes','source','target_year'
+     ],
+     projection:PROJ, scale:SCALE, geometries:true, tileScale:8
+   });
+
+   // Filter using actual sampled 2010 pixel centres, not polygon centroids.
+   var invalidNearValidation = allSamples.filterBounds(forbidden);
+   var separatedSamples = allSamples.filter(
+     ee.Filter.bounds(forbidden).not());
+   var keyed = separatedSamples.map(function(f) {
+     f = ee.Feature(f);
+     var key = ee.Number(f.get('grid_x')).format('%.6f')
+       .cat('_').cat(ee.Number(f.get('grid_y')).format('%.6f'));
+     return f.set('grid_key_07B2', key);
+   });
+   var uniquePixels = keyed.distinct(['grid_key_07B2']);
+   var rawSiteCounts = uniquePixels.aggregate_histogram('site_id');
+   var potentialBySite = ee.Dictionary(rawSiteCounts).values().map(
+     function(n) { return ee.Number(n).min(SITE_CAP_FOR_PLANNING); }
+   );
+   var possibleWithSiteCap = ee.Number(ee.Algorithms.If(
+     ee.List(potentialBySite).size().gt(0),
+     ee.List(potentialBySite).reduce(ee.Reducer.sum()),
+     0
+   ));
+   var reviewedPixels = uniquePixels.filter(
+     ee.Filter.eq('review_status','REVIEWED_SITE'));
+   var observationConcern = uniquePixels.filter(
+     ee.Filter.lt('clear_obs_2010',2));
+
+   // ---------- I. BATCH CONSOLE QA ----------
+   print('========================================');
+   print('DRAWN SITE INVENTORY (DATES / SIZES / SEARCH COORDINATES)');
+   print(siteIndex.select([
+     'site_id','review_status','historical_date','notes',
+     'area_km2','google_earth_lat_lon'
+   ]));
+   print('Candidate count BEFORE validation exclusion:');
+   print(allSamples.size());
+   print('Candidate pixels inside conservative validation zone:');
+   print(invalidNearValidation.size());
+   print('Candidate count after exclusion, BEFORE dedup:');
+   print(keyed.size());
+   print('Distinct 30 m candidate pixels AFTER dedup:');
+   print(uniquePixels.size());
+   print('Repeated grid pixels removed:');
+   print(keyed.size().subtract(uniquePixels.size()));
+   print('Distinct candidate pixels PER SITE:');
+   print(rawSiteCounts);
+   print('Candidate pixels from REVIEWED_SITE polygons (not final approvals):');
+   print(reviewedPixels.size());
+   print('Candidates with fewer than 2 clear Landsat observations:');
+   print(observationConcern.size());
+   print('Distribution of clear Landsat observations:');
+   print(uniquePixels.aggregate_histogram('clear_obs_2010'));
+   print('Candidate NDVI summary (diagnostic, NOT a class threshold):');
+   print(uniquePixels.aggregate_stats('NDVI'));
+   print('Candidate NDBI summary:');
+   print(uniquePixels.aggregate_stats('NDBI'));
+   print('Candidate NDWI summary:');
+   print(uniquePixels.aggregate_stats('NDWI'));
+   print('Planning cap per site (not a sample selector):');
+   print(SITE_CAP_FOR_PLANNING);
+   print('Potential coverage with per-site cap:');
+   print(possibleWithSiteCap);
+   print('Remaining gap versus 120 with that cap:');
+   print(ee.Number(TARGET_PIXELS).subtract(possibleWithSiteCap).max(0));
+   print('========================================');
+   print('HARD GATES BEFORE 07C:');
+   print('1) Verify true 2010 class at each site using historical images.');
+   print('2) Compare Class 4 vs Class 5 under same five-year legend.');
+   print('3) Remove mixed pixels, weak coverage and site overlaps.');
+   print('4) Keep geographic diversity; counts alone are NOT approval.');
+   print('5) Audit all five classes, then construct balanced V2 training.');
+   print('NO ASSET EXPORT AND NO MLC PERFORMED.');
+
+   Map.addLayer(uniquePixels.style({
+     color:'00FFFF',pointSize:4,width:1
+   }), {}, 'NEW 2010 candidate PIXEL CENTRES', true);
+   Map.addLayer(invalidNearValidation.style({
+     color:'FF0000',pointSize:6,width:1
+   }), {}, 'Excluded samples near validation', false);
+   Map.addLayer(observationConcern.style({
+     color:'FF8800',pointSize:6,width:1
+   }), {}, 'Review: fewer than 2 clear scenes', false);
+   Map.centerObject(sites);
+ }
+
+ // ================================================================
+ // END 07B2. Save the GEE script WITH its imported geometries.
+ // Next: 07C batch approval, pixel-level QA, balanced consolidation.
+ // ================================================================
+ 
+ 
+// ============================================================
+// 07B2 — FIRST SITE VALIDATION-OVERLAP DIAGNOSTIC
+// Does not change, approve, or export any training data.
+// ============================================================
+
+var qaSite = ee.Geometry(barren2010_01);
+
+var qaValidation = ee.FeatureCollection(
+  'projects/assignment-482806/assets/' +
+  'chennai_validation_polygons_2010_manual_master'
+);
+
+// Calculate actual distance to each validation polygon.
+var qaDistances = qaValidation.map(function(f) {
+  f = ee.Feature(f);
+
+  var distance = f.geometry().distance(
+    qaSite, ee.ErrorMargin(1)
+  );
+
+  return f.set('distance_to_site_m', distance);
+});
+
+print('======================================');
+print('07B2 — VALIDATION EXCLUSION DIAGNOSIS');
+print('======================================');
+
+print('Drawn site area (km2):');
+print(qaSite.area(1).divide(1000000));
+
+print('Number of validation polygons:');
+print(qaValidation.size());
+
+print('Nearest validation polygon distance (metres):');
+print(qaDistances.aggregate_min('distance_to_site_m'));
+
+print('Validation polygons within 60 metres:');
+print(
+  qaDistances
+    .filter(ee.Filter.lte('distance_to_site_m', 60))
+    .size()
+);
+
+print('Five nearest validation polygons:');
+print(
+  qaDistances
+    .sort('distance_to_site_m')
+    .limit(5)
+);
+
+// Show individually buffered polygons, not just one
+// merged collection geometry.
+
+var qaBuffers = qaValidation.map(function(f) {
+  return ee.Feature(f).buffer(60, 1);
+});
+
+Map.addLayer(
+  qaBuffers.style({
+    color: 'FF00FF',
+    fillColor: 'FF00FF22',
+    width: 2
+  }),
+  {},
+  'QA — INDIVIDUAL 60 m VALIDATION BUFFERS',
+  true
+);
+
+Map.addLayer(
+  ee.FeatureCollection([ee.Feature(qaSite)]).style({
+    color: 'FFFF00',
+    fillColor: 'FFFF0011',
+    width: 2
+  }),
+  {},
+  'QA — FIRST TRAINING SITE',
+  true
+);
+
+Map.centerObject(qaSite, 15);
+
+// ============================================================
+// END DIAGNOSTIC
+// ============================================================
+

@@ -1,0 +1,1185 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05C3B
+//
+// BARREN/FALLOW TARGETED 90 m EXPANSION QA
+//
+// PURPOSE
+// -------
+// One additional conservative automated attempt to recover
+// Barren/Fallow diversity and quantity.
+//
+// Anchors:
+//   ONLY 05A STABLE Barren/Fallow poly_id 62 and 64
+//
+// EXCLUDED:
+//   poly_id 63, because it already dominates current candidates.
+//
+// Thresholds remain IDENTICAL.
+// No validation.
+// No final training.
+// No MLC.
+// No map layers.
+//
+// OUTPUT TASK:
+// chennai_2010_barren_expansion_90m_05C3B
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSETS
+// ================================================================
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+var QA_05A_ASSET =
+  'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A';
+
+var PASSB_REQA_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+var RESCUED_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_rescued_uncertain_05C2A';
+
+var EXPANSION_60M_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_targeted_expansion_05C3A';
+
+var OUTPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_barren_expansion_90m_05C3B';
+
+
+// ================================================================
+// 2. SETTINGS
+// ================================================================
+
+var SCALE = 30;
+
+var EXPANSION_RADIUS_M = 90;
+
+var PREDICTORS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+var CLASS_IDS = [1, 2, 3, 4, 5];
+
+var DISTANCE_THRESHOLD = 1.25;
+
+var MARGIN_THRESHOLD = 0.25;
+
+var MIN_CLEAR_FOR_AUTO = 2;
+
+var MIN_LOCAL_FRACTION = 5 / 9;
+
+var MIN_VALID_NEIGHBOURS = 5;
+
+var EPSILON = 1e-6;
+
+var BARREN_CLASS_ID = 5;
+
+var TARGET_PER_CLASS = 120;
+
+
+// ================================================================
+// 3. LOAD MATERIALIZED INPUTS
+// ================================================================
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  );
+
+var qa05A =
+  ee.FeatureCollection(
+    QA_05A_ASSET
+  );
+
+var passB05C1 =
+  ee.FeatureCollection(
+    PASSB_REQA_ASSET
+  );
+
+var rescued05C2A =
+  ee.FeatureCollection(
+    RESCUED_ASSET
+  );
+
+var expansion60m =
+  ee.FeatureCollection(
+    EXPANSION_60M_ASSET
+  );
+
+var stackProjection =
+  stack2010
+    .select('blue')
+    .projection();
+
+
+// ================================================================
+// 4. BUILD CURRENT UNIQUE POOL
+// ================================================================
+//
+// 05C1 + genuinely new rescue points + 05C3A.
+//
+// distinct(auth_pixel_key) prevents duplicates.
+//
+// ================================================================
+
+var currentCandidates =
+  passB05C1
+
+    .merge(
+      rescued05C2A
+    )
+
+    .merge(
+      expansion60m
+    )
+
+    .distinct(
+      [
+        'auth_pixel_key'
+      ]
+    );
+
+
+var currentBarren =
+  currentCandidates.filter(
+    ee.Filter.eq(
+      'class_id',
+      BARREN_CLASS_ID
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '05C3B — CURRENT BARREN CHECK'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    current_total_candidates:
+      currentCandidates.size(),
+
+    current_barren_n:
+      currentBarren.size(),
+
+    current_barren_poly_histogram:
+      currentBarren.aggregate_histogram(
+        'poly_id'
+      )
+
+  })
+);
+
+
+// ================================================================
+// 5. LOAD ALL 05A STABLE ANCHORS
+// ================================================================
+
+var stableAnchors =
+  qa05A.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'STABLE'
+    )
+  );
+
+
+// ================================================================
+// 6. SELECT ONLY TRUSTED UNDERREPRESENTED BARREN ANCHORS
+// ================================================================
+//
+// poly 62 = five stable anchors
+// poly 64 = one stable anchor
+//
+// poly 63 deliberately excluded.
+//
+// ================================================================
+
+var barrenAnchors =
+  stableAnchors
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        BARREN_CLASS_ID
+      )
+    )
+
+    .filter(
+      ee.Filter.inList(
+        'poly_id',
+        [
+          62,
+          64
+        ]
+      )
+    );
+
+
+print(
+  ee.Dictionary({
+
+    barren_anchor_n:
+      barrenAnchors.size(),
+
+    barren_anchor_poly_histogram:
+      barrenAnchors.aggregate_histogram(
+        'poly_id'
+      )
+
+  })
+);
+
+
+// ================================================================
+// 7. REBUILD 2010-NATIVE SIGNATURES
+// ================================================================
+//
+// Same signatures as prior corrected stages.
+// ALL stable classes are used.
+//
+// ================================================================
+
+var nativeSeeds =
+  stack2010
+    .select(
+      PREDICTORS
+    )
+    .sampleRegions({
+
+      collection:
+        stableAnchors,
+
+      properties: [
+        'class_id',
+        'class_name',
+        'poly_id'
+      ],
+
+      scale:
+        SCALE,
+
+      projection:
+        stackProjection,
+
+      geometries:
+        true,
+
+      tileScale:
+        4
+
+    });
+
+
+function buildSignature(classId) {
+
+  var fc =
+    nativeSeeds.filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    );
+
+
+  var means =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          fc.aggregate_mean(
+            band
+          )
+        );
+
+      }
+    );
+
+
+  var sds =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          fc.aggregate_sample_sd(
+            band
+          )
+        )
+        .max(
+          EPSILON
+        );
+
+      }
+    );
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      means:
+        ee.List(
+          means
+        ),
+
+      sds:
+        ee.List(
+          sds
+        )
+
+    }
+  );
+
+}
+
+
+var nativeSignatures =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      buildSignature
+    )
+  );
+
+
+// ================================================================
+// 8. DISTANCE FUNCTION
+// ================================================================
+
+function distanceToClass(
+  image,
+  classId
+) {
+
+  var sig =
+    ee.Feature(
+      nativeSignatures
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+        .first()
+    );
+
+
+  var meanImage =
+    ee.Image.constant(
+      ee.List(
+        sig.get(
+          'means'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    );
+
+
+  var sdImage =
+    ee.Image.constant(
+      ee.List(
+        sig.get(
+          'sds'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    )
+    .max(
+      EPSILON
+    );
+
+
+  return image
+    .select(
+      PREDICTORS
+    )
+    .subtract(
+      meanImage
+    )
+    .divide(
+      sdImage
+    )
+    .pow(2)
+    .reduce(
+      ee.Reducer.mean()
+    )
+    .sqrt()
+    .rename(
+      'd' + classId
+    );
+
+}
+
+
+// ================================================================
+// 9. FIVE DISTANCE IMAGES
+// ================================================================
+
+var d1 = distanceToClass(stack2010, 1);
+var d2 = distanceToClass(stack2010, 2);
+var d3 = distanceToClass(stack2010, 3);
+var d4 = distanceToClass(stack2010, 4);
+var d5 = distanceToClass(stack2010, 5);
+
+var distanceImages = [
+  d1,
+  d2,
+  d3,
+  d4,
+  d5
+];
+
+var distanceStack =
+  ee.Image.cat(
+    distanceImages
+  );
+
+
+// ================================================================
+// 10. BEST + SECOND-BEST CLASS
+// ================================================================
+
+var bestDist =
+  d1.rename(
+    'best_dist'
+  );
+
+
+var bestClass =
+  ee.Image.constant(
+    1
+  )
+  .rename(
+    'best_class'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+var secondDist =
+  ee.Image.constant(
+    9999
+  )
+  .rename(
+    'second_dist'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+for (
+  var i = 1;
+  i < CLASS_IDS.length;
+  i++
+) {
+
+  var currentClass =
+    CLASS_IDS[i];
+
+  var currentDistance =
+    distanceImages[i];
+
+  var better =
+    currentDistance.lt(
+      bestDist
+    );
+
+  var previousBest =
+    bestDist;
+
+  var updatedSecond =
+    secondDist.where(
+      better,
+      previousBest
+    );
+
+  var currentAsSecond =
+    currentDistance.where(
+      better,
+      9999
+    );
+
+  updatedSecond =
+    updatedSecond.min(
+      currentAsSecond
+    );
+
+  bestDist =
+    previousBest
+      .where(
+        better,
+        currentDistance
+      )
+      .rename(
+        'best_dist'
+      );
+
+  bestClass =
+    bestClass
+      .where(
+        better,
+        currentClass
+      )
+      .rename(
+        'best_class'
+      );
+
+  secondDist =
+    updatedSecond
+      .rename(
+        'second_dist'
+      );
+
+}
+
+
+// ================================================================
+// 11. CLASS MARGIN
+// ================================================================
+
+var margin =
+  secondDist
+    .subtract(
+      bestDist
+    )
+    .rename(
+      'margin'
+    );
+
+
+// ================================================================
+// 12. LOCAL CONSISTENCY
+// ================================================================
+
+var kernel3x3 =
+  ee.Kernel.square({
+
+    radius:
+      1,
+
+    units:
+      'pixels',
+
+    normalize:
+      false
+
+  });
+
+
+var localValidN =
+  bestClass
+    .reduceNeighborhood({
+
+      reducer:
+        ee.Reducer.count(),
+
+      kernel:
+        kernel3x3,
+
+      skipMasked:
+        true
+
+    })
+    .rename(
+      'local_valid_n'
+    );
+
+
+var localSameN =
+  ee.Image.constant(
+    0
+  )
+  .rename(
+    'local_same_n'
+  )
+  .updateMask(
+    bestClass.mask()
+  );
+
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var neighbourCount =
+      bestClass
+        .eq(
+          classId
+        )
+        .reduceNeighborhood({
+
+          reducer:
+            ee.Reducer.sum(),
+
+          kernel:
+            kernel3x3,
+
+          skipMasked:
+            true
+
+        });
+
+
+    localSameN =
+      localSameN.where(
+
+        bestClass.eq(
+          classId
+        ),
+
+        neighbourCount
+
+      );
+
+  }
+);
+
+
+var localFraction =
+  localSameN
+    .divide(
+      localValidN.max(
+        1
+      )
+    )
+    .rename(
+      'local_fraction'
+    );
+
+
+// ================================================================
+// 13. BUILD 90 m EXPANSION ZONES
+// ================================================================
+
+var expansionZones =
+  barrenAnchors.map(
+    function(feature) {
+
+      return ee.Feature(
+
+        feature.geometry()
+          .buffer(
+            EXPANSION_RADIUS_M
+          ),
+
+        {
+
+          class_id:
+            5,
+
+          class_name:
+            'Barren/Fallow',
+
+          poly_id:
+            feature.get(
+              'poly_id'
+            ),
+
+          source:
+            '05C3B_90m_barren'
+
+        }
+
+      );
+
+    }
+  );
+
+
+// ================================================================
+// 14. AUTHORITATIVE PIXEL COORDINATES
+// ================================================================
+
+var pixelXY =
+  ee.Image.pixelCoordinates(
+    stackProjection
+  )
+  .rename(
+    [
+      'auth_px',
+      'auth_py'
+    ]
+  );
+
+
+// ================================================================
+// 15. CANDIDATE IMAGE
+// ================================================================
+
+var candidateImage =
+  stack2010
+    .select(
+      PREDICTORS
+    )
+
+    .addBands(
+      distanceStack
+    )
+
+    .addBands(
+      bestClass
+    )
+
+    .addBands(
+      bestDist
+    )
+
+    .addBands(
+      secondDist
+    )
+
+    .addBands(
+      margin
+    )
+
+    .addBands(
+      stack2010.select(
+        'clear_count'
+      )
+    )
+
+    .addBands(
+      localValidN
+    )
+
+    .addBands(
+      localFraction
+    )
+
+    .addBands(
+      pixelXY
+    );
+
+
+// ================================================================
+// 16. SAMPLE 90 m ZONES
+// ================================================================
+
+var candidatePool =
+  candidateImage.sampleRegions({
+
+    collection:
+      expansionZones,
+
+    properties: [
+      'class_id',
+      'class_name',
+      'poly_id',
+      'source'
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      stackProjection,
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+
+  });
+
+
+// ================================================================
+// 17. AUTHORITATIVE PIXEL KEY
+// ================================================================
+
+candidatePool =
+  candidatePool.map(
+    function(feature) {
+
+      var px =
+        ee.Number(
+          feature.get(
+            'auth_px'
+          )
+        );
+
+
+      var py =
+        ee.Number(
+          feature.get(
+            'auth_py'
+          )
+        );
+
+
+      var key =
+        px.format(
+          '%.0f'
+        )
+        .cat(
+          '_'
+        )
+        .cat(
+          py.format(
+            '%.0f'
+          )
+        );
+
+
+      return feature.set(
+        'auth_pixel_key',
+        key
+      );
+
+    }
+  );
+
+
+// ================================================================
+// 18. APPLY BARREN/FALLOW SCREEN
+// ================================================================
+
+var screened =
+  candidatePool.map(
+    function(feature) {
+
+      var predictedClass =
+        ee.Number(
+          feature.get(
+            'best_class'
+          )
+        );
+
+
+      var ownDistance =
+        ee.Number(
+          feature.get(
+            'd5'
+          )
+        );
+
+
+      var classMargin =
+        ee.Number(
+          feature.get(
+            'margin'
+          )
+        );
+
+
+      var clearCount =
+        ee.Number(
+          feature.get(
+            'clear_count'
+          )
+        );
+
+
+      var localN =
+        ee.Number(
+          feature.get(
+            'local_valid_n'
+          )
+        );
+
+
+      var localFrac =
+        ee.Number(
+          feature.get(
+            'local_fraction'
+          )
+        );
+
+
+      var accepted =
+        clearCount
+          .gte(
+            MIN_CLEAR_FOR_AUTO
+          )
+
+          .and(
+            predictedClass.eq(
+              BARREN_CLASS_ID
+            )
+          )
+
+          .and(
+            ownDistance.lte(
+              DISTANCE_THRESHOLD
+            )
+          )
+
+          .and(
+            classMargin.gte(
+              MARGIN_THRESHOLD
+            )
+          )
+
+          .and(
+            localN.gte(
+              MIN_VALID_NEIGHBOURS
+            )
+          )
+
+          .and(
+            localFrac.gte(
+              MIN_LOCAL_FRACTION
+            )
+          );
+
+
+      return feature.set({
+
+        barren_distance:
+          ownDistance,
+
+        barren_margin:
+          classMargin,
+
+        accepted:
+          ee.Number(
+            ee.Algorithms.If(
+              accepted,
+              1,
+              0
+            )
+          ),
+
+        expansion_radius_m:
+          EXPANSION_RADIUS_M
+
+      });
+
+    }
+  );
+
+
+// ================================================================
+// 19. ACCEPT + DEDUP
+// ================================================================
+
+var acceptedRaw =
+  screened.filter(
+    ee.Filter.eq(
+      'accepted',
+      1
+    )
+  );
+
+
+var acceptedUnique =
+  acceptedRaw.distinct(
+    [
+      'auth_pixel_key'
+    ]
+  );
+
+
+// ================================================================
+// 20. REMOVE PIXELS ALREADY IN CURRENT POOL
+// ================================================================
+
+var currentKeys =
+  ee.List(
+    currentCandidates.aggregate_array(
+      'auth_pixel_key'
+    )
+  );
+
+
+var tagged =
+  acceptedUnique.map(
+    function(feature) {
+
+      var duplicate =
+        currentKeys.contains(
+          feature.get(
+            'auth_pixel_key'
+          )
+        );
+
+
+      return feature.set(
+        'already_exists',
+        ee.Number(
+          ee.Algorithms.If(
+            duplicate,
+            1,
+            0
+          )
+        )
+      );
+
+    }
+  );
+
+
+var newBarrenCandidates =
+  tagged.filter(
+    ee.Filter.eq(
+      'already_exists',
+      0
+    )
+  );
+
+
+// ================================================================
+// 21. PROJECTED BARREN POOL
+// ================================================================
+
+var projectedBarren =
+  currentBarren
+
+    .merge(
+      newBarrenCandidates
+    )
+
+    .distinct(
+      [
+        'auth_pixel_key'
+      ]
+    );
+
+
+// ================================================================
+// 22. QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05C3B — 90 m BARREN EXPANSION RESULTS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    raw_candidate_rows:
+      candidatePool.size(),
+
+    accepted_before_dedup:
+      acceptedRaw.size(),
+
+    accepted_unique:
+      acceptedUnique.size(),
+
+    genuinely_new_barren:
+      newBarrenCandidates.size(),
+
+    current_barren:
+      currentBarren.size(),
+
+    projected_barren:
+      projectedBarren.size(),
+
+    projected_deficit:
+      ee.Number(
+        TARGET_PER_CLASS
+      )
+      .subtract(
+        projectedBarren.size()
+      )
+      .max(
+        0
+      )
+
+  })
+);
+
+
+print(
+  'NEW Barren poly_id histogram'
+);
+
+
+print(
+  newBarrenCandidates.aggregate_histogram(
+    'poly_id'
+  )
+);
+
+
+print(
+  'PROJECTED Barren poly_id histogram'
+);
+
+
+print(
+  projectedBarren.aggregate_histogram(
+    'poly_id'
+  )
+);
+
+
+// ================================================================
+// 23. EXPORT TASK
+// ================================================================
+//
+// DO NOT START YET.
+// REVIEW RESULTS FIRST.
+//
+// ================================================================
+
+Export.table.toAsset({
+
+  collection:
+    newBarrenCandidates,
+
+  description:
+    'chennai_2010_barren_expansion_90m_05C3B',
+
+  assetId:
+    OUTPUT_ASSET
+
+});
+
+
+print(
+  '========================================'
+);
+
+print(
+  '05C3B FINISHED'
+);
+
+print(
+  'DO NOT RUN AGAIN.'
+);
+
+print(
+  'DO NOT START EXPORT UNTIL QA IS REVIEWED.'
+);
+
+print(
+  '========================================'
+);

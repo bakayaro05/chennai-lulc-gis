@@ -1,0 +1,32 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var table = ee.FeatureCollection("projects/assignment-482806/assets/chennai_gcc_wards_corrected_shapefile"),
+    table2 = ee.FeatureCollection("projects/assignment-482806/assets/chennai_gcc_wards_corrected_shapefile"),
+    table3 = ee.FeatureCollection("projects/assignment-482806/assets/chennai_urban_study_area_expanded"),
+    table4 = ee.FeatureCollection("projects/assignment-482806/assets/chennai_admin_study_area");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+var chennaiStudyArea = ee.FeatureCollection(
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean'
+);
+
+var chennaiROI = chennaiStudyArea.geometry();
+
+var areaUTM = chennaiROI
+  .area(1, ee.Projection('EPSG:32644'))
+  .divide(1e6);
+
+print(
+  'Final Chennai Urban Study Area - EPSG:32644 (sq km):',
+  areaUTM
+);
+
+Map.addLayer(
+  chennaiStudyArea.style({
+    color: 'red',
+    fillColor: '00000000',
+    width: 3
+  }),
+  {},
+  'FINAL Chennai Urban Study Area'
+);
+
+Map.centerObject(chennaiROI, 10);

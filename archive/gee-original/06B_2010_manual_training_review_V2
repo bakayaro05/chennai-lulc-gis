@@ -1,0 +1,1466 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 06B
+//
+// 2010 MANUAL / SEMI-MANUAL TRAINING REVIEW V2
+//
+// PURPOSE
+// -------
+// Revisit the ORIGINAL 600 transferred 2015 training locations
+// using the successful manual-heavy philosophy used for 2015.
+//
+// IMPORTANT:
+// - We DO NOT automatically accept/reject based on 05A status.
+// - STABLE / UNCERTAIN / CHANGED are only REVIEW AIDS.
+// - Human interpretation of the 2010 imagery decides whether a
+//   source poly_id remains valid for the same class in 2010.
+//
+// REUSED ASSETS
+// -------------
+// Authoritative 2010 predictor stack:
+// chennai_predictor_stack_2010
+//
+// Original 2015 -> 2010 transfer QA:
+// chennai_transfer_2015_to_2010_QA_05A
+//
+// NO EXPORT.
+// NO CLASSIFIER.
+// NO VALIDATION.
+// NO V1 CLASSIFICATION IS DISPLAYED.
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSETS
+// ================================================================
+
+var ROI_ASSET =
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean';
+
+
+var STACK_2010_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var TRANSFER_05A_ASSET =
+  'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A';
+
+
+// ================================================================
+// 2. LOAD
+// ================================================================
+
+var roiFC =
+  ee.FeatureCollection(
+    ROI_ASSET
+  );
+
+
+var stack2010 =
+  ee.Image(
+    STACK_2010_ASSET
+  );
+
+
+var transfer05A =
+  ee.FeatureCollection(
+    TRANSFER_05A_ASSET
+  );
+
+
+// ================================================================
+// 3. INPUT QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06B — INPUT QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  '05A transferred training total'
+);
+
+
+print(
+  transfer05A.size()
+);
+
+
+print(
+  'Class histogram'
+);
+
+
+print(
+  transfer05A.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+print(
+  'Transfer-status histogram'
+);
+
+
+print(
+  transfer05A.aggregate_histogram(
+    'transfer_status'
+  )
+);
+
+
+// ================================================================
+// 4. BUILD PER-POLY_ID REVIEW SUMMARY
+// ================================================================
+//
+// One summary row per original source training polygon.
+//
+// These summaries DO NOT make acceptance decisions.
+//
+// ================================================================
+
+var groupKeys =
+  transfer05A
+    .distinct(
+      [
+        'class_id',
+        'poly_id'
+      ]
+    );
+
+
+var groupList =
+  groupKeys.toList(
+    groupKeys.size()
+  );
+
+
+var groupIndices =
+  ee.List.sequence(
+    0,
+    groupKeys.size().subtract(1)
+  );
+
+
+var perPolySummary =
+  ee.FeatureCollection(
+
+    groupIndices.map(
+      function(index) {
+
+        index =
+          ee.Number(index);
+
+
+        var keyFeature =
+          ee.Feature(
+            groupList.get(index)
+          );
+
+
+        var classId =
+          keyFeature.get(
+            'class_id'
+          );
+
+
+        var polyId =
+          keyFeature.get(
+            'poly_id'
+          );
+
+
+        var group =
+          transfer05A
+
+            .filter(
+              ee.Filter.eq(
+                'class_id',
+                classId
+              )
+            )
+
+            .filter(
+              ee.Filter.eq(
+                'poly_id',
+                polyId
+              )
+            );
+
+
+        var stableN =
+          group
+            .filter(
+              ee.Filter.eq(
+                'transfer_status',
+                'STABLE'
+              )
+            )
+            .size();
+
+
+        var uncertainN =
+          group
+            .filter(
+              ee.Filter.eq(
+                'transfer_status',
+                'UNCERTAIN'
+              )
+            )
+            .size();
+
+
+        var changedN =
+          group
+            .filter(
+              ee.Filter.eq(
+                'transfer_status',
+                'CHANGED'
+              )
+            )
+            .size();
+
+
+        var noDataN =
+          group
+            .filter(
+              ee.Filter.eq(
+                'transfer_status',
+                'NO_DATA'
+              )
+            )
+            .size();
+
+
+        var totalN =
+          group.size();
+
+
+        var stableFraction =
+          ee.Number(
+            stableN
+          )
+          .divide(
+            totalN
+          );
+
+
+        return ee.Feature(
+          group.geometry().convexHull(30),
+          {
+
+            class_id:
+              classId,
+
+            class_name:
+              keyFeature.get(
+                'class_name'
+              ),
+
+            poly_id:
+              polyId,
+
+            total_n:
+              totalN,
+
+            stable_n:
+              stableN,
+
+            uncertain_n:
+              uncertainN,
+
+            changed_n:
+              changedN,
+
+            no_data_n:
+              noDataN,
+
+            stable_fraction:
+              stableFraction
+
+          }
+        );
+
+      }
+    )
+
+  )
+  .sort(
+    'class_id'
+  );
+
+
+// ================================================================
+// 5. PRINT COMPLETE GROUP REVIEW TABLE
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06B — SOURCE POLYGON REVIEW TABLE'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  perPolySummary
+);
+
+
+// ================================================================
+// 6. CLASS-WISE SOURCE POLY_ID LISTS
+// ================================================================
+
+[1, 2, 3, 4, 5].forEach(
+  function(classId) {
+
+    var classSummary =
+      perPolySummary.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        poly_id_count:
+          classSummary.size(),
+
+        poly_ids:
+          classSummary.aggregate_array(
+            'poly_id'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 7. BASE MAP
+// ================================================================
+
+Map.layers().reset();
+
+
+Map.setOptions(
+  'SATELLITE'
+);
+
+
+// ------------------------------------------------
+// 2010 TRUE COLOUR
+// ------------------------------------------------
+
+Map.addLayer(
+
+  stack2010,
+
+  {
+
+    bands: [
+      'red',
+      'green',
+      'blue'
+    ],
+
+    min:
+      0.02,
+
+    max:
+      0.30
+
+  },
+
+  '2010 TRUE COLOUR',
+
+  true
+
+);
+
+
+// ------------------------------------------------
+// 2010 FALSE COLOUR — NIR / RED / GREEN
+// ------------------------------------------------
+
+Map.addLayer(
+
+  stack2010,
+
+  {
+
+    bands: [
+      'nir',
+      'red',
+      'green'
+    ],
+
+    min:
+      0.02,
+
+    max:
+      0.35
+
+  },
+
+  '2010 FALSE COLOUR (NIR-R-G)',
+
+  false
+
+);
+
+
+// ------------------------------------------------
+// NDVI
+// ------------------------------------------------
+
+Map.addLayer(
+
+  stack2010.select(
+    'NDVI'
+  ),
+
+  {
+
+    min:
+      -0.2,
+
+    max:
+      0.8,
+
+    palette: [
+      '8c510a',
+      'd8b365',
+      'f6e8c3',
+      'c7eae5',
+      '5ab4ac',
+      '01665e'
+    ]
+
+  },
+
+  '2010 NDVI',
+
+  false
+
+);
+
+
+// ------------------------------------------------
+// NDWI
+// ------------------------------------------------
+
+Map.addLayer(
+
+  stack2010.select(
+    'NDWI'
+  ),
+
+  {
+
+    min:
+      -0.6,
+
+    max:
+      0.6,
+
+    palette: [
+      '8c510a',
+      'f7f7f7',
+      '2166ac'
+    ]
+
+  },
+
+  '2010 NDWI',
+
+  false
+
+);
+
+
+// ------------------------------------------------
+// NDBI
+// ------------------------------------------------
+
+Map.addLayer(
+
+  stack2010.select(
+    'NDBI'
+  ),
+
+  {
+
+    min:
+      -0.5,
+
+    max:
+      0.5,
+
+    palette: [
+      '2166ac',
+      'f7f7f7',
+      'b2182b'
+    ]
+
+  },
+
+  '2010 NDBI',
+
+  false
+
+);
+
+
+// ================================================================
+// 8. ALL ORIGINAL TRANSFER LOCATIONS
+// ================================================================
+
+Map.addLayer(
+
+  transfer05A.style({
+
+    color:
+      'ffffff',
+
+    pointSize:
+      3,
+
+    width:
+      1
+
+  }),
+
+  {},
+
+  'All original 600 transferred locations',
+
+  false
+
+);
+
+
+// ================================================================
+// 9. TRANSFER-STATUS REVIEW LAYERS
+// ================================================================
+//
+// These are ONLY visual aids.
+//
+// Green  = automatically considered stable
+// Yellow = uncertain
+// Red    = changed
+//
+// Manual review may override these classifications.
+//
+// ================================================================
+
+var stablePoints =
+  transfer05A.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'STABLE'
+    )
+  );
+
+
+var uncertainPoints =
+  transfer05A.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'UNCERTAIN'
+    )
+  );
+
+
+var changedPoints =
+  transfer05A.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'CHANGED'
+    )
+  );
+
+
+Map.addLayer(
+
+  stablePoints.style({
+
+    color:
+      '00ff00',
+
+    pointSize:
+      5,
+
+    width:
+      1
+
+  }),
+
+  {},
+
+  '05A STABLE — review aid',
+
+  false
+
+);
+
+
+Map.addLayer(
+
+  uncertainPoints.style({
+
+    color:
+      'ffff00',
+
+    pointSize:
+      5,
+
+    width:
+      1
+
+  }),
+
+  {},
+
+  '05A UNCERTAIN — review aid',
+
+  false
+
+);
+
+
+Map.addLayer(
+
+  changedPoints.style({
+
+    color:
+      'ff0000',
+
+    pointSize:
+      5,
+
+    width:
+      1
+
+  }),
+
+  {},
+
+  '05A CHANGED — review aid',
+
+  false
+
+);
+
+
+// ================================================================
+// 10. CLASS-SPECIFIC POINT LAYERS
+// ================================================================
+
+var builtPoints =
+  transfer05A.filter(
+    ee.Filter.eq(
+      'class_id',
+      1
+    )
+  );
+
+
+var vegPoints =
+  transfer05A.filter(
+    ee.Filter.eq(
+      'class_id',
+      2
+    )
+  );
+
+
+var waterPoints =
+  transfer05A.filter(
+    ee.Filter.eq(
+      'class_id',
+      3
+    )
+  );
+
+
+var agriPoints =
+  transfer05A.filter(
+    ee.Filter.eq(
+      'class_id',
+      4
+    )
+  );
+
+
+var barrenPoints =
+  transfer05A.filter(
+    ee.Filter.eq(
+      'class_id',
+      5
+    )
+  );
+
+
+Map.addLayer(
+
+  builtPoints.style({
+    color: 'ff0000',
+    pointSize: 5
+  }),
+
+  {},
+
+  'CLASS 1 — Built-up',
+
+  false
+
+);
+
+
+Map.addLayer(
+
+  vegPoints.style({
+    color: '00ff00',
+    pointSize: 5
+  }),
+
+  {},
+
+  'CLASS 2 — Vegetation',
+
+  false
+
+);
+
+
+Map.addLayer(
+
+  waterPoints.style({
+    color: '00ffff',
+    pointSize: 5
+  }),
+
+  {},
+
+  'CLASS 3 — Water',
+
+  false
+
+);
+
+
+Map.addLayer(
+
+  agriPoints.style({
+    color: 'ffff00',
+    pointSize: 5
+  }),
+
+  {},
+
+  'CLASS 4 — Agricultural/Open',
+
+  false
+
+);
+
+
+Map.addLayer(
+
+  barrenPoints.style({
+    color: 'ff00ff',
+    pointSize: 5
+  }),
+
+  {},
+
+  'CLASS 5 — Barren/Fallow',
+
+  false
+
+);
+
+
+// ================================================================
+// 11. ROI
+// ================================================================
+
+Map.addLayer(
+
+  roiFC.style({
+
+    color:
+      'ffffff',
+
+    fillColor:
+      '00000000',
+
+    width:
+      2
+
+  }),
+
+  {},
+
+  'Chennai ROI',
+
+  true
+
+);
+
+
+Map.centerObject(
+  roiFC,
+  10
+);
+
+
+// ================================================================
+// 12. INTERACTIVE SOURCE-GROUP REVIEW PANEL
+// ================================================================
+//
+// Select a CLASS and original poly_id.
+//
+// The map automatically zooms to that source group and displays:
+//
+// GREEN  = stable points
+// YELLOW = uncertain points
+// RED    = changed points
+//
+// Again: these colours are ONLY screening history.
+// YOU decide whether the whole/part of the source area is
+// appropriate training for 2010.
+//
+// ================================================================
+
+var panel =
+  ui.Panel({
+
+    style: {
+
+      width:
+        '340px',
+
+      padding:
+        '10px'
+
+    }
+
+  });
+
+
+panel.add(
+  ui.Label({
+
+    value:
+      '2010 Manual Training Review V2',
+
+    style: {
+
+      fontWeight:
+        'bold',
+
+      fontSize:
+        '18px',
+
+      margin:
+        '0 0 10px 0'
+
+    }
+
+  })
+);
+
+
+panel.add(
+  ui.Label(
+    'Review original 2015 source groups against the 2010 imagery.'
+  )
+);
+
+
+panel.add(
+  ui.Label(
+    '05A Stable / Uncertain / Changed status is only a visual aid.'
+  )
+);
+
+
+// ================================================================
+// CLASS SELECTOR
+// ================================================================
+
+var classSelect =
+  ui.Select({
+
+    items: [
+
+      {
+        label:
+          '1 — Built-up',
+
+        value:
+          '1'
+      },
+
+      {
+        label:
+          '2 — Vegetation',
+
+        value:
+          '2'
+      },
+
+      {
+        label:
+          '3 — Water',
+
+        value:
+          '3'
+      },
+
+      {
+        label:
+          '4 — Agricultural/Open',
+
+        value:
+          '4'
+      },
+
+      {
+        label:
+          '5 — Barren/Fallow',
+
+        value:
+          '5'
+      }
+
+    ],
+
+    value:
+      '1',
+
+    style: {
+      stretch:
+        'horizontal'
+    }
+
+  });
+
+
+panel.add(
+  ui.Label(
+    'Class'
+  )
+);
+
+
+panel.add(
+  classSelect
+);
+
+
+// ================================================================
+// POLY_ID SELECTOR
+// ================================================================
+
+var polySelect =
+  ui.Select({
+
+    placeholder:
+      'Choose poly_id',
+
+    style: {
+      stretch:
+        'horizontal'
+    }
+
+  });
+
+
+panel.add(
+  ui.Label(
+    'Original source poly_id'
+  )
+);
+
+
+panel.add(
+  polySelect
+);
+
+
+// ================================================================
+// GROUP SUMMARY LABEL
+// ================================================================
+
+var summaryLabel =
+  ui.Label({
+
+    value:
+      'Choose a source group.',
+
+    style: {
+
+      whiteSpace:
+        'pre',
+
+      margin:
+        '10px 0 0 0'
+
+    }
+
+  });
+
+
+panel.add(
+  summaryLabel
+);
+
+
+// ================================================================
+// REVIEW INSTRUCTION
+// ================================================================
+
+panel.add(
+  ui.Label({
+
+    value:
+      '\nMANUAL DECISION:\n' +
+      'ACCEPT if the 2010 imagery clearly still represents the ' +
+      'same LULC class.\n\n' +
+      'REJECT if it changed class, is mixed/ambiguous, or would ' +
+      'provide poor training.\n\n' +
+      'For partially valid source groups, note PARTIAL rather ' +
+      'than accepting the whole group.',
+
+    style: {
+
+      fontWeight:
+        'bold',
+
+      fontSize:
+        '12px'
+
+    }
+
+  })
+);
+
+
+// ================================================================
+// DYNAMIC MAP LAYERS
+// ================================================================
+
+var selectedStableLayer =
+  ui.Map.Layer(
+    ee.FeatureCollection([]),
+    {},
+    'SELECTED GROUP — STABLE',
+    true
+  );
+
+
+var selectedUncertainLayer =
+  ui.Map.Layer(
+    ee.FeatureCollection([]),
+    {},
+    'SELECTED GROUP — UNCERTAIN',
+    true
+  );
+
+
+var selectedChangedLayer =
+  ui.Map.Layer(
+    ee.FeatureCollection([]),
+    {},
+    'SELECTED GROUP — CHANGED',
+    true
+  );
+
+
+Map.layers().add(
+  selectedStableLayer
+);
+
+
+Map.layers().add(
+  selectedUncertainLayer
+);
+
+
+Map.layers().add(
+  selectedChangedLayer
+);
+
+
+// ================================================================
+// SHOW SELECTED GROUP
+// ================================================================
+
+function showSelectedGroup() {
+
+  var classValue =
+    classSelect.getValue();
+
+
+  var polyValue =
+    polySelect.getValue();
+
+
+  if (
+    classValue === null ||
+    polyValue === null
+  ) {
+
+    return;
+
+  }
+
+
+  var classId =
+    Number(
+      classValue
+    );
+
+
+  var polyId =
+    Number(
+      polyValue
+    );
+
+
+  var selectedGroup =
+    transfer05A
+
+      .filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      )
+
+      .filter(
+        ee.Filter.eq(
+          'poly_id',
+          polyId
+        )
+      );
+
+
+  var selectedStable =
+    selectedGroup.filter(
+      ee.Filter.eq(
+        'transfer_status',
+        'STABLE'
+      )
+    );
+
+
+  var selectedUncertain =
+    selectedGroup.filter(
+      ee.Filter.eq(
+        'transfer_status',
+        'UNCERTAIN'
+      )
+    );
+
+
+  var selectedChanged =
+    selectedGroup.filter(
+      ee.Filter.eq(
+        'transfer_status',
+        'CHANGED'
+      )
+    );
+
+
+  selectedStableLayer.setEeObject(
+
+    selectedStable.style({
+
+      color:
+        '00ff00',
+
+      pointSize:
+        8,
+
+      width:
+        2
+
+    })
+
+  );
+
+
+  selectedUncertainLayer.setEeObject(
+
+    selectedUncertain.style({
+
+      color:
+        'ffff00',
+
+      pointSize:
+        8,
+
+      width:
+        2
+
+    })
+
+  );
+
+
+  selectedChangedLayer.setEeObject(
+
+    selectedChanged.style({
+
+      color:
+        'ff0000',
+
+      pointSize:
+        8,
+
+      width:
+        2
+
+    })
+
+  );
+
+
+  Map.centerObject(
+    selectedGroup,
+    15
+  );
+
+
+  var summary =
+    ee.Dictionary({
+
+      class_id:
+        classId,
+
+      poly_id:
+        polyId,
+
+      total_n:
+        selectedGroup.size(),
+
+      stable_n:
+        selectedStable.size(),
+
+      uncertain_n:
+        selectedUncertain.size(),
+
+      changed_n:
+        selectedChanged.size()
+
+    });
+
+
+  summary.evaluate(
+    function(result) {
+
+      summaryLabel.setValue(
+
+        'Class ID: ' +
+        result.class_id +
+
+        '\npoly_id: ' +
+        result.poly_id +
+
+        '\nTotal points: ' +
+        result.total_n +
+
+        '\nStable: ' +
+        result.stable_n +
+
+        '\nUncertain: ' +
+        result.uncertain_n +
+
+        '\nChanged: ' +
+        result.changed_n
+
+      );
+
+    }
+  );
+
+}
+
+
+// ================================================================
+// UPDATE POLY_ID LIST WHEN CLASS CHANGES
+// ================================================================
+
+function updatePolyOptions() {
+
+  var classValue =
+    classSelect.getValue();
+
+
+  var classId =
+    Number(
+      classValue
+    );
+
+
+  var polyIds =
+    transfer05A
+
+      .filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      )
+
+      .aggregate_array(
+        'poly_id'
+      )
+
+      .distinct()
+
+      .sort();
+
+
+  polyIds.evaluate(
+    function(values) {
+
+      var stringValues =
+        values.map(
+          function(value) {
+
+            return String(
+              value
+            );
+
+          }
+        );
+
+
+      polySelect.items().reset(
+        stringValues
+      );
+
+
+      if (
+        stringValues.length > 0
+      ) {
+
+        polySelect.setValue(
+          stringValues[0],
+          true
+        );
+
+      }
+
+    }
+  );
+
+}
+
+
+classSelect.onChange(
+  updatePolyOptions
+);
+
+
+polySelect.onChange(
+  showSelectedGroup
+);
+
+
+// ================================================================
+// 13. ADD PANEL
+// ================================================================
+
+ui.root.insert(
+  0,
+  panel
+);
+
+
+// ================================================================
+// 14. INITIALIZE
+// ================================================================
+
+updatePolyOptions();
+
+
+// ================================================================
+// 15. FINAL CONSOLE INSTRUCTIONS
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06B READY FOR MANUAL REVIEW'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'Use the panel at left.'
+);
+
+
+print(
+  'Review each source poly_id against 2010 imagery.'
+);
+
+
+print(
+  'Record each as ACCEPT / REJECT / PARTIAL.'
+);
+
+
+print(
+  'DO NOT use the failed V1 classification as evidence.'
+);
+
+
+print(
+  'DO NOT use the validation polygons during training review.'
+);
+
+
+print(
+  'NO EXPORT IS CREATED BY THIS SCRIPT.'
+);
+
+
+print(
+  '========================================'
+);

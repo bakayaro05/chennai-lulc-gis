@@ -1,0 +1,1622 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var barrenAdd2010 = /* color: #d63000 */ee.Geometry.MultiPolygon(
+        [[[[80.09569267074758, 12.945813188014284],
+           [80.09726980964834, 12.945525644149265],
+           [80.09750584404165, 12.946916307764518],
+           [80.09572485725576, 12.947345007013539]]],
+         [[[80.07175366774163, 12.934504624258938],
+           [80.07218282118401, 12.931723150837758],
+           [80.07419984236321, 12.931911371821826],
+           [80.07516543760858, 12.934379144922861]]],
+         [[[80.27042243195926, 13.133568618438408],
+           [80.26807281686222, 13.134864192067507],
+           [80.26663515283023, 13.133234275747068],
+           [80.26918861581241, 13.13177152112039]]],
+         [[[80.27688708866364, 13.139527789019015],
+           [80.27421560848481, 13.140311383896911],
+           [80.27411904896027, 13.13732326201053],
+           [80.276050239451, 13.136696378677195]]],
+         [[[80.31640532719156, 13.19449951027295],
+           [80.3179985593464, 13.19425926127229],
+           [80.31835261093637, 13.195382162182337],
+           [80.31686666714212, 13.19566941507472]]],
+         [[[80.28358436588289, 13.13054427800792],
+           [80.28516150478364, 13.130194258681536],
+           [80.28544581893922, 13.131301780812425],
+           [80.28458214763643, 13.131510746692182],
+           [80.28446413043977, 13.131056245676515],
+           [80.28370774749757, 13.130706227079713]]]]);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05C4B
+//
+// MANUAL BARREN/FALLOW POLYGON SAMPLING + QA
+//
+// REQUIRED IMPORT:
+// barrenAdd2010
+//
+// barrenAdd2010 is ONE Geometry import containing 6 polygons.
+//
+// PURPOSE
+// -------
+// 1. Split the 6 manually reviewed polygons
+// 2. Assign new source IDs 301-306
+// 3. Sample the authoritative 2010 predictor stack
+// 4. Remove exact pixels already present in current candidate pool
+// 5. Check clear observation availability
+// 6. Calculate the same 2010-native spectral diagnostics
+// 7. Report:
+//      - number of pixels per polygon
+//      - clear pixels
+//      - duplicate pixels
+//      - predicted-class distribution
+//      - strict automatic-pass count
+//
+// IMPORTANT
+// ---------
+// This is QA ONLY.
+//
+// NO:
+// - validation
+// - final training export
+// - MLC
+// - threshold changes
+// - map layers
+//
+// NO EXPORT TASK IS CREATED.
+//
+// ================================================================
+
+
+// ================================================================
+// 1. REQUIRED GEOMETRY IMPORT
+// ================================================================
+
+// This line intentionally checks that your imported geometry exists.
+
+barrenAdd2010;
+
+
+// ================================================================
+// 2. ASSETS
+// ================================================================
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var QA_05A_ASSET =
+  'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A';
+
+
+var PASSB_REQA_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+
+var RESCUED_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_rescued_uncertain_05C2A';
+
+
+var EXPANSION_60M_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_targeted_expansion_05C3A';
+
+
+// ================================================================
+// 3. LOCKED SETTINGS
+// ================================================================
+
+var SCALE =
+  30;
+
+
+var PREDICTORS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+var CLASS_IDS =
+  [1, 2, 3, 4, 5];
+
+
+var CLASS_NAMES = [
+
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+
+];
+
+
+var BARREN_CLASS_ID =
+  5;
+
+
+var DISTANCE_THRESHOLD =
+  1.25;
+
+
+var MARGIN_THRESHOLD =
+  0.25;
+
+
+var MIN_CLEAR_FOR_AUTO =
+  2;
+
+
+var MIN_LOCAL_FRACTION =
+  5 / 9;
+
+
+var MIN_VALID_NEIGHBOURS =
+  5;
+
+
+var EPSILON =
+  1e-6;
+
+
+// ================================================================
+// 4. LOAD MATERIALIZED INPUTS
+// ================================================================
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  );
+
+
+var qa05A =
+  ee.FeatureCollection(
+    QA_05A_ASSET
+  );
+
+
+var passB05C1 =
+  ee.FeatureCollection(
+    PASSB_REQA_ASSET
+  );
+
+
+var rescued05C2A =
+  ee.FeatureCollection(
+    RESCUED_ASSET
+  );
+
+
+var expansion60 =
+  ee.FeatureCollection(
+    EXPANSION_60M_ASSET
+  );
+
+
+var stackProjection =
+  stack2010
+    .select(
+      'blue'
+    )
+    .projection();
+
+
+// ================================================================
+// 5. CURRENT UNIQUE 2010 CANDIDATE POOL
+// ================================================================
+//
+// 05C1 + 05C2A + 05C3A
+//
+// ================================================================
+
+var currentCandidates =
+  passB05C1
+
+    .merge(
+      rescued05C2A
+    )
+
+    .merge(
+      expansion60
+    )
+
+    .distinct(
+      [
+        'auth_pixel_key'
+      ]
+    );
+
+
+var currentBarren =
+  currentCandidates.filter(
+    ee.Filter.eq(
+      'class_id',
+      5
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '05C4B — INPUT CHECK'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    current_total_candidates:
+      currentCandidates.size(),
+
+    current_barren_candidates:
+      currentBarren.size()
+
+  })
+);
+
+
+// ================================================================
+// 6. SPLIT THE IMPORTED MULTIPOLYGON
+// ================================================================
+//
+// barrenAdd2010 currently contains six polygons.
+//
+// Assign:
+// polygon 1 -> poly_id 301
+// polygon 2 -> poly_id 302
+// ...
+//
+// ================================================================
+
+var manualGeometry =
+  ee.Geometry(
+    barrenAdd2010
+  );
+
+
+var geometryParts =
+  manualGeometry.geometries();
+
+
+var manualPolygonCount =
+  geometryParts.size();
+
+
+var manualPolygonIndices =
+  ee.List.sequence(
+    0,
+    manualPolygonCount.subtract(
+      1
+    )
+  );
+
+
+var manualPolygons =
+  ee.FeatureCollection(
+
+    manualPolygonIndices.map(
+      function(index) {
+
+        index =
+          ee.Number(
+            index
+          );
+
+
+        var geometry =
+          ee.Geometry(
+            geometryParts.get(
+              index
+            )
+          );
+
+
+        var newPolyId =
+          index.add(
+            301
+          );
+
+
+        return ee.Feature(
+          geometry,
+          {
+
+            class_id:
+              5,
+
+            class_name:
+              'Barren/Fallow',
+
+            poly_id:
+              newPolyId,
+
+            manual_poly_number:
+              index.add(
+                1
+              ),
+
+            source:
+              'manual_2010_barren'
+
+          }
+        );
+
+      }
+    )
+
+  );
+
+
+print(
+  ee.String(
+    'Manual polygon count = '
+  )
+  .cat(
+    manualPolygonCount.format(
+      '%d'
+    )
+  )
+);
+
+
+print(
+  'Assigned manual poly_ids'
+);
+
+
+print(
+  manualPolygons.aggregate_array(
+    'poly_id'
+  )
+);
+
+
+// ================================================================
+// 7. REBUILD AUTHORITATIVE 2010-NATIVE SIGNATURES
+// ================================================================
+//
+// Same reference basis used by our corrected automation.
+//
+// ONLY 05A STABLE anchors define the class signatures.
+//
+// ================================================================
+
+var stableAnchors =
+  qa05A.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'STABLE'
+    )
+  );
+
+
+var nativeSeeds =
+  stack2010
+    .select(
+      PREDICTORS
+    )
+    .sampleRegions({
+
+      collection:
+        stableAnchors,
+
+      properties: [
+        'class_id',
+        'class_name',
+        'poly_id'
+      ],
+
+      scale:
+        SCALE,
+
+      projection:
+        stackProjection,
+
+      geometries:
+        true,
+
+      tileScale:
+        4
+
+    });
+
+
+function buildSignature(
+  classId
+) {
+
+  var classSamples =
+    nativeSeeds.filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    );
+
+
+  var means =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_mean(
+            band
+          )
+        );
+
+      }
+    );
+
+
+  var sds =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_sample_sd(
+            band
+          )
+        )
+        .max(
+          EPSILON
+        );
+
+      }
+    );
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      means:
+        ee.List(
+          means
+        ),
+
+      sds:
+        ee.List(
+          sds
+        )
+
+    }
+  );
+
+}
+
+
+var nativeSignatures =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      buildSignature
+    )
+  );
+
+
+// ================================================================
+// 8. DISTANCE FUNCTION
+// ================================================================
+
+function distanceToClass(
+  image,
+  classId
+) {
+
+  var signature =
+    ee.Feature(
+      nativeSignatures
+
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+
+        .first()
+    );
+
+
+  var meanImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'means'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    );
+
+
+  var sdImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'sds'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    )
+    .max(
+      EPSILON
+    );
+
+
+  return image
+    .select(
+      PREDICTORS
+    )
+
+    .subtract(
+      meanImage
+    )
+
+    .divide(
+      sdImage
+    )
+
+    .pow(
+      2
+    )
+
+    .reduce(
+      ee.Reducer.mean()
+    )
+
+    .sqrt()
+
+    .rename(
+      'd' + classId
+    );
+
+}
+
+
+// ================================================================
+// 9. FIVE CLASS DISTANCE IMAGES
+// ================================================================
+
+var d1 =
+  distanceToClass(
+    stack2010,
+    1
+  );
+
+
+var d2 =
+  distanceToClass(
+    stack2010,
+    2
+  );
+
+
+var d3 =
+  distanceToClass(
+    stack2010,
+    3
+  );
+
+
+var d4 =
+  distanceToClass(
+    stack2010,
+    4
+  );
+
+
+var d5 =
+  distanceToClass(
+    stack2010,
+    5
+  );
+
+
+var distanceImages = [
+
+  d1,
+  d2,
+  d3,
+  d4,
+  d5
+
+];
+
+
+var distanceStack =
+  ee.Image.cat(
+    distanceImages
+  );
+
+
+// ================================================================
+// 10. FIND BEST + SECOND-BEST CLASS
+// ================================================================
+
+var bestDist =
+  d1.rename(
+    'best_dist'
+  );
+
+
+var bestClass =
+  ee.Image.constant(
+    1
+  )
+
+  .rename(
+    'best_class'
+  )
+
+  .updateMask(
+    d1.mask()
+  );
+
+
+var secondDist =
+  ee.Image.constant(
+    9999
+  )
+
+  .rename(
+    'second_dist'
+  )
+
+  .updateMask(
+    d1.mask()
+  );
+
+
+for (
+  var i = 1;
+  i < CLASS_IDS.length;
+  i++
+) {
+
+  var currentClass =
+    CLASS_IDS[i];
+
+
+  var currentDistance =
+    distanceImages[i];
+
+
+  var better =
+    currentDistance.lt(
+      bestDist
+    );
+
+
+  var previousBest =
+    bestDist;
+
+
+  var updatedSecond =
+    secondDist.where(
+      better,
+      previousBest
+    );
+
+
+  var currentAsSecond =
+    currentDistance.where(
+      better,
+      9999
+    );
+
+
+  updatedSecond =
+    updatedSecond.min(
+      currentAsSecond
+    );
+
+
+  bestDist =
+    previousBest
+
+      .where(
+        better,
+        currentDistance
+      )
+
+      .rename(
+        'best_dist'
+      );
+
+
+  bestClass =
+    bestClass
+
+      .where(
+        better,
+        currentClass
+      )
+
+      .rename(
+        'best_class'
+      );
+
+
+  secondDist =
+    updatedSecond.rename(
+      'second_dist'
+    );
+
+}
+
+
+// ================================================================
+// 11. CLASS-SEPARATION MARGIN
+// ================================================================
+
+var margin =
+  secondDist
+
+    .subtract(
+      bestDist
+    )
+
+    .rename(
+      'margin'
+    );
+
+
+// ================================================================
+// 12. LOCAL 3 × 3 CONSISTENCY
+// ================================================================
+
+var kernel3x3 =
+  ee.Kernel.square({
+
+    radius:
+      1,
+
+    units:
+      'pixels',
+
+    normalize:
+      false
+
+  });
+
+
+var localValidN =
+  bestClass
+
+    .reduceNeighborhood({
+
+      reducer:
+        ee.Reducer.count(),
+
+      kernel:
+        kernel3x3,
+
+      skipMasked:
+        true
+
+    })
+
+    .rename(
+      'local_valid_n'
+    );
+
+
+var localSameN =
+  ee.Image.constant(
+    0
+  )
+
+  .rename(
+    'local_same_n'
+  )
+
+  .updateMask(
+    bestClass.mask()
+  );
+
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var neighbourCount =
+      bestClass
+
+        .eq(
+          classId
+        )
+
+        .reduceNeighborhood({
+
+          reducer:
+            ee.Reducer.sum(),
+
+          kernel:
+            kernel3x3,
+
+          skipMasked:
+            true
+
+        });
+
+
+    localSameN =
+      localSameN.where(
+
+        bestClass.eq(
+          classId
+        ),
+
+        neighbourCount
+
+      );
+
+  }
+);
+
+
+var localFraction =
+  localSameN
+
+    .divide(
+      localValidN.max(
+        1
+      )
+    )
+
+    .rename(
+      'local_fraction'
+    );
+
+
+// ================================================================
+// 13. AUTHORITATIVE PIXEL COORDINATES
+// ================================================================
+
+var pixelXY =
+  ee.Image.pixelCoordinates(
+    stackProjection
+  )
+
+  .rename(
+    [
+      'auth_px',
+      'auth_py'
+    ]
+  );
+
+
+// ================================================================
+// 14. CREATE MANUAL-SAMPLING IMAGE
+// ================================================================
+
+var samplingImage =
+  stack2010
+    .select(
+      PREDICTORS
+    )
+
+    .addBands(
+      distanceStack
+    )
+
+    .addBands(
+      bestClass
+    )
+
+    .addBands(
+      bestDist
+    )
+
+    .addBands(
+      secondDist
+    )
+
+    .addBands(
+      margin
+    )
+
+    .addBands(
+      stack2010.select(
+        'clear_count'
+      )
+    )
+
+    .addBands(
+      localValidN
+    )
+
+    .addBands(
+      localFraction
+    )
+
+    .addBands(
+      pixelXY
+    );
+
+
+// ================================================================
+// 15. SAMPLE ALL SIX MANUAL POLYGONS
+// ================================================================
+
+var manualSamples =
+  samplingImage.sampleRegions({
+
+    collection:
+      manualPolygons,
+
+    properties: [
+
+      'class_id',
+      'class_name',
+      'poly_id',
+      'manual_poly_number',
+      'source'
+
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      stackProjection,
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+
+  });
+
+
+// ================================================================
+// 16. CREATE AUTHORITATIVE PIXEL KEYS
+// ================================================================
+
+manualSamples =
+  manualSamples.map(
+    function(feature) {
+
+      var px =
+        ee.Number(
+          feature.get(
+            'auth_px'
+          )
+        );
+
+
+      var py =
+        ee.Number(
+          feature.get(
+            'auth_py'
+          )
+        );
+
+
+      var key =
+        px.format(
+          '%.0f'
+        )
+        .cat(
+          '_'
+        )
+        .cat(
+          py.format(
+            '%.0f'
+          )
+        );
+
+
+      return feature.set(
+        'auth_pixel_key',
+        key
+      );
+
+    }
+  );
+
+
+// ================================================================
+// 17. REMOVE DUPLICATES INSIDE MANUAL GEOMETRIES
+// ================================================================
+//
+// This protects against overlapping polygons / shared pixels.
+//
+// ================================================================
+
+manualSamples =
+  manualSamples.distinct(
+    [
+      'auth_pixel_key'
+    ]
+  );
+
+
+// ================================================================
+// 18. FLAG PIXELS ALREADY PRESENT IN CURRENT CANDIDATE POOL
+// ================================================================
+
+var currentKeys =
+  ee.List(
+    currentCandidates.aggregate_array(
+      'auth_pixel_key'
+    )
+  );
+
+
+manualSamples =
+  manualSamples.map(
+    function(feature) {
+
+      var duplicate =
+        currentKeys.contains(
+          feature.get(
+            'auth_pixel_key'
+          )
+        );
+
+
+      return feature.set(
+        'already_in_current_pool',
+        ee.Number(
+          ee.Algorithms.If(
+            duplicate,
+            1,
+            0
+          )
+        )
+      );
+
+    }
+  );
+
+
+// ================================================================
+// 19. CALCULATE QA FLAGS
+// ================================================================
+//
+// IMPORTANT:
+//
+// These polygons were MANUALLY interpreted.
+//
+// Therefore strict automatic agreement is reported as QA,
+// but it is NOT automatically used here to delete manually
+// reviewed pixels.
+//
+// Hard/basic requirements at this stage:
+//   - valid sampled predictor pixel
+//   - clear_count >= 2
+//   - not already present in current candidate pool
+//
+// ================================================================
+
+var evaluatedManual =
+  manualSamples.map(
+    function(feature) {
+
+      var predictedClass =
+        ee.Number(
+          feature.get(
+            'best_class'
+          )
+        );
+
+
+      var barrenDistance =
+        ee.Number(
+          feature.get(
+            'd5'
+          )
+        );
+
+
+      var classMargin =
+        ee.Number(
+          feature.get(
+            'margin'
+          )
+        );
+
+
+      var clearCount =
+        ee.Number(
+          feature.get(
+            'clear_count'
+          )
+        );
+
+
+      var localN =
+        ee.Number(
+          feature.get(
+            'local_valid_n'
+          )
+        );
+
+
+      var localFrac =
+        ee.Number(
+          feature.get(
+            'local_fraction'
+          )
+        );
+
+
+      var existing =
+        ee.Number(
+          feature.get(
+            'already_in_current_pool'
+          )
+        );
+
+
+      // ------------------------------------------------
+      // Basic manual candidate eligibility
+      // ------------------------------------------------
+
+      var basicKeep =
+        clearCount
+          .gte(
+            MIN_CLEAR_FOR_AUTO
+          )
+
+          .and(
+            existing.eq(
+              0
+            )
+          );
+
+
+      // ------------------------------------------------
+      // Same strict automatic screen used previously
+      // ------------------------------------------------
+
+      var strictPass =
+        basicKeep
+
+          .and(
+            predictedClass.eq(
+              BARREN_CLASS_ID
+            )
+          )
+
+          .and(
+            barrenDistance.lte(
+              DISTANCE_THRESHOLD
+            )
+          )
+
+          .and(
+            classMargin.gte(
+              MARGIN_THRESHOLD
+            )
+          )
+
+          .and(
+            localN.gte(
+              MIN_VALID_NEIGHBOURS
+            )
+          )
+
+          .and(
+            localFrac.gte(
+              MIN_LOCAL_FRACTION
+            )
+          );
+
+
+      return feature.set({
+
+        barren_distance:
+          barrenDistance,
+
+        manual_predicted_class:
+          predictedClass,
+
+        manual_margin:
+          classMargin,
+
+        basic_manual_keep:
+          ee.Number(
+            ee.Algorithms.If(
+              basicKeep,
+              1,
+              0
+            )
+          ),
+
+        strict_auto_pass:
+          ee.Number(
+            ee.Algorithms.If(
+              strictPass,
+              1,
+              0
+            )
+          )
+
+      });
+
+    }
+  );
+
+
+// ================================================================
+// 20. BASIC MANUAL CANDIDATE POOL
+// ================================================================
+
+var basicManualCandidates =
+  evaluatedManual.filter(
+    ee.Filter.eq(
+      'basic_manual_keep',
+      1
+    )
+  );
+
+
+// ================================================================
+// 21. STRICT-AUTOMATIC SUBSET
+// ================================================================
+
+var strictManualCandidates =
+  evaluatedManual.filter(
+    ee.Filter.eq(
+      'strict_auto_pass',
+      1
+    )
+  );
+
+
+// ================================================================
+// 22. OVERALL QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05C4B — OVERALL MANUAL POLYGON QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    manual_polygon_count:
+      manualPolygonCount,
+
+    sampled_unique_pixels:
+      manualSamples.size(),
+
+    duplicate_existing_pixels:
+      manualSamples
+
+        .filter(
+          ee.Filter.eq(
+            'already_in_current_pool',
+            1
+          )
+        )
+
+        .size(),
+
+    clear_count_lt_2:
+      manualSamples
+
+        .filter(
+          ee.Filter.lt(
+            'clear_count',
+            2
+          )
+        )
+
+        .size(),
+
+    basic_new_manual_candidates:
+      basicManualCandidates.size(),
+
+    strict_auto_pass_candidates:
+      strictManualCandidates.size()
+
+  })
+);
+
+
+// ================================================================
+// 23. PREDICTED-CLASS DISTRIBUTION
+// ================================================================
+
+print(
+  '----------------------------------------'
+);
+
+print(
+  'BEST-CLASS DISTRIBUTION — BASIC MANUAL CANDIDATES'
+);
+
+print(
+  '----------------------------------------'
+);
+
+
+print(
+  basicManualCandidates.aggregate_histogram(
+    'manual_predicted_class'
+  )
+);
+
+
+// ================================================================
+// 24. PER-POLYGON QA SUMMARY
+// ================================================================
+
+var manualPolygonList =
+  manualPolygons.toList(
+    manualPolygonCount
+  );
+
+
+var perPolygonSummary =
+  ee.FeatureCollection(
+
+    manualPolygonIndices.map(
+      function(index) {
+
+        index =
+          ee.Number(
+            index
+          );
+
+
+        var polygonFeature =
+          ee.Feature(
+            manualPolygonList.get(
+              index
+            )
+          );
+
+
+        var polyId =
+          ee.Number(
+            polygonFeature.get(
+              'poly_id'
+            )
+          );
+
+
+        var allPixels =
+          evaluatedManual.filter(
+            ee.Filter.eq(
+              'poly_id',
+              polyId
+            )
+          );
+
+
+        var basicPixels =
+          allPixels.filter(
+            ee.Filter.eq(
+              'basic_manual_keep',
+              1
+            )
+          );
+
+
+        var strictPixels =
+          allPixels.filter(
+            ee.Filter.eq(
+              'strict_auto_pass',
+              1
+            )
+          );
+
+
+        return ee.Feature(
+          null,
+          {
+
+            poly_id:
+              polyId,
+
+            manual_poly_number:
+              polygonFeature.get(
+                'manual_poly_number'
+              ),
+
+            sampled_n:
+              allPixels.size(),
+
+            duplicate_existing_n:
+              allPixels
+
+                .filter(
+                  ee.Filter.eq(
+                    'already_in_current_pool',
+                    1
+                  )
+                )
+
+                .size(),
+
+            low_clear_n:
+              allPixels
+
+                .filter(
+                  ee.Filter.lt(
+                    'clear_count',
+                    2
+                  )
+                )
+
+                .size(),
+
+            basic_new_n:
+              basicPixels.size(),
+
+            strict_auto_pass_n:
+              strictPixels.size(),
+
+            predicted_class_histogram:
+              basicPixels.aggregate_histogram(
+                'manual_predicted_class'
+              ),
+
+            mean_barren_distance:
+              basicPixels.aggregate_mean(
+                'barren_distance'
+              ),
+
+            mean_margin:
+              basicPixels.aggregate_mean(
+                'manual_margin'
+              ),
+
+            mean_clear_count:
+              basicPixels.aggregate_mean(
+                'clear_count'
+              ),
+
+            mean_local_fraction:
+              basicPixels.aggregate_mean(
+                'local_fraction'
+              )
+
+          }
+        );
+
+      }
+    )
+
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  'PER-POLYGON QA SUMMARY'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  perPolygonSummary
+);
+
+
+// ================================================================
+// 25. CURRENT REQUIREMENT CHECK
+// ================================================================
+
+var CURRENT_BARREN_N =
+  currentBarren.size();
+
+
+var BARREN_TARGET =
+  120;
+
+
+var BARREN_NEEDED =
+  ee.Number(
+    BARREN_TARGET
+  )
+  .subtract(
+    CURRENT_BARREN_N
+  )
+  .max(
+    0
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  'BARREN/FALLOW REQUIREMENT'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    current_barren_n:
+      CURRENT_BARREN_N,
+
+    target_barren_n:
+      BARREN_TARGET,
+
+    barren_needed:
+      BARREN_NEEDED,
+
+    available_basic_manual_candidates:
+      basicManualCandidates.size(),
+
+    available_strict_auto_pass:
+      strictManualCandidates.size()
+
+  })
+);
+
+
+// ================================================================
+// 26. FINAL MESSAGE
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05C4B COMPLETE — QA ONLY'
+);
+
+print(
+  'NO EXPORT TASK CREATED.'
+);
+
+print(
+  'DO NOT RUN AGAIN.'
+);
+
+print(
+  'Send OVERALL QA + PER-POLYGON QA back for review.'
+);
+
+print(
+  '========================================'
+);

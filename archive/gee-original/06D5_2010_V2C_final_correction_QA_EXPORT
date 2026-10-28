@@ -1,0 +1,1825 @@
+// ============================================================================
+// 06D5 — 2010 V2C FINAL TRAINING CORRECTION
+// ============================================================================
+//
+// CORRECTS TWO ISSUES IN MATERIALIZED V2:
+//
+// A) Vegetation poly 16 was manually REJECTED
+//      remove 4 points
+//      replace with 4 clean poly-25 Vegetation points
+//
+// B) Materialized V2 post-export QA found 3 Agricultural/Open training
+//    points within 30 m of locked validation
+//
+//      remove exact pixels:
+//        14001.500000_48638.500000   poly 202
+//        13990.500000_48640.500000   poly 47
+//        13985.500000_48632.500000   poly 59
+//
+//      replace with 3 clean Agricultural/Open training-side candidates
+//      from independent accepted groups 57 and 202.
+//
+// REPLACEMENT SAFETY:
+//      candidates must be >60 m from validation.
+//
+// FINAL REQUIREMENT:
+//      all 600 training points must be >30 m from validation.
+//
+// OLD V2 IS NOT OVERWRITTEN.
+//
+// INPUT:
+// projects/assignment-482806/assets/chennai_training_2010_final_v2
+//
+// OUTPUT:
+// projects/assignment-482806/assets/chennai_training_2010_final_v2c_corrected
+//
+// ONE EXPORT TASK CREATED.
+// DO NOT START UNTIL QA IS REVIEWED.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 1. CONSTANTS
+// ============================================================================
+
+var CRS = 'EPSG:32644';
+
+var SCALE = 30;
+
+var FINAL_VALIDATION_EXCLUSION_M = 30;
+
+// Conservative safety margin ONLY for newly added replacements.
+var REPLACEMENT_SAFETY_M = 60;
+
+var PROJ =
+  ee.Projection(CRS)
+    .atScale(SCALE);
+
+var PREDICTORS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+
+// ============================================================================
+// 2. ASSETS
+// ============================================================================
+
+var CURRENT_V2_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final_v2';
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+var VALIDATION_ASSET =
+  'projects/assignment-482806/assets/chennai_validation_2010_final';
+
+var PASSB_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+var C3A_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_targeted_expansion_05C3A';
+
+var OUTPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final_v2c_corrected';
+
+
+// ============================================================================
+// 3. LOAD
+// ============================================================================
+
+var currentV2 =
+  ee.FeatureCollection(
+    CURRENT_V2_ASSET
+  );
+
+var stack =
+  ee.Image(
+    STACK_ASSET
+  );
+
+var validation =
+  ee.FeatureCollection(
+    VALIDATION_ASSET
+  );
+
+var passB =
+  ee.FeatureCollection(
+    PASSB_ASSET
+  );
+
+var c3a =
+  ee.FeatureCollection(
+    C3A_ASSET
+  );
+
+
+// ============================================================================
+// 4. AUTHORITATIVE GRID
+// ============================================================================
+
+var coords =
+  ee.Image.pixelCoordinates(
+    PROJ
+  )
+  .rename([
+    'px',
+    'py'
+  ]);
+
+var samplingImage =
+  stack
+    .select(
+      PREDICTORS.concat([
+        'clear_count'
+      ])
+    )
+    .addBands(
+      coords
+    );
+
+
+// ============================================================================
+// 5. HELPERS
+// ============================================================================
+
+function addPixelKey(feature) {
+
+  feature =
+    ee.Feature(feature);
+
+  var px =
+    ee.Number(
+      feature.get('px')
+    )
+    .format('%.6f');
+
+  var py =
+    ee.Number(
+      feature.get('py')
+    )
+    .format('%.6f');
+
+  var classId =
+    ee.Number(
+      feature.get('class_id')
+    )
+    .int();
+
+  var pixelKey =
+    px
+      .cat('_')
+      .cat(py);
+
+  return feature.set({
+
+    auth_pixel_key:
+      pixelKey,
+
+    pixel_class_key:
+      classId
+        .format('%d')
+        .cat('_')
+        .cat(pixelKey)
+
+  });
+
+}
+
+
+function canonicalizeSource(feature) {
+
+  feature =
+    ee.Feature(feature);
+
+  var classId =
+    ee.Number.parse(
+      ee.String(
+        feature.get('class_id')
+      )
+    )
+    .int();
+
+  var polyId =
+    ee.Number.parse(
+      ee.String(
+        feature.get('poly_id')
+      )
+    )
+    .int();
+
+  return feature.set({
+
+    class_id:
+      classId,
+
+    poly_id:
+      polyId
+
+  });
+
+}
+
+
+function sampleCandidates(
+  source,
+  sourceName
+) {
+
+  var prepared =
+    source.map(
+      function(feature) {
+
+        feature =
+          canonicalizeSource(feature);
+
+        return feature.set(
+          'candidate_source',
+          sourceName
+        );
+
+      }
+    );
+
+
+  return samplingImage
+    .sampleRegions({
+
+      collection:
+        prepared,
+
+      properties: [
+        'class_id',
+        'poly_id',
+        'candidate_source'
+      ],
+
+      scale:
+        SCALE,
+
+      projection:
+        PROJ,
+
+      geometries:
+        true,
+
+      tileScale:
+        8
+
+    })
+
+    .filter(
+      ee.Filter.gte(
+        'clear_count',
+        2
+      )
+    )
+
+    .map(
+      addPixelKey
+    )
+
+    .distinct([
+      'pixel_class_key'
+    ]);
+
+}
+
+
+var samePixel =
+  ee.Filter.equals({
+
+    leftField:
+      'auth_pixel_key',
+
+    rightField:
+      'auth_pixel_key'
+
+  });
+
+
+var within30m =
+  ee.Filter.withinDistance({
+
+    distance:
+      FINAL_VALIDATION_EXCLUSION_M,
+
+    leftField:
+      '.geo',
+
+    rightField:
+      '.geo',
+
+    maxError:
+      1
+
+  });
+
+
+var within60m =
+  ee.Filter.withinDistance({
+
+    distance:
+      REPLACEMENT_SAFETY_M,
+
+    leftField:
+      '.geo',
+
+    rightField:
+      '.geo',
+
+    maxError:
+      1
+
+  });
+
+
+function removeExistingPixels(
+  candidates,
+  training
+) {
+
+  return ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      candidates,
+
+      training,
+
+      samePixel
+
+    )
+
+  );
+
+}
+
+
+function excludeValidation60m(
+  candidates
+) {
+
+  return ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      candidates,
+
+      validation,
+
+      within60m
+
+    )
+
+  );
+
+}
+
+
+function selectRandom(
+  collection,
+  n,
+  seed
+) {
+
+  return collection
+
+    .randomColumn(
+      'replacement_random',
+      seed
+    )
+
+    .sort(
+      'replacement_random'
+    )
+
+    .limit(n);
+
+}
+
+
+// ============================================================================
+// 6. VERIFY CURRENT MATERIALIZED V2
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — CURRENT MATERIALIZED V2'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    current_v2_total:
+      currentV2.size(),
+
+    expected:
+      600
+
+  })
+);
+
+
+// ============================================================================
+// 7. REMOVE REJECTED VEGETATION POLY 16
+// ============================================================================
+
+var rejectedVeg16 =
+  currentV2
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        2
+      )
+    )
+
+    .filter(
+      ee.Filter.eq(
+        'poly_id',
+        16
+      )
+    );
+
+
+var nonVegetation =
+  currentV2.filter(
+    ee.Filter.neq(
+      'class_id',
+      2
+    )
+  );
+
+
+var vegetationWithout16 =
+  currentV2
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        2
+      )
+    )
+
+    .filter(
+      ee.Filter.neq(
+        'poly_id',
+        16
+      )
+    );
+
+
+var afterVegCorrection =
+  nonVegetation
+    .merge(
+      vegetationWithout16
+    );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — VEGETATION-16 REMOVAL'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    rejected_poly16_found:
+      rejectedVeg16.size(),
+
+    expected_rejected_poly16:
+      4,
+
+    remaining_after_poly16_removal:
+      afterVegCorrection.size(),
+
+    expected_remaining:
+      596
+
+  })
+);
+
+
+// ============================================================================
+// 8. REMOVE THE THREE MATERIALIZED 30 m AGRICULTURAL/OPEN VIOLATIONS
+// ============================================================================
+
+var BAD_AGRI_1 =
+  '14001.500000_48638.500000';
+
+var BAD_AGRI_2 =
+  '13990.500000_48640.500000';
+
+var BAD_AGRI_3 =
+  '13985.500000_48632.500000';
+
+
+var badAgri1 =
+  afterVegCorrection.filter(
+    ee.Filter.eq(
+      'auth_pixel_key',
+      BAD_AGRI_1
+    )
+  );
+
+var badAgri2 =
+  afterVegCorrection.filter(
+    ee.Filter.eq(
+      'auth_pixel_key',
+      BAD_AGRI_2
+    )
+  );
+
+var badAgri3 =
+  afterVegCorrection.filter(
+    ee.Filter.eq(
+      'auth_pixel_key',
+      BAD_AGRI_3
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — KNOWN AGRICULTURAL OVERLAP PIXELS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    bad_pixel_1_found:
+      badAgri1.size(),
+
+    bad_pixel_2_found:
+      badAgri2.size(),
+
+    bad_pixel_3_found:
+      badAgri3.size(),
+
+    expected_each:
+      1
+
+  })
+);
+
+
+// Remove them explicitly without using Filter.not().
+
+var retained =
+  afterVegCorrection
+
+    .filter(
+      ee.Filter.neq(
+        'auth_pixel_key',
+        BAD_AGRI_1
+      )
+    )
+
+    .filter(
+      ee.Filter.neq(
+        'auth_pixel_key',
+        BAD_AGRI_2
+      )
+    )
+
+    .filter(
+      ee.Filter.neq(
+        'auth_pixel_key',
+        BAD_AGRI_3
+      )
+    );
+
+
+print(
+  ee.Dictionary({
+
+    retained_after_all_7_removals:
+      retained.size(),
+
+    expected:
+      593
+
+  })
+);
+
+
+// ============================================================================
+// 9. RETAINED-SET CLASS COUNTS
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — RETAINED CLASS COUNTS'
+);
+
+print(
+  'EXPECTED 120 / 116 / 120 / 117 / 120'
+);
+
+print(
+  '========================================'
+);
+
+
+[1, 2, 3, 4, 5].forEach(
+  function(classId) {
+
+    var n =
+      retained
+
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+
+        .size();
+
+
+    print(
+      ee.String('Class ')
+        .cat(
+          String(classId)
+        )
+        .cat(' = ')
+        .cat(
+          n.format('%d')
+        )
+    );
+
+  }
+);
+
+
+// ============================================================================
+// 10. VERIFY RETAINED MATERIALIZED POINTS ARE NOW >30 m FROM VALIDATION
+// ============================================================================
+
+var retainedIndependent =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      retained,
+
+      validation,
+
+      within30m
+
+    )
+
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — RETAINED MATERIALIZED INDEPENDENCE'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    retained_total:
+      retained.size(),
+
+    retained_surviving_30m:
+      retainedIndependent.size(),
+
+    retained_within_30m:
+      ee.Number(
+        retained.size()
+      )
+      .subtract(
+        retainedIndependent.size()
+      ),
+
+    expected_overlap:
+      0
+
+  })
+);
+
+
+// ============================================================================
+// 11. VEGETATION REPLACEMENT SOURCE — ACCEPTED POLY 25
+// ============================================================================
+
+var veg25Source =
+  passB
+
+    .map(
+      canonicalizeSource
+    )
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        2
+      )
+    )
+
+    .filter(
+      ee.Filter.eq(
+        'poly_id',
+        25
+      )
+    );
+
+
+var veg25Sampled =
+  sampleCandidates(
+    veg25Source,
+    '05C1_passB'
+  );
+
+
+var veg25NotUsed =
+  removeExistingPixels(
+    veg25Sampled,
+    retained
+  );
+
+
+// Also explicitly prevent reintroduction of any known bad pixel keys.
+
+veg25NotUsed =
+  veg25NotUsed
+
+    .filter(
+      ee.Filter.neq(
+        'auth_pixel_key',
+        BAD_AGRI_1
+      )
+    )
+
+    .filter(
+      ee.Filter.neq(
+        'auth_pixel_key',
+        BAD_AGRI_2
+      )
+    )
+
+    .filter(
+      ee.Filter.neq(
+        'auth_pixel_key',
+        BAD_AGRI_3
+      )
+    );
+
+
+var veg25Safe =
+  excludeValidation60m(
+    veg25NotUsed
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — VEGETATION REPLACEMENT CANDIDATES'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    sampled_clear_unique:
+      veg25Sampled.size(),
+
+    unused_after_retained_training:
+      veg25NotUsed.size(),
+
+    safe_beyond_60m_validation:
+      veg25Safe.size(),
+
+    required:
+      4
+
+  })
+);
+
+
+var vegReplacements =
+  selectRandom(
+    veg25Safe,
+    4,
+    62504
+  )
+
+  .map(
+    function(feature) {
+
+      return ee.Feature(feature).set({
+
+        class_id:
+          2,
+
+        class_name:
+          'Vegetation',
+
+        poly_id:
+          25,
+
+        training_year:
+          2010,
+
+        selection_role:
+          'historical_reuse_fill_correction',
+
+        reuse_asset:
+          '05C1_passB',
+
+        correction_type:
+          'replace_rejected_vegetation_poly16',
+
+        replacement_safety_m:
+          REPLACEMENT_SAFETY_M
+
+      });
+
+    }
+  );
+
+
+// ============================================================================
+// 12. AGRICULTURAL/OPEN REPLACEMENT SOURCE
+// ============================================================================
+//
+// AUTHORITATIVE SITE GROUPING:
+//
+// Macro-site:
+//   47,48,51,52,53,55,56,60
+//
+// Independent groups:
+//   46,57,59,202
+//
+// Available historical reusable material exists for 57 and 202.
+//
+// We therefore use:
+//   poly 57  -> 1 replacement
+//   poly 202 -> 2 replacements
+//
+// All must be >60 m from validation.
+//
+// ============================================================================
+
+var passBPrepared =
+  passB
+    .map(
+      canonicalizeSource
+    )
+    .map(
+      function(feature) {
+
+        return ee.Feature(feature)
+          .set(
+            'candidate_source',
+            '05C1_passB'
+          );
+
+      }
+    );
+
+
+var c3aPrepared =
+  c3a
+    .map(
+      canonicalizeSource
+    )
+    .map(
+      function(feature) {
+
+        return ee.Feature(feature)
+          .set(
+            'candidate_source',
+            '05C3A_targeted60m'
+          );
+
+      }
+    );
+
+
+var agriReusableSource =
+  passBPrepared
+    .merge(
+      c3aPrepared
+    )
+
+    .filter(
+      ee.Filter.eq(
+        'class_id',
+        4
+      )
+    )
+
+    .filter(
+      ee.Filter.or(
+
+        ee.Filter.eq(
+          'poly_id',
+          57
+        ),
+
+        ee.Filter.eq(
+          'poly_id',
+          202
+        )
+
+      )
+    );
+
+
+var agriSampled =
+  samplingImage
+
+    .sampleRegions({
+
+      collection:
+        agriReusableSource,
+
+      properties: [
+        'class_id',
+        'poly_id',
+        'candidate_source'
+      ],
+
+      scale:
+        SCALE,
+
+      projection:
+        PROJ,
+
+      geometries:
+        true,
+
+      tileScale:
+        8
+
+    })
+
+    .filter(
+      ee.Filter.gte(
+        'clear_count',
+        2
+      )
+    )
+
+    .map(
+      addPixelKey
+    )
+
+    .distinct([
+      'pixel_class_key'
+    ]);
+
+
+// Remove everything already retained.
+
+var agriNotUsed =
+  removeExistingPixels(
+    agriSampled,
+    retained
+  );
+
+
+// Explicitly ban the three known proximity-violation pixels.
+
+agriNotUsed =
+  agriNotUsed
+
+    .filter(
+      ee.Filter.neq(
+        'auth_pixel_key',
+        BAD_AGRI_1
+      )
+    )
+
+    .filter(
+      ee.Filter.neq(
+        'auth_pixel_key',
+        BAD_AGRI_2
+      )
+    )
+
+    .filter(
+      ee.Filter.neq(
+        'auth_pixel_key',
+        BAD_AGRI_3
+      )
+    );
+
+
+// Apply conservative 60 m validation safety.
+
+var agriSafe =
+  excludeValidation60m(
+    agriNotUsed
+  );
+
+
+var agri57Safe =
+  agriSafe.filter(
+    ee.Filter.eq(
+      'poly_id',
+      57
+    )
+  );
+
+
+var agri202Safe =
+  agriSafe.filter(
+    ee.Filter.eq(
+      'poly_id',
+      202
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — AGRICULTURAL REPLACEMENT CANDIDATES'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    all_sampled_clear_unique:
+      agriSampled.size(),
+
+    unused_after_retained_training:
+      agriNotUsed.size(),
+
+    total_safe_beyond_60m:
+      agriSafe.size(),
+
+    safe_poly57:
+      agri57Safe.size(),
+
+    required_poly57:
+      1,
+
+    safe_poly202:
+      agri202Safe.size(),
+
+    required_poly202:
+      2
+
+  })
+);
+
+
+// ============================================================================
+// 13. SELECT 3 AGRICULTURAL REPLACEMENTS
+// ============================================================================
+
+var agri57Replacement =
+  selectRandom(
+    agri57Safe,
+    1,
+    65701
+  );
+
+
+var agri202Replacements =
+  selectRandom(
+    agri202Safe,
+    2,
+    620202
+  );
+
+
+var agriReplacements =
+  agri57Replacement
+    .merge(
+      agri202Replacements
+    )
+
+    .map(
+      function(feature) {
+
+        feature =
+          ee.Feature(feature);
+
+        return feature.set({
+
+          class_id:
+            4,
+
+          class_name:
+            'Agricultural/Open',
+
+          training_year:
+            2010,
+
+          selection_role:
+            'historical_reuse_fill_correction',
+
+          reuse_asset:
+            feature.get(
+              'candidate_source'
+            ),
+
+          correction_type:
+            'replace_materialized_validation_proximity_point',
+
+          replacement_safety_m:
+            REPLACEMENT_SAFETY_M
+
+        });
+
+      }
+    );
+
+
+// ============================================================================
+// 14. REPLACEMENT COUNTS
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — SELECTED REPLACEMENTS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    vegetation_replacements:
+      vegReplacements.size(),
+
+    expected_vegetation:
+      4,
+
+    agricultural_replacements:
+      agriReplacements.size(),
+
+    expected_agricultural:
+      3,
+
+    total_replacements:
+      vegReplacements
+        .size()
+        .add(
+          agriReplacements.size()
+        ),
+
+    expected_total:
+      7
+
+  })
+);
+
+
+// ============================================================================
+// 15. BUILD FINAL V2C
+// ============================================================================
+
+var retainedUpdated =
+  retained.map(
+    function(feature) {
+
+      return ee.Feature(feature).set({
+
+        training_version:
+          'V2C_final_corrected'
+
+      });
+
+    }
+  );
+
+
+var replacements =
+  vegReplacements
+    .merge(
+      agriReplacements
+    )
+
+    .map(
+      function(feature) {
+
+        return ee.Feature(feature).set({
+
+          training_version:
+            'V2C_final_corrected',
+
+          validation_exclusion_m:
+            FINAL_VALIDATION_EXCLUSION_M
+
+        });
+
+      }
+    );
+
+
+var finalTraining =
+  retainedUpdated
+    .merge(
+      replacements
+    );
+
+
+// ============================================================================
+// 16. FINAL COUNTS
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — FINAL V2C CLASS COUNTS'
+);
+
+print(
+  '========================================'
+);
+
+
+[1, 2, 3, 4, 5].forEach(
+  function(classId) {
+
+    var n =
+      finalTraining
+
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+
+        .size();
+
+
+    print(
+      ee.String('Class ')
+        .cat(
+          String(classId)
+        )
+        .cat(' = ')
+        .cat(
+          n.format('%d')
+        )
+    );
+
+  }
+);
+
+
+print(
+  ee.String('TOTAL = ')
+    .cat(
+      finalTraining
+        .size()
+        .format('%d')
+    )
+);
+
+
+// ============================================================================
+// 17. AUTHORITATIVE LEDGER QA
+// ============================================================================
+
+var finalVeg =
+  finalTraining.filter(
+    ee.Filter.eq(
+      'class_id',
+      2
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — VEGETATION LEDGER QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    vegetation_total:
+      finalVeg.size(),
+
+    rejected_poly16_remaining:
+      finalVeg
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            16
+          )
+        )
+        .size(),
+
+    poly17:
+      finalVeg
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            17
+          )
+        )
+        .size(),
+
+    poly25:
+      finalVeg
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            25
+          )
+        )
+        .size(),
+
+    poly26:
+      finalVeg
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            26
+          )
+        )
+        .size()
+
+  })
+);
+
+
+// ============================================================================
+// 18. KNOWN BAD PIXEL ABSENCE
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — KNOWN BAD PIXEL ABSENCE QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    bad_agri_pixel_1_remaining:
+      finalTraining
+        .filter(
+          ee.Filter.eq(
+            'auth_pixel_key',
+            BAD_AGRI_1
+          )
+        )
+        .size(),
+
+    bad_agri_pixel_2_remaining:
+      finalTraining
+        .filter(
+          ee.Filter.eq(
+            'auth_pixel_key',
+            BAD_AGRI_2
+          )
+        )
+        .size(),
+
+    bad_agri_pixel_3_remaining:
+      finalTraining
+        .filter(
+          ee.Filter.eq(
+            'auth_pixel_key',
+            BAD_AGRI_3
+          )
+        )
+        .size()
+
+  })
+);
+
+
+// ============================================================================
+// 19. PIXEL INTEGRITY
+// ============================================================================
+
+var uniqueClassPixels =
+  finalTraining.distinct([
+    'pixel_class_key'
+  ]);
+
+
+var uniqueSpatialPixels =
+  finalTraining.distinct([
+    'auth_pixel_key'
+  ]);
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — FINAL PIXEL INTEGRITY'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    final_rows:
+      finalTraining.size(),
+
+    unique_class_pixels:
+      uniqueClassPixels.size(),
+
+    unique_spatial_pixels:
+      uniqueSpatialPixels.size(),
+
+    duplicate_same_class_rows:
+      ee.Number(
+        finalTraining.size()
+      )
+      .subtract(
+        uniqueClassPixels.size()
+      ),
+
+    cross_class_conflict_excess:
+      ee.Number(
+        uniqueClassPixels.size()
+      )
+      .subtract(
+        uniqueSpatialPixels.size()
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 20. FINAL 30 m VALIDATION INDEPENDENCE
+// ============================================================================
+
+var finalIndependent =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      finalTraining,
+
+      validation,
+
+      within30m
+
+    )
+
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — FINAL 30 m VALIDATION INDEPENDENCE'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    final_training:
+      finalTraining.size(),
+
+    surviving_30m_exclusion:
+      finalIndependent.size(),
+
+    within_30m_validation:
+      ee.Number(
+        finalTraining.size()
+      )
+      .subtract(
+        finalIndependent.size()
+      ),
+
+    required_overlap:
+      0
+
+  })
+);
+
+
+// ============================================================================
+// 21. REPLACEMENT 60 m SAFETY CHECK
+// ============================================================================
+
+var replacementsSafe60 =
+  ee.FeatureCollection(
+
+    ee.Join.inverted().apply(
+
+      replacements,
+
+      validation,
+
+      within60m
+
+    )
+
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — REPLACEMENT 60 m SAFETY QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    replacement_total:
+      replacements.size(),
+
+    replacements_beyond_60m:
+      replacementsSafe60.size(),
+
+    replacements_within_60m:
+      ee.Number(
+        replacements.size()
+      )
+      .subtract(
+        replacementsSafe60.size()
+      ),
+
+    expected_within_60m:
+      0
+
+  })
+);
+
+
+// ============================================================================
+// 22. ATTRIBUTE QA
+// ============================================================================
+
+var predictorComplete =
+  finalTraining.filter(
+    ee.Filter.notNull(
+      PREDICTORS.concat([
+        'clear_count'
+      ])
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 — FINAL ATTRIBUTE QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    predictor_complete:
+      predictorComplete.size(),
+
+    expected:
+      600,
+
+    min_clear_count:
+      finalTraining.aggregate_min(
+        'clear_count'
+      ),
+
+    max_clear_count:
+      finalTraining.aggregate_max(
+        'clear_count'
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 23. VERSION CONTROL
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  'VERSION CONTROL'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'Original materialized V2 remains untouched:'
+);
+
+print(
+  CURRENT_V2_ASSET
+);
+
+
+print(
+  'Corrected V2C will export to:'
+);
+
+print(
+  OUTPUT_ASSET
+);
+
+
+// ============================================================================
+// 24. EXPORT
+// ============================================================================
+//
+// ONE TASK.
+// DO NOT START UNTIL QA REVIEWED.
+//
+// ============================================================================
+
+Export.table.toAsset({
+
+  collection:
+    finalTraining,
+
+  description:
+    'chennai_training_2010_final_v2c_corrected',
+
+  assetId:
+    OUTPUT_ASSET
+
+});
+
+
+// ============================================================================
+// 25. FINISH
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D5 COMPLETE'
+);
+
+print(
+  '========================================'
+);
+
+print(
+  'ONE EXPORT TASK CREATED — DO NOT START YET.'
+);
+
+print(
+  'REQUIRED:'
+);
+
+print(
+  'TOTAL = 600'
+);
+
+print(
+  'ALL FIVE CLASSES = 120'
+);
+
+print(
+  'Vegetation poly16 remaining = 0'
+);
+
+print(
+  'All 3 known bad Agricultural/Open pixels remaining = 0'
+);
+
+print(
+  'Duplicate same-class rows = 0'
+);
+
+print(
+  'Cross-class conflicts = 0'
+);
+
+print(
+  'Within 30 m of validation = 0'
+);
+
+print(
+  'All 7 replacements within 60 m of validation = 0'
+);
+
+print(
+  'Predictor complete = 600'
+);
+
+print(
+  '========================================'
+);
+
+// ============================================================================
+// END 06D5
+// ============================================================================

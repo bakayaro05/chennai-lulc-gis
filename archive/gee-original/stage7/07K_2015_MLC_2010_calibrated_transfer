@@ -1,0 +1,447 @@
+
+ // =============================================================
+ // CHENNAI LULC — STAGE 07K (READ-ONLY EXPERIMENT)
+ // 2015 GAUSSIAN MLC APPLIED TO 2010 WITH BAND CALIBRATION
+ //
+ // Cross-year calibration: six Landsat reflectance bands are
+ // affinely aligned using balanced 2010 and 2015 training sets.
+ // NDVI/NDWI/NDBI are then RECOMPUTED from calibrated bands.
+ // This is 2010-assisted adaptation, not pure 2015 transfer.
+ // No reference labels copied between years; no asset exports.
+ // =============================================================
+
+ var ROOT = 'projects/assignment-482806/assets/';
+
+ var RAW = [
+   'blue', 'green', 'red', 'nir', 'swir1', 'swir2'
+ ];
+
+ var BANDS = RAW.concat([
+   'NDVI', 'NDWI', 'NDBI'
+ ]);
+
+ var CLASSES = [1, 2, 3, 4, 5];
+
+ var REG = 1e-6;
+ var CRS = 'EPSG:32644';
+ var SCALE = 30;
+ var EPS = 1e-6;
+
+ var train2015 = ee.FeatureCollection(
+   ROOT + 'chennai_training_2015_final'
+ );
+
+ var train2010 = ee.FeatureCollection(
+   ROOT + 'chennai_training_2010_manual_final_v1'
+ );
+
+ var validation = ee.FeatureCollection(
+   ROOT + 'chennai_validation_2010_final'
+ );
+
+ var src2010 = ee.Image(
+   ROOT + 'chennai_predictor_stack_2010'
+ ).select(RAW);
+
+ var roi = ee.FeatureCollection(
+   ROOT + 'chennai_admin_study_area_clean'
+ ).geometry();
+
+ print('================================================');
+ print('07K — 2015 MLC / 2010 CALIBRATED TRANSFER TEST');
+ print('================================================');
+
+ print('This experiment USES 2010 MANUAL TRAINING for global band calibration.');
+ print('It does not transfer 2015 labels to 2010 locations.');
+
+ print('2010 training total (expected 600):');
+ print(train2010.size());
+
+ print('2015 training total (expected 600):');
+ print(train2015.size());
+
+ print('2010 training by class (expected 120 each):');
+ print(train2010.aggregate_histogram('class_id'));
+
+ print('2015 training by class (expected 120 each):');
+ print(train2015.aggregate_histogram('class_id'));
+
+ print('2010 validation total (expected 300):');
+ print(validation.size());
+
+
+ // =============================================================
+ // 1. BAND-WISE CROSS-DOMAIN MEAN/SD CALIBRATION
+ //
+ // adjusted_2010 =
+ // mean_2015 + (x_2010 - mean_2010) * sd_2015 / sd_2010
+ //
+ // Uses all five classes equally (120 per class)
+ // in each year.
+ // =============================================================
+
+ var calibrationTable = [];
+
+ var adjustedBands = RAW.map(function(b) {
+
+   var s0 = ee.Dictionary(
+     train2010.aggregate_stats(b)
+   );
+
+   var s15 = ee.Dictionary(
+     train2015.aggregate_stats(b)
+   );
+
+   var m0 = ee.Number(s0.get('mean'));
+   var m15 = ee.Number(s15.get('mean'));
+
+   var sd0 = ee.Number(s0.get('sample_sd'));
+   var sd15 = ee.Number(s15.get('sample_sd'));
+
+   var a = sd15.divide(
+     sd0.max(EPS)
+   );
+
+   var shift = m15.subtract(
+     a.multiply(m0)
+   );
+
+   calibrationTable.push(
+     ee.Feature(null, {
+       band: b,
+       mean_2010: m0,
+       mean_2015: m15,
+       sd_2010: sd0,
+       sd_2015: sd15,
+       scale: a,
+       offset: shift
+     })
+   );
+
+   return src2010
+     .select(b)
+     .multiply(a)
+     .add(shift)
+     .rename(b);
+
+ });
+
+ var reflectance = ee.Image.cat(
+   adjustedBands
+ ).select(RAW);
+
+
+ // =============================================================
+ // 2. RECOMPUTE THREE SPECTRAL INDICES
+ //
+ // Indices are calculated from calibrated reflectance.
+ // Explicit arithmetic avoids Earth Engine's automatic
+ // negative-value masking in normalizedDifference().
+ // =============================================================
+
+ function ratio(numerator, denominator, name) {
+
+   var safe = denominator.where(
+     denominator.abs().lt(EPS),
+     EPS
+   );
+
+   return numerator
+     .divide(safe)
+     .rename(name);
+
+ }
+
+ var green = reflectance.select('green');
+ var red = reflectance.select('red');
+ var nir = reflectance.select('nir');
+ var swir1 = reflectance.select('swir1');
+
+ var ndvi = ratio(
+   nir.subtract(red),
+   nir.add(red),
+   'NDVI'
+ );
+
+ var ndwi = ratio(
+   green.subtract(nir),
+   green.add(nir),
+   'NDWI'
+ );
+
+ var ndbi = ratio(
+   swir1.subtract(nir),
+   swir1.add(nir),
+   'NDBI'
+ );
+
+ var harmonized2010 = reflectance
+   .addBands([ndvi, ndwi, ndbi])
+   .select(BANDS);
+
+ print('================================================');
+ print('SIX-BAND CALIBRATION PARAMETERS');
+ print('================================================');
+
+ print(ee.FeatureCollection(calibrationTable));
+
+ print('Adjusted nine-band predictor order:');
+ print(harmonized2010.bandNames());
+
+
+ // =============================================================
+ // 3. RECONSTRUCT 2015 GAUSSIAN MLC PARAMETERS
+ //
+ // Model statistics are estimated ONLY from 2015
+ // training data.
+ // =============================================================
+
+ function fit2015(k) {
+
+   var sub = train2015.filter(
+     ee.Filter.eq('class_id', k)
+   );
+
+   var means = BANDS.map(function(b) {
+     return sub.aggregate_mean(b);
+   });
+
+   var mean = ee.Array([means]).transpose();
+
+   var arrayFC = sub.makeArray(
+     BANDS,
+     'a2015'
+   );
+
+   var covarianceResult = arrayFC.reduceColumns({
+     reducer: ee.Reducer.covariance()
+       .setOutputs(['covariance']),
+     selectors: ['a2015']
+   });
+
+   var cov = ee.Array(
+     covarianceResult.get('covariance')
+   ).add(
+     ee.Array.identity(BANDS.length)
+       .multiply(REG)
+   );
+
+   return ee.Dictionary({
+     class_id: k,
+     n: sub.size(),
+     mean: mean,
+     inverse: cov.matrixInverse(),
+     determinant: cov.matrixDeterminant()
+   });
+
+ }
+
+ var param = CLASSES.map(fit2015);
+
+ var QA = ee.FeatureCollection(
+   CLASSES.map(function(k) {
+
+     var p = ee.Dictionary(param[k - 1]);
+
+     var det = ee.Number(
+       p.get('determinant')
+     );
+
+     return ee.Feature(null, {
+       class_id: k,
+       n: p.get('n'),
+       regularized_det: det,
+       positive: det.gt(0)
+     });
+
+   })
+ );
+
+ print('================================================');
+ print('2015 MLC CLASS PARAMETER QA');
+ print('================================================');
+
+ print(QA);
+
+
+ // =============================================================
+ // 4. APPLY 2015 GAUSSIAN MLC TO CALIBRATED 2010
+ // =============================================================
+
+ var x = harmonized2010
+   .toArray()
+   .toArray(1);
+
+ function score(p, name) {
+
+   p = ee.Dictionary(p);
+
+   var mu = ee.Image.constant(
+     ee.Array(p.get('mean'))
+   );
+
+   var inverse = ee.Image.constant(
+     ee.Array(p.get('inverse'))
+   );
+
+   var logDet = ee.Image.constant(
+     ee.Number(p.get('determinant'))
+       .max(1e-300)
+       .log()
+   );
+
+   var d = x.subtract(mu);
+
+   var q = d
+     .arrayTranspose()
+     .matrixMultiply(inverse)
+     .matrixMultiply(d)
+     .arrayGet([0, 0]);
+
+   return q
+     .multiply(-0.5)
+     .subtract(
+       logDet.multiply(0.5)
+     )
+     .rename(name);
+
+ }
+
+ var images = CLASSES.map(function(k) {
+
+   return score(
+     param[k - 1],
+     'score_' + k
+   );
+
+ });
+
+ var prediction = ee.Image.cat(images)
+   .toArray()
+   .arrayArgmax()
+   .arrayGet([0])
+   .add(1)
+   .rename('predicted_class')
+   .toInt8()
+   .clip(roi);
+
+
+ // =============================================================
+ // 5. EXPERIMENTAL VALIDATION USING SAVED 2010 REFERENCES
+ //
+ // The 300-point validation dataset was already examined.
+ // Treat these results as DEVELOPMENT diagnostics.
+ // =============================================================
+
+ var valPred = prediction.sampleRegions({
+
+   collection: validation,
+
+   properties: ['class_id'],
+
+   projection: ee.Projection(CRS).atScale(SCALE),
+
+   scale: SCALE,
+
+   geometries: false,
+
+   tileScale: 8
+
+ });
+
+ var cm = valPred.errorMatrix(
+   'class_id',
+   'predicted_class',
+   CLASSES
+ );
+
+ print('================================================');
+ print('CALIBRATED TRANSFER — 2010 VALIDATION');
+ print('================================================');
+
+ print('Validation predicted count (expected 300):');
+ print(valPred.size());
+
+ print('Missing predictions (expected 0):');
+ print(
+   validation.size().subtract(valPred.size())
+ );
+
+ print('Predicted class histogram:');
+ print(
+   valPred.aggregate_histogram('predicted_class')
+ );
+
+ print('Confusion matrix: rows reference, columns predicted; classes 1-5:');
+ print(cm);
+
+ print('Experimental overall accuracy (%):');
+ print(
+   ee.Number(cm.accuracy()).multiply(100)
+ );
+
+ print('Experimental kappa:');
+ print(cm.kappa());
+
+ print('Experimental producer accuracy:');
+ print(cm.producersAccuracy());
+
+ print('Experimental user accuracy:');
+ print(cm.consumersAccuracy());
+
+
+ // =============================================================
+ // 6. BENCHMARKS AND SAFEGUARDS
+ // =============================================================
+
+ print('================================================');
+ print('CONTEXT / BENCHMARKS');
+ print('================================================');
+
+ print('Unharmonized 2015 transfer: 44.67% OA.');
+ print('2010 manually trained 9-band baseline: 59.33% OA.');
+
+ print('2015 classifier is unchanged.');
+ print('Only the 2010 predictor radiometry is adjusted.');
+
+ print('2010 manual training is used for calibration,');
+ print('NOT for fitting class-specific Gaussian covariances.');
+
+ print('This benchmark is not an unbiased new independent test.');
+
+ print('2015 vs 2010 class 4/5 semantic consistency');
+ print('remains unverified.');
+
+ print('No training, validation, or raster asset altered.');
+
+
+ // =============================================================
+ // 7. OPTIONAL MAP PREVIEW
+ // =============================================================
+
+ Map.centerObject(roi, 10);
+
+ Map.addLayer(
+   prediction,
+   {
+     min: 1,
+     max: 5,
+     palette: [
+       'ff0000',
+       '008000',
+       '0000ff',
+       'ffff00',
+       'd2b48c'
+     ]
+   },
+   '2010 CALIBRATED 2015 GAUSSIAN MLC — EXPERIMENTAL',
+   false
+ );
+
+ print('========================================');
+ print('END STAGE 07K');
+ print('========================================');
+
+ // =============================================================
+ // END
+ // =============================================================

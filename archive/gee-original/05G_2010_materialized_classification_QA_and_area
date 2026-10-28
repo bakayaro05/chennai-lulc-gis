@@ -1,0 +1,868 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05G
+//
+// 2010 MATERIALIZED CLASSIFICATION QA + AREA STATISTICS
+//
+// IMPORTANT
+// ---------
+// This script loads ONLY the already-materialized classification:
+//
+// projects/assignment-482806/assets/chennai_mlc_lulc_2010
+//
+// It DOES NOT rebuild:
+// - predictor stack
+// - training
+// - validation
+// - Gaussian covariance matrices
+// - MLC score images
+//
+// PURPOSE
+// -------
+// 1. Verify the saved 2010 classification raster
+// 2. Check raster support / masked area
+// 3. Calculate area for classes 1-5
+// 4. Calculate percentage of classified area
+// 5. Verify class areas sum to total classified support
+//
+// NO EXPORT.
+// NO CLASSIFIER.
+// NO VALIDATION.
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSETS
+// ================================================================
+
+var ROI_ASSET =
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean';
+
+
+var CLASSIFICATION_ASSET =
+  'projects/assignment-482806/assets/chennai_mlc_lulc_2010';
+
+
+// ================================================================
+// 2. LOCKED SETTINGS
+// ================================================================
+
+var ANALYSIS_CRS =
+  'EPSG:32644';
+
+
+var ANALYSIS_SCALE =
+  30;
+
+
+var CLASS_IDS =
+  [1, 2, 3, 4, 5];
+
+
+var CLASS_NAMES = [
+
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+
+];
+
+
+// ================================================================
+// 3. LOAD MATERIALIZED DATA
+// ================================================================
+
+var roiFC =
+  ee.FeatureCollection(
+    ROI_ASSET
+  );
+
+
+var roi =
+  roiFC.geometry();
+
+
+var classified2010 =
+  ee.Image(
+    CLASSIFICATION_ASSET
+  )
+  .select(
+    'classification'
+  );
+
+
+// ================================================================
+// 4. BASIC RASTER QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05G — MATERIALIZED 2010 RASTER QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'Classification bands'
+);
+
+
+print(
+  classified2010.bandNames()
+);
+
+
+print(
+  'Classification projection'
+);
+
+
+print(
+  classified2010.projection()
+);
+
+
+print(
+  'Classification CRS'
+);
+
+
+print(
+  classified2010.projection().crs()
+);
+
+
+print(
+  'Classification nominal scale'
+);
+
+
+print(
+  classified2010.projection().nominalScale()
+);
+
+
+// ================================================================
+// 5. CLASS VALUE RANGE
+// ================================================================
+
+var classRange =
+  classified2010.reduceRegion({
+
+    reducer:
+      ee.Reducer.minMax(),
+
+    geometry:
+      roi,
+
+    scale:
+      ANALYSIS_SCALE,
+
+    crs:
+      ANALYSIS_CRS,
+
+    maxPixels:
+      1e9,
+
+    tileScale:
+      4
+
+  });
+
+
+print(
+  'Classification min/max'
+);
+
+
+print(
+  classRange
+);
+
+
+// ================================================================
+// 6. PIXEL HISTOGRAM
+// ================================================================
+
+var histogramResult =
+  classified2010.reduceRegion({
+
+    reducer:
+      ee.Reducer.frequencyHistogram(),
+
+    geometry:
+      roi,
+
+    scale:
+      ANALYSIS_SCALE,
+
+    crs:
+      ANALYSIS_CRS,
+
+    maxPixels:
+      1e9,
+
+    tileScale:
+      4
+
+  });
+
+
+var classHistogram =
+  ee.Dictionary(
+    histogramResult.get(
+      'classification'
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '2010 CLASS PIXEL HISTOGRAM'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  classHistogram
+);
+
+
+// ================================================================
+// 7. VECTOR ROI AREA
+// ================================================================
+
+var vectorRoiAreaKm2 =
+  roi
+    .area({
+      maxError:
+        1
+    })
+    .divide(
+      1e6
+    );
+
+
+print(
+  'Vector ROI area km2'
+);
+
+
+print(
+  vectorRoiAreaKm2
+);
+
+
+// ================================================================
+// 8. RASTER-GRID ROI SUPPORT AREA
+// ================================================================
+//
+// This measures the ROI using the SAME 30 m analytical grid
+// used for the classification area calculations.
+//
+// It may differ slightly from exact vector area because of
+// raster-grid discretization.
+//
+// ================================================================
+
+var pixelAreaKm2 =
+  ee.Image
+    .pixelArea()
+    .divide(
+      1e6
+    )
+    .rename(
+      'area_km2'
+    );
+
+
+var roiRasterAreaResult =
+  pixelAreaKm2
+
+    .clip(
+      roi
+    )
+
+    .reduceRegion({
+
+      reducer:
+        ee.Reducer.sum(),
+
+      geometry:
+        roi,
+
+      scale:
+        ANALYSIS_SCALE,
+
+      crs:
+        ANALYSIS_CRS,
+
+      maxPixels:
+        1e9,
+
+      tileScale:
+        4
+
+    });
+
+
+var roiRasterAreaKm2 =
+  ee.Number(
+    roiRasterAreaResult.get(
+      'area_km2'
+    )
+  );
+
+
+print(
+  'Raster-grid ROI support area km2'
+);
+
+
+print(
+  roiRasterAreaKm2
+);
+
+
+// ================================================================
+// 9. CLASSIFIED SUPPORT AREA
+// ================================================================
+//
+// Only pixels where the saved classification is unmasked.
+//
+// ================================================================
+
+var classifiedSupportArea =
+  pixelAreaKm2
+
+    .updateMask(
+      classified2010.mask()
+    )
+
+    .reduceRegion({
+
+      reducer:
+        ee.Reducer.sum(),
+
+      geometry:
+        roi,
+
+      scale:
+        ANALYSIS_SCALE,
+
+      crs:
+        ANALYSIS_CRS,
+
+      maxPixels:
+        1e9,
+
+      tileScale:
+        4
+
+    });
+
+
+var classifiedAreaKm2 =
+  ee.Number(
+    classifiedSupportArea.get(
+      'area_km2'
+    )
+  );
+
+
+var unclassifiedAreaKm2 =
+  roiRasterAreaKm2.subtract(
+    classifiedAreaKm2
+  );
+
+
+var classifiedCoveragePercent =
+  classifiedAreaKm2
+    .divide(
+      roiRasterAreaKm2
+    )
+    .multiply(
+      100
+    );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '2010 RASTER SUPPORT QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    vector_roi_area_km2:
+      vectorRoiAreaKm2,
+
+    raster_grid_roi_area_km2:
+      roiRasterAreaKm2,
+
+    classified_area_km2:
+      classifiedAreaKm2,
+
+    unclassified_or_masked_area_km2:
+      unclassifiedAreaKm2,
+
+    classified_coverage_percent:
+      classifiedCoveragePercent
+
+  })
+);
+
+
+// ================================================================
+// 10. AREA IMAGE FOR GROUPED REDUCTION
+// ================================================================
+
+var groupedAreaImage =
+  pixelAreaKm2
+
+    .updateMask(
+      classified2010.mask()
+    )
+
+    .addBands(
+      classified2010
+    );
+
+
+// ================================================================
+// 11. GROUPED CLASS AREA REDUCTION
+// ================================================================
+//
+// Band 0 = area_km2
+// Band 1 = classification
+//
+// groupField = 1 means grouping by the classification band.
+//
+// ================================================================
+
+var groupedAreaResult =
+  groupedAreaImage.reduceRegion({
+
+    reducer:
+      ee.Reducer
+        .sum()
+        .group({
+
+          groupField:
+            1,
+
+          groupName:
+            'class_id'
+
+        }),
+
+    geometry:
+      roi,
+
+    scale:
+      ANALYSIS_SCALE,
+
+    crs:
+      ANALYSIS_CRS,
+
+    maxPixels:
+      1e9,
+
+    tileScale:
+      4
+
+  });
+
+
+var rawAreaGroups =
+  ee.List(
+    groupedAreaResult.get(
+      'groups'
+    )
+  );
+
+
+print(
+  'Raw grouped area result'
+);
+
+
+print(
+  rawAreaGroups
+);
+
+
+// ================================================================
+// 12. BUILD CLEAN CLASS AREA TABLE
+// ================================================================
+
+var classNamesEE =
+  ee.List(
+    CLASS_NAMES
+  );
+
+
+var areaStats =
+  ee.FeatureCollection(
+
+    rawAreaGroups.map(
+      function(item) {
+
+        item =
+          ee.Dictionary(
+            item
+          );
+
+
+        var classId =
+          ee.Number(
+            item.get(
+              'class_id'
+            )
+          )
+          .toInt();
+
+
+        var areaKm2 =
+          ee.Number(
+            item.get(
+              'sum'
+            )
+          );
+
+
+        var percentage =
+          areaKm2
+
+            .divide(
+              classifiedAreaKm2
+            )
+
+            .multiply(
+              100
+            );
+
+
+        return ee.Feature(
+          null,
+          {
+
+            class_id:
+              classId,
+
+            class_name:
+              classNamesEE.get(
+                classId.subtract(
+                  1
+                )
+              ),
+
+            area_km2:
+              areaKm2,
+
+            percentage_of_classified_area:
+              percentage
+
+          }
+        );
+
+      }
+    )
+
+  )
+  .sort(
+    'class_id'
+  );
+
+
+// ================================================================
+// 13. AREA TABLE
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '2010 CLASS AREA STATISTICS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  areaStats
+);
+
+
+// ================================================================
+// 14. CLASS-WISE EASY-TO-READ OUTPUT
+// ================================================================
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var row =
+      ee.Feature(
+
+        areaStats
+          .filter(
+            ee.Filter.eq(
+              'class_id',
+              classId
+            )
+          )
+          .first()
+
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        area_km2:
+          row.get(
+            'area_km2'
+          ),
+
+        percentage:
+          row.get(
+            'percentage_of_classified_area'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 15. SUM-TO-TOTAL QA
+// ================================================================
+
+var summedClassAreaKm2 =
+  ee.Number(
+    areaStats.aggregate_sum(
+      'area_km2'
+    )
+  );
+
+
+var areaDifferenceKm2 =
+  summedClassAreaKm2.subtract(
+    classifiedAreaKm2
+  );
+
+
+var summedPercentage =
+  ee.Number(
+    areaStats.aggregate_sum(
+      'percentage_of_classified_area'
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '05G — AREA CONSISTENCY QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    classified_area_km2:
+      classifiedAreaKm2,
+
+    sum_of_5_class_areas_km2:
+      summedClassAreaKm2,
+
+    class_area_minus_total_km2:
+      areaDifferenceKm2,
+
+    sum_of_percentages:
+      summedPercentage
+
+  })
+);
+
+
+// ================================================================
+// 16. CLASSIFIED PIXEL COUNT
+// ================================================================
+
+var classifiedPixelCountResult =
+  ee.Image
+    .constant(
+      1
+    )
+
+    .rename(
+      'pixel'
+    )
+
+    .updateMask(
+      classified2010.mask()
+    )
+
+    .reduceRegion({
+
+      reducer:
+        ee.Reducer.sum(),
+
+      geometry:
+        roi,
+
+      scale:
+        ANALYSIS_SCALE,
+
+      crs:
+        ANALYSIS_CRS,
+
+      maxPixels:
+        1e9,
+
+      tileScale:
+        4
+
+    });
+
+
+var classifiedPixelCount =
+  classifiedPixelCountResult.get(
+    'pixel'
+  );
+
+
+print(
+  'Classified raster pixel count'
+);
+
+
+print(
+  classifiedPixelCount
+);
+
+
+// ================================================================
+// 17. ACCURACY CAVEAT — LOCKED RESULT
+// ================================================================
+//
+// This is documentation only.
+//
+// 2010 independent validation:
+//
+// OA    = 40.6667%
+// Kappa = 0.25833
+//
+// Therefore 2010 area and subsequent change estimates must be
+// interpreted with substantially greater uncertainty than the
+// higher-accuracy 2015 / 2020 / 2025 classifications.
+//
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  'IMPORTANT 2010 INTERPRETATION NOTE'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'Independent validation OA = 40.67%'
+);
+
+
+print(
+  'Independent validation Kappa = 0.2583'
+);
+
+
+print(
+  '2010 class areas are descriptive outputs of the saved raster.'
+);
+
+
+print(
+  'Any 2010-derived temporal change must carry an explicit low-accuracy caveat.'
+);
+
+
+// ================================================================
+// 18. FINAL MESSAGE
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05G COMPLETE'
+);
+
+print(
+  'NO EXPORT TASK CREATED.'
+);
+
+print(
+  'DO NOT RUN AGAIN AFTER SUCCESSFUL COMPLETION.'
+);
+
+print(
+  'Send RASTER SUPPORT QA + five class-area dictionaries +'
+);
+
+print(
+  'AREA CONSISTENCY QA + pixel histogram.'
+);
+
+print(
+  '========================================'
+);

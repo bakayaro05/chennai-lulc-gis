@@ -1,0 +1,518 @@
+
+// ============================================================
+// CHENNAI LULC - STAGE 08F-4A / PART 2
+// MEMORY-SAFE POINT-ONLY SNIC PAIRED ROBUSTNESS AUDIT
+//
+// Requires COMPLETED Part 1 asset.
+// NO SNIC re-computation.
+// NO raster inference.
+// NO writes or exports.
+// ============================================================
+
+// ============================================================
+// 1. READ PRECOMPUTED POINT SNAPSHOT
+// ============================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var SNAPSHOT =
+  ROOT + 'chennai_08f4a_X3_point_snapshot_v1';
+
+var points = ee.FeatureCollection(SNAPSHOT);
+
+var training = points.filter(
+  ee.Filter.eq('split', 'training')
+);
+
+var validation = points.filter(
+  ee.Filter.eq('split', 'validation')
+);
+
+var BANDS11 = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI',
+  'segment_NDBI_mean',
+  'segment_red_sd'
+];
+
+var CLASS_IDS = [1, 2, 3, 4, 5];
+
+var REGULARIZATION = 1e-6;
+
+// ============================================================
+// 2. RECREATE THE ORIGINAL X3 GAUSSIAN PARAMETERS
+// ============================================================
+
+function modelForClass(id) {
+
+  var fc = training.filter(
+    ee.Filter.eq('class_id', id)
+  );
+
+  var mean = ee.Array([
+    BANDS11.map(function(b) {
+      return fc.aggregate_mean(b);
+    })
+  ]).transpose();
+
+  var samplesAsArrays = fc.makeArray(
+    BANDS11,
+    'feature_vector'
+  );
+
+  var cov = ee.Array(
+    samplesAsArrays.reduceColumns({
+      reducer: ee.Reducer.covariance()
+        .setOutputs(['covariance']),
+      selectors: ['feature_vector']
+    }).get('covariance')
+  );
+
+  var reg = cov.add(
+    ee.Array.identity(BANDS11.length)
+      .multiply(REGULARIZATION)
+  );
+
+  return ee.Dictionary({
+    count: fc.size(),
+    mean: mean,
+    determinant: reg.matrixDeterminant(),
+    inverse: reg.matrixInverse()
+  });
+}
+
+var models = ee.List(
+  CLASS_IDS.map(modelForClass)
+);
+
+// ============================================================
+// 3. IDENTIFY ORIGINAL TRAINING SEGMENTS
+// ============================================================
+
+var trainSegmentIDs = ee.List(
+  training.aggregate_array('segment_id')
+).distinct();
+
+// ============================================================
+// 4. CLASSIFY VALIDATION POINTS USING GAUSSIAN MLC
+// ============================================================
+
+// Important optimization:
+// Instead of classifying the full raster, calculate
+// Gaussian log-likelihoods for 300 point vectors.
+
+function predictPoint(feature) {
+
+  var f = ee.Feature(feature);
+
+  var x = ee.Array([
+    BANDS11.map(function(b) {
+      return ee.Number(f.get(b));
+    })
+  ]).transpose();
+
+  var scores = ee.List.sequence(0, 4)
+    .map(function(index) {
+
+      var p = ee.Dictionary(
+        models.get(ee.Number(index))
+      );
+
+      var d = x.subtract(
+        ee.Array(p.get('mean'))
+      );
+
+      var mahalanobis = d.transpose()
+        .matrixMultiply(
+          ee.Array(p.get('inverse'))
+        )
+        .matrixMultiply(d)
+        .get([0, 0]);
+
+      return ee.Number(mahalanobis)
+        .multiply(-0.5)
+        .subtract(
+          ee.Number(p.get('determinant'))
+            .max(1e-300)
+            .log()
+            .multiply(0.5)
+        );
+    });
+
+  var best = ee.Number(
+    scores.reduce(ee.Reducer.max())
+  );
+
+  var predicted = ee.Number(
+    scores.indexOf(best)
+  ).add(1);
+
+  var truth = ee.Number(
+    f.get('class_id')
+  );
+
+  var previous = ee.Number(
+    f.get('baseline')
+  );
+
+  var oldCorrect = ee.Number(
+    ee.Algorithms.If(
+      previous.eq(truth),
+      1,
+      0
+    )
+  );
+
+  var newCorrect = ee.Number(
+    ee.Algorithms.If(
+      predicted.eq(truth),
+      1,
+      0
+    )
+  );
+
+  var shared = ee.Number(
+    ee.Algorithms.If(
+      trainSegmentIDs.contains(
+        f.get('segment_id')
+      ),
+      1,
+      0
+    )
+  );
+
+  return f.set({
+    candidate: predicted,
+    shared_segment: shared,
+    old_correct: oldCorrect,
+    new_correct: newCorrect,
+
+    improved: newCorrect
+      .subtract(oldCorrect)
+      .eq(1),
+
+    worsened: oldCorrect
+      .subtract(newCorrect)
+      .eq(1)
+  });
+}
+
+// ============================================================
+// 5. BUILD THE THREE AUDIT GROUPS
+// ============================================================
+
+var paired = validation.map(predictPoint);
+
+var nonshared = paired.filter(
+  ee.Filter.eq('shared_segment', 0)
+);
+
+var shared = paired.filter(
+  ee.Filter.eq('shared_segment', 1)
+);
+
+// ============================================================
+// 6. REUSABLE PAIRED ACCURACY AUDIT
+// ============================================================
+
+function audit(label, fc) {
+
+  var order = [1, 2, 3, 4, 5];
+
+  var base = fc.errorMatrix(
+    'class_id',
+    'baseline',
+    order
+  );
+
+  var snic = fc.errorMatrix(
+    'class_id',
+    'candidate',
+    order
+  );
+
+  var oldTP = ee.Number(
+    ee.Array(base.array()).get([0, 0])
+  );
+
+  var newTP = ee.Number(
+    ee.Array(snic.array()).get([0, 0])
+  );
+
+  var notBuilt = fc.filter(
+    ee.Filter.neq('class_id', 1)
+  );
+
+  print('-------------------------------------------------');
+  print(label);
+
+  print('Sample count:');
+  print(fc.size());
+
+  print('Actual class counts:');
+  print(
+    fc.aggregate_histogram('class_id')
+  );
+
+  print('BASELINE confusion matrix:');
+  print(base);
+
+  print('SNIC confusion matrix:');
+  print(snic);
+
+  print('Overall accuracy - baseline / SNIC:');
+  print(
+    ee.Dictionary({
+      baseline: base.accuracy(),
+      snic: snic.accuracy()
+    })
+  );
+
+  print('SNIC minus baseline accuracy, percentage points:');
+  print(
+    ee.Number(snic.accuracy())
+      .subtract(base.accuracy())
+      .multiply(100)
+  );
+
+  print('Paired total gains / regressions:');
+  print(
+    ee.Dictionary({
+
+      gains: fc.filter(
+        ee.Filter.eq('improved', true)
+      ).size(),
+
+      regressions: fc.filter(
+        ee.Filter.eq('worsened', true)
+      ).size()
+
+    })
+  );
+
+  print('Actual Built-up and correctly identified Built-up:');
+  print(
+    ee.Dictionary({
+      actual: fc.filter(
+        ee.Filter.eq('class_id', 1)
+      ).size(),
+
+      baseline_TP: oldTP,
+      snic_TP: newTP
+    })
+  );
+
+  print('Non-Built-up incorrectly labeled Built-up:');
+  print(
+    ee.Dictionary({
+
+      baseline_FP: notBuilt.filter(
+        ee.Filter.eq('baseline', 1)
+      ).size(),
+
+      snic_FP: notBuilt.filter(
+        ee.Filter.eq('candidate', 1)
+      ).size()
+
+    })
+  );
+
+  print('Built-up gains / regressions:');
+  print(
+    ee.Dictionary({
+
+      gains: fc
+        .filter(ee.Filter.eq('class_id', 1))
+        .filter(ee.Filter.eq('improved', true))
+        .size(),
+
+      regressions: fc
+        .filter(ee.Filter.eq('class_id', 1))
+        .filter(ee.Filter.eq('worsened', true))
+        .size()
+
+    })
+  );
+}
+
+// ============================================================
+// 7. CHECK SPECTRAL RECONSTRUCTION
+// ============================================================
+
+var trainQA = training.map(function(f) {
+
+  return f.set({
+
+    red_delta: ee.Number(f.get('red'))
+      .subtract(
+        ee.Number(f.get('archive_red'))
+      ).abs(),
+
+    NDBI_delta: ee.Number(f.get('NDBI'))
+      .subtract(
+        ee.Number(f.get('archive_NDBI'))
+      ).abs()
+
+  });
+});
+
+// ============================================================
+// 8. CONSOLE QA
+// ============================================================
+
+print('===============================================');
+print('STAGE 08F-4A | MEMORY-SAFE SNIC PAIRED AUDIT');
+print('===============================================');
+
+print('Snapshot asset:');
+print(SNAPSHOT);
+
+print('Snapshot total (expected 900):');
+print(points.size());
+
+print('Training (expected 600):');
+print(training.size());
+
+print('Training class counts (120 each):');
+print(
+  training.aggregate_histogram('class_id')
+);
+
+print('Validation (expected 300):');
+print(validation.size());
+
+print('Training RED mismatch (expected zero):');
+print(
+  trainQA.aggregate_max('red_delta')
+);
+
+print('Training NDBI mismatch (expected zero):');
+print(
+  trainQA.aggregate_max('NDBI_delta')
+);
+
+print('Distinct training segments (previously 141):');
+print(trainSegmentIDs.size());
+
+print('Validation points sharing training segments:');
+print(shared.size());
+
+print('Expected shared points from X3: 33');
+
+print('Validation points outside training segments:');
+print(nonshared.size());
+
+print('Expected nonshared points from X3: 267');
+
+// ============================================================
+// 9. COVARIANCE CHECK
+// ============================================================
+
+print('REGULARIZED CLASS COVARIANCE DETERMINANTS');
+
+CLASS_IDS.forEach(function(id, k) {
+
+  var m = ee.Dictionary(
+    models.get(k)
+  );
+
+  print('Class ' + id + ' determinant:');
+  print(
+    m.get('determinant')
+  );
+});
+
+// ============================================================
+// 10. THREE PAIRED COMPARISONS
+// ============================================================
+
+audit(
+  'ALL 300 POINTS',
+  paired
+);
+
+audit(
+  'NONSHARED SEGMENTS ONLY',
+  nonshared
+);
+
+audit(
+  'SHARED SEGMENTS ONLY',
+  shared
+);
+
+// ============================================================
+// 11. IDENTIFY CORRECTED BUILT-UP POINTS
+// ============================================================
+
+print('NEWLY CORRECTED BUILT-UP VALIDATION POINTS');
+
+print(
+  paired
+    .filter(ee.Filter.eq('class_id', 1))
+    .filter(ee.Filter.eq('improved', true))
+    .select([
+      'source_index',
+      'source_poly_id',
+      'class_id',
+      'baseline',
+      'candidate',
+      'segment_id',
+      'shared_segment'
+    ])
+);
+
+print('NEWLY WORSENED BUILT-UP VALIDATION POINTS');
+
+print(
+  paired
+    .filter(ee.Filter.eq('class_id', 1))
+    .filter(ee.Filter.eq('worsened', true))
+    .select([
+      'source_index',
+      'source_poly_id',
+      'class_id',
+      'baseline',
+      'candidate',
+      'segment_id',
+      'shared_segment'
+    ])
+);
+
+// ============================================================
+// 12. FINAL CHECKPOINT
+// ============================================================
+
+print('===============================================');
+print('STAGE 08F-4A AUDIT COMPLETE');
+print('===============================================');
+
+print('CHECK THAT ALL 300 RESULTS REPRODUCE:');
+
+print('Baseline accuracy: 257/300 = 85.6667%');
+print('SNIC accuracy: 258/300 = 86.0000%');
+
+print('Baseline Built-up TP: 49');
+print('SNIC Built-up TP: 51');
+
+print('Original Stage 08F-4 shared-segment count: 33');
+
+print('If these figures differ, investigate BEFORE');
+print('interpreting any subset results.');
+
+print('NO CLASSIFICATION ASSETS WERE MODIFIED.');
+print('NO EXPERIMENT HAS BEEN ACCEPTED YET.');
+
+// No full-area Map layers.
+// All computations use the small sample snapshot.
+
+// ============================================================
+// END STAGE 08F-4A PART 2
+// ============================================================

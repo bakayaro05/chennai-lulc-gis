@@ -1,0 +1,1357 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05D1
+//
+// FINAL 2010 TRAINING CONSTRUCTION + QA
+//
+// PURPOSE
+// -------
+// Combine all MATERIALIZED approved 2010 candidate sources,
+// remove duplicate pixels, and construct:
+//
+//      120 pixels/class
+//      5 classes
+//      600 total
+//
+// Selection is DIVERSITY-AWARE by source poly_id.
+//
+// After selection, predictor values are sampled FRESH from the
+// authoritative materialized 2010 predictor stack.
+//
+// INPUT ASSETS
+// ------------
+// 05C1 = corrected automated Pass-B candidates
+// 05C2A = rescued uncertain anchors
+// 05C3A = targeted 60 m expansion
+// 05C4E = manually reviewed Barren/Fallow polygon 304
+//
+// IMPORTANT
+// ---------
+// NO validation.
+// NO MLC.
+// NO classification.
+// NO map layers.
+//
+// OUTPUT CANDIDATE:
+// chennai_2010_training_candidate_05D1
+//
+// This is NOT YET named chennai_training_2010_final.
+// 05D2 will verify the materialized candidate and promote it.
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSET PATHS
+// ================================================================
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var PASSB_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+
+var RESCUED_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_rescued_uncertain_05C2A';
+
+
+var EXPANSION_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_targeted_expansion_05C3A';
+
+
+var MANUAL_BARREN_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_manual_barren_05C4E';
+
+
+var OUTPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_training_candidate_05D1';
+
+
+// ================================================================
+// 2. LOCKED SETTINGS
+// ================================================================
+
+var SCALE =
+  30;
+
+
+var TARGET_PER_CLASS =
+  120;
+
+
+var TOTAL_TARGET =
+  600;
+
+
+var SEED_BASE =
+  201005010;
+
+
+var PREDICTORS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+var CLASS_IDS =
+  [1, 2, 3, 4, 5];
+
+
+var CLASS_NAMES = [
+
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+
+];
+
+
+// ================================================================
+// 3. LOAD MATERIALIZED INPUTS
+// ================================================================
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  );
+
+
+var passB =
+  ee.FeatureCollection(
+    PASSB_ASSET
+  )
+  .map(
+    function(feature) {
+
+      return feature.set(
+        'candidate_source',
+        '05C1_passB'
+      );
+
+    }
+  );
+
+
+var rescued =
+  ee.FeatureCollection(
+    RESCUED_ASSET
+  )
+  .map(
+    function(feature) {
+
+      return feature.set(
+        'candidate_source',
+        '05C2A_rescued'
+      );
+
+    }
+  );
+
+
+var expansion60 =
+  ee.FeatureCollection(
+    EXPANSION_ASSET
+  )
+  .map(
+    function(feature) {
+
+      return feature.set(
+        'candidate_source',
+        '05C3A_targeted60m'
+      );
+
+    }
+  );
+
+
+var manualBarren =
+  ee.FeatureCollection(
+    MANUAL_BARREN_ASSET
+  )
+  .map(
+    function(feature) {
+
+      return feature.set(
+        'candidate_source',
+        '05C4E_manual304'
+      );
+
+    }
+  );
+
+
+var stackProjection =
+  stack2010
+    .select(
+      'blue'
+    )
+    .projection();
+
+
+// ================================================================
+// 4. MERGE ALL APPROVED CANDIDATE SOURCES
+// ================================================================
+
+var mergedRaw =
+  passB
+
+    .merge(
+      rescued
+    )
+
+    .merge(
+      expansion60
+    )
+
+    .merge(
+      manualBarren
+    );
+
+
+// ------------------------------------------------
+// Remove any repeated authoritative raster pixel.
+//
+// Merge order intentionally keeps the earlier accepted feature
+// when a rescued feature duplicates an existing 05C1 pixel.
+// ------------------------------------------------
+
+var candidatePool =
+  mergedRaw.distinct(
+    [
+      'auth_pixel_key'
+    ]
+  );
+
+
+// ================================================================
+// 5. CURRENT POOL QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05D1 — MATERIALIZED INPUT POOL'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    raw_merged_n:
+      mergedRaw.size(),
+
+    unique_candidate_n:
+      candidatePool.size(),
+
+    removed_duplicate_n:
+      mergedRaw.size()
+        .subtract(
+          candidatePool.size()
+        )
+
+  })
+);
+
+
+print(
+  'Candidate class histogram'
+);
+
+
+print(
+  candidatePool.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ================================================================
+// 6. CURRENT CLASS + POLY_ID DISTRIBUTION
+// ================================================================
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var fc =
+      candidatePool.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        available_n:
+          fc.size(),
+
+        poly_id_histogram:
+          fc.aggregate_histogram(
+            'poly_id'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 7. DIVERSITY-AWARE FINAL QUOTAS
+// ================================================================
+//
+// These quotas use the CURRENT MATERIALIZED POOL.
+//
+// PRINCIPLE:
+//
+// - Preserve scarce source groups.
+// - Reduce only overrepresented groups.
+// - Maximize practical source diversity.
+// - Barren/Fallow uses every approved pixel because exactly
+//   120 are available.
+//
+// ------------------------------------------------
+//
+// BUILT-UP — 120
+//
+// poly 1  = 13 / 20
+// poly 3  = 12 / 12
+// poly 4  = 10 / 10
+// poly 5  = 12 / 12
+// poly 6  = 13 / 23
+// poly 7  = 13 / 19
+// poly 8  = 13 / 30
+// poly 9  = 13 / 23
+// poly 11 =  8 / 8
+// poly 12 = 13 / 26
+//
+// ------------------------------------------------
+//
+// VEGETATION — 120
+//
+// poly 25 = 16 / 16
+// poly 26 =104 /203
+//
+// All available poly 25 pixels retained.
+//
+// ------------------------------------------------
+//
+// WATER — 120
+//
+// poly 31  =38 /46
+// poly 32  = 7 /7
+// poly 38  =39 /55
+// poly 201 =36 /36
+//
+// ------------------------------------------------
+//
+// AGRICULTURAL/OPEN — 120
+//
+// Only three pixels are removed, from dominant poly 60.
+//
+// poly 47  = 2
+// poly 48  =15
+// poly 51  =12
+// poly 52  =23
+// poly 53  = 6
+// poly 56  =23
+// poly 57  = 4
+// poly 60  =23 /26
+// poly 202 =12
+//
+// ------------------------------------------------
+//
+// BARREN/FALLOW — 120
+//
+// poly 63  =55
+// poly 64  = 4
+// poly 304 =61
+//
+// All approved pixels retained.
+//
+// ================================================================
+
+
+// ================================================================
+// 8. QUOTA SPECIFICATION
+// ================================================================
+
+var quotaSpecs = [
+
+  // --------------------------------------------------------------
+  // BUILT-UP
+  // --------------------------------------------------------------
+
+  {
+    class_id: 1,
+    class_name: 'Built-up',
+    poly_id: 1,
+    quota: 13
+  },
+
+  {
+    class_id: 1,
+    class_name: 'Built-up',
+    poly_id: 3,
+    quota: 12
+  },
+
+  {
+    class_id: 1,
+    class_name: 'Built-up',
+    poly_id: 4,
+    quota: 10
+  },
+
+  {
+    class_id: 1,
+    class_name: 'Built-up',
+    poly_id: 5,
+    quota: 12
+  },
+
+  {
+    class_id: 1,
+    class_name: 'Built-up',
+    poly_id: 6,
+    quota: 13
+  },
+
+  {
+    class_id: 1,
+    class_name: 'Built-up',
+    poly_id: 7,
+    quota: 13
+  },
+
+  {
+    class_id: 1,
+    class_name: 'Built-up',
+    poly_id: 8,
+    quota: 13
+  },
+
+  {
+    class_id: 1,
+    class_name: 'Built-up',
+    poly_id: 9,
+    quota: 13
+  },
+
+  {
+    class_id: 1,
+    class_name: 'Built-up',
+    poly_id: 11,
+    quota: 8
+  },
+
+  {
+    class_id: 1,
+    class_name: 'Built-up',
+    poly_id: 12,
+    quota: 13
+  },
+
+
+  // --------------------------------------------------------------
+  // VEGETATION
+  // --------------------------------------------------------------
+
+  {
+    class_id: 2,
+    class_name: 'Vegetation',
+    poly_id: 25,
+    quota: 16
+  },
+
+  {
+    class_id: 2,
+    class_name: 'Vegetation',
+    poly_id: 26,
+    quota: 104
+  },
+
+
+  // --------------------------------------------------------------
+  // WATER
+  // --------------------------------------------------------------
+
+  {
+    class_id: 3,
+    class_name: 'Water',
+    poly_id: 31,
+    quota: 38
+  },
+
+  {
+    class_id: 3,
+    class_name: 'Water',
+    poly_id: 32,
+    quota: 7
+  },
+
+  {
+    class_id: 3,
+    class_name: 'Water',
+    poly_id: 38,
+    quota: 39
+  },
+
+  {
+    class_id: 3,
+    class_name: 'Water',
+    poly_id: 201,
+    quota: 36
+  },
+
+
+  // --------------------------------------------------------------
+  // AGRICULTURAL / OPEN
+  // --------------------------------------------------------------
+
+  {
+    class_id: 4,
+    class_name: 'Agricultural/Open',
+    poly_id: 47,
+    quota: 2
+  },
+
+  {
+    class_id: 4,
+    class_name: 'Agricultural/Open',
+    poly_id: 48,
+    quota: 15
+  },
+
+  {
+    class_id: 4,
+    class_name: 'Agricultural/Open',
+    poly_id: 51,
+    quota: 12
+  },
+
+  {
+    class_id: 4,
+    class_name: 'Agricultural/Open',
+    poly_id: 52,
+    quota: 23
+  },
+
+  {
+    class_id: 4,
+    class_name: 'Agricultural/Open',
+    poly_id: 53,
+    quota: 6
+  },
+
+  {
+    class_id: 4,
+    class_name: 'Agricultural/Open',
+    poly_id: 56,
+    quota: 23
+  },
+
+  {
+    class_id: 4,
+    class_name: 'Agricultural/Open',
+    poly_id: 57,
+    quota: 4
+  },
+
+  {
+    class_id: 4,
+    class_name: 'Agricultural/Open',
+    poly_id: 60,
+    quota: 23
+  },
+
+  {
+    class_id: 4,
+    class_name: 'Agricultural/Open',
+    poly_id: 202,
+    quota: 12
+  },
+
+
+  // --------------------------------------------------------------
+  // BARREN / FALLOW
+  // --------------------------------------------------------------
+
+  {
+    class_id: 5,
+    class_name: 'Barren/Fallow',
+    poly_id: 63,
+    quota: 55
+  },
+
+  {
+    class_id: 5,
+    class_name: 'Barren/Fallow',
+    poly_id: 64,
+    quota: 4
+  },
+
+  {
+    class_id: 5,
+    class_name: 'Barren/Fallow',
+    poly_id: 304,
+    quota: 61
+  }
+
+];
+
+
+// ================================================================
+// 9. SELECT ONE QUOTA GROUP
+// ================================================================
+
+function selectQuota(
+  spec,
+  index
+) {
+
+  var classId =
+    spec.class_id;
+
+
+  var polyId =
+    spec.poly_id;
+
+
+  var quota =
+    spec.quota;
+
+
+  var seed =
+    SEED_BASE + index;
+
+
+  var available =
+    candidatePool
+
+      .filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      )
+
+      .filter(
+        ee.Filter.eq(
+          'poly_id',
+          polyId
+        )
+      );
+
+
+  var selected =
+    available
+
+      .randomColumn(
+        'final_select_random',
+        seed
+      )
+
+      .sort(
+        'final_select_random'
+      )
+
+      .limit(
+        quota
+      )
+
+      .map(
+        function(feature) {
+
+          return feature.set({
+
+            final_training_selected:
+              1,
+
+            final_selection_stage:
+              '05D1_diversity_aware',
+
+            final_requested_quota:
+              quota
+
+          });
+
+        }
+      );
+
+
+  return selected;
+
+}
+
+
+// ================================================================
+// 10. BUILD QUOTA FEASIBILITY REPORT
+// ================================================================
+
+var quotaQaFeatures = [];
+
+
+quotaSpecs.forEach(
+  function(spec, index) {
+
+    var available =
+      candidatePool
+
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            spec.class_id
+          )
+        )
+
+        .filter(
+          ee.Filter.eq(
+            'poly_id',
+            spec.poly_id
+          )
+        );
+
+
+    quotaQaFeatures.push(
+
+      ee.Feature(
+        null,
+        {
+
+          class_id:
+            spec.class_id,
+
+          class_name:
+            spec.class_name,
+
+          poly_id:
+            spec.poly_id,
+
+          available_n:
+            available.size(),
+
+          requested_n:
+            spec.quota,
+
+          feasible:
+            available.size()
+              .gte(
+                spec.quota
+              )
+
+        }
+      )
+
+    );
+
+  }
+);
+
+
+var quotaQA =
+  ee.FeatureCollection(
+    quotaQaFeatures
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  'QUOTA FEASIBILITY'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  quotaQA
+);
+
+
+// ================================================================
+// 11. APPLY ALL QUOTAS
+// ================================================================
+
+var selectedByQuota =
+  ee.FeatureCollection([]);
+
+
+quotaSpecs.forEach(
+  function(spec, index) {
+
+    selectedByQuota =
+      selectedByQuota.merge(
+        selectQuota(
+          spec,
+          index
+        )
+      );
+
+  }
+);
+
+
+// ================================================================
+// 12. REMOVE ANY ACCIDENTAL PIXEL DUPLICATES
+// ================================================================
+
+var selectedUnique =
+  selectedByQuota.distinct(
+    [
+      'auth_pixel_key'
+    ]
+  );
+
+
+// ================================================================
+// 13. PRE-RESAMPLING SELECTION QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05D1 — DIVERSITY-AWARE SELECTION QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    selected_before_dedup:
+      selectedByQuota.size(),
+
+    selected_after_dedup:
+      selectedUnique.size(),
+
+    duplicate_selected_pixels:
+      selectedByQuota.size()
+        .subtract(
+          selectedUnique.size()
+        ),
+
+    expected_total:
+      TOTAL_TARGET
+
+  })
+);
+
+
+print(
+  'Selected class histogram'
+);
+
+
+print(
+  selectedUnique.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ================================================================
+// 14. SELECTED POLY_ID DISTRIBUTIONS
+// ================================================================
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var fc =
+      selectedUnique.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        selected_n:
+          fc.size(),
+
+        distinct_poly_id_n:
+          ee.List(
+            fc.aggregate_array(
+              'poly_id'
+            )
+          )
+          .distinct()
+          .size(),
+
+        selected_poly_id_histogram:
+          fc.aggregate_histogram(
+            'poly_id'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 15. REDUCE TO CLEAN LABEL FEATURES
+// ================================================================
+//
+// We keep only essential metadata.
+//
+// Predictor values will now be sampled FRESH from the authoritative
+// materialized 2010 image.
+//
+// ================================================================
+
+var selectedLabels =
+  selectedUnique.map(
+    function(feature) {
+
+      return ee.Feature(
+
+        feature.geometry(),
+
+        {
+
+          class_id:
+            feature.get(
+              'class_id'
+            ),
+
+          class_name:
+            feature.get(
+              'class_name'
+            ),
+
+          poly_id:
+            feature.get(
+              'poly_id'
+            ),
+
+          candidate_source:
+            feature.get(
+              'candidate_source'
+            ),
+
+          original_auth_pixel_key:
+            feature.get(
+              'auth_pixel_key'
+            ),
+
+          final_select_random:
+            feature.get(
+              'final_select_random'
+            ),
+
+          final_selection_stage:
+            '05D1_diversity_aware',
+
+          target_year:
+            2010
+
+        }
+
+      );
+
+    }
+  );
+
+
+// ================================================================
+// 16. BUILD FRESH AUTHORITATIVE SAMPLING IMAGE
+// ================================================================
+
+var pixelXY =
+  ee.Image.pixelCoordinates(
+    stackProjection
+  )
+  .rename(
+    [
+      'final_px',
+      'final_py'
+    ]
+  );
+
+
+var finalSamplingImage =
+  stack2010
+
+    .select(
+      PREDICTORS
+    )
+
+    .addBands(
+      stack2010.select(
+        'clear_count'
+      )
+    )
+
+    .addBands(
+      pixelXY
+    );
+
+
+// ================================================================
+// 17. FRESHLY SAMPLE ALL FINAL TRAINING PIXELS
+// ================================================================
+
+var finalTrainingCandidate =
+  finalSamplingImage.sampleRegions({
+
+    collection:
+      selectedLabels,
+
+    properties: [
+
+      'class_id',
+      'class_name',
+      'poly_id',
+      'candidate_source',
+      'original_auth_pixel_key',
+      'final_select_random',
+      'final_selection_stage',
+      'target_year'
+
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      stackProjection,
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+
+  });
+
+
+// ================================================================
+// 18. RECREATE FINAL PIXEL KEY + VERIFY SNAP
+// ================================================================
+
+finalTrainingCandidate =
+  finalTrainingCandidate.map(
+    function(feature) {
+
+      var px =
+        ee.Number(
+          feature.get(
+            'final_px'
+          )
+        );
+
+
+      var py =
+        ee.Number(
+          feature.get(
+            'final_py'
+          )
+        );
+
+
+      var key =
+        px.format(
+          '%.0f'
+        )
+        .cat(
+          '_'
+        )
+        .cat(
+          py.format(
+            '%.0f'
+          )
+        );
+
+
+      var originalKey =
+        ee.String(
+          feature.get(
+            'original_auth_pixel_key'
+          )
+        );
+
+
+      var keyMatch =
+        key.compareTo(
+          originalKey
+        )
+        .eq(
+          0
+        );
+
+
+      return feature.set({
+
+        auth_pixel_key:
+          key,
+
+        pixel_key_match:
+          ee.Number(
+            ee.Algorithms.If(
+              keyMatch,
+              1,
+              0
+            )
+          )
+
+      });
+
+    }
+  );
+
+
+// ================================================================
+// 19. FINAL DATA-COMPLETENESS QA
+// ================================================================
+
+var completePredictors =
+  finalTrainingCandidate.filter(
+    ee.Filter.notNull(
+      PREDICTORS
+    )
+  );
+
+
+var finalDistinctKeys =
+  ee.List(
+    finalTrainingCandidate.aggregate_array(
+      'auth_pixel_key'
+    )
+  )
+  .distinct();
+
+
+var keyMismatchN =
+  finalTrainingCandidate
+    .filter(
+      ee.Filter.eq(
+        'pixel_key_match',
+        0
+      )
+    )
+    .size();
+
+
+print(
+  '========================================'
+);
+
+print(
+  'FINAL 2010 TRAINING CANDIDATE QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    final_total:
+      finalTrainingCandidate.size(),
+
+    expected_total:
+      TOTAL_TARGET,
+
+    predictor_complete_n:
+      completePredictors.size(),
+
+    distinct_pixel_key_n:
+      finalDistinctKeys.size(),
+
+    duplicate_pixel_n:
+      finalTrainingCandidate.size()
+        .subtract(
+          finalDistinctKeys.size()
+        ),
+
+    pixel_key_mismatch_n:
+      keyMismatchN,
+
+    minimum_clear_count:
+      finalTrainingCandidate.aggregate_min(
+        'clear_count'
+      )
+
+  })
+);
+
+
+print(
+  'FINAL CLASS HISTOGRAM'
+);
+
+
+print(
+  finalTrainingCandidate.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ================================================================
+// 20. FINAL SOURCE-GROUP QA
+// ================================================================
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var fc =
+      finalTrainingCandidate.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        final_n:
+          fc.size(),
+
+        distinct_poly_id_n:
+          ee.List(
+            fc.aggregate_array(
+              'poly_id'
+            )
+          )
+          .distinct()
+          .size(),
+
+        poly_id_histogram:
+          fc.aggregate_histogram(
+            'poly_id'
+          ),
+
+        candidate_source_histogram:
+          fc.aggregate_histogram(
+            'candidate_source'
+          ),
+
+        mean_clear_count:
+          fc.aggregate_mean(
+            'clear_count'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 21. CREATE INTERMEDIATE MATERIALIZATION TASK
+// ================================================================
+//
+// DO NOT START UNTIL CONSOLE QA IS REVIEWED.
+//
+// This saves the exact 600-point candidate so 05D2 does NOT
+// need to rerun any selection.
+//
+// ================================================================
+
+Export.table.toAsset({
+
+  collection:
+    finalTrainingCandidate,
+
+  description:
+    'chennai_2010_training_candidate_05D1',
+
+  assetId:
+    OUTPUT_ASSET
+
+});
+
+
+// ================================================================
+// 22. FINAL MESSAGE
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05D1 SCRIPT FINISHED'
+);
+
+print(
+  'DO NOT RUN THIS SCRIPT AGAIN.'
+);
+
+print(
+  'DO NOT START EXPORT UNTIL QA IS REVIEWED.'
+);
+
+print(
+  'Expected: 600 total, 120/class, 600 unique pixels.'
+);
+
+print(
+  '========================================'
+);

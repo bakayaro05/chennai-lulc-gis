@@ -1,0 +1,515 @@
+
+ // ============================================================
+ // CHENNAI LULC — STAGE 07Y
+ // 2020 RANDOM FOREST VS ORIGINAL GAUSSIAN MLC
+ //
+ // Uses existing 2020 training and validation assets.
+ // Nine original predictors.
+ // Same RF settings as 2010, 2015 and 2025.
+ //
+ // READ ONLY — NO EXPORTS OR ASSET MODIFICATIONS.
+ // ============================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var GRID = ee.Projection(
+  'EPSG:32644',
+  [30, 0, 399060, 0, -30, 1463250]
+);
+
+var SCALE = 30;
+
+var CLASSES = [1, 2, 3, 4, 5];
+
+var BANDS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+// ============================================================
+// 1. LOAD EXISTING 2020 ASSETS
+// ============================================================
+
+var roi = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+).geometry();
+
+var training = ee.FeatureCollection(
+  ROOT + 'chennai_training_2020_final'
+);
+
+var validation = ee.FeatureCollection(
+  ROOT + 'chennai_validation_2020_final'
+);
+
+var originalMLC = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2020'
+).select('classification');
+
+var SITE_FIELD = 'poly_id';
+
+// ============================================================
+// 2. RECONSTRUCT THE 2020 LANDSAT 8 PREDICTOR STACK
+// ============================================================
+
+function prepareL8(image) {
+
+  var qa = image.select('QA_PIXEL');
+  var sat = image.select('QA_RADSAT');
+
+  var clear = qa.bitwiseAnd(1 << 0).eq(0)
+    .and(qa.bitwiseAnd(1 << 1).eq(0))
+    .and(qa.bitwiseAnd(1 << 2).eq(0))
+    .and(qa.bitwiseAnd(1 << 3).eq(0))
+    .and(qa.bitwiseAnd(1 << 4).eq(0))
+    .and(qa.bitwiseAnd(1 << 5).eq(0))
+    .and(sat.eq(0));
+
+  return image.select(
+    [
+      'SR_B2',
+      'SR_B3',
+      'SR_B4',
+      'SR_B5',
+      'SR_B6',
+      'SR_B7'
+    ],
+    [
+      'blue',
+      'green',
+      'red',
+      'nir',
+      'swir1',
+      'swir2'
+    ]
+  )
+  .multiply(0.0000275)
+  .add(-0.2)
+  .updateMask(clear);
+
+}
+
+function addIndices(image) {
+
+  var red = image.select('red');
+  var green = image.select('green');
+  var nir = image.select('nir');
+  var swir = image.select('swir1');
+
+  return image.addBands([
+
+    nir.subtract(red)
+      .divide(nir.add(red))
+      .rename('NDVI'),
+
+    green.subtract(nir)
+      .divide(green.add(nir))
+      .rename('NDWI'),
+
+    swir.subtract(nir)
+      .divide(swir.add(nir))
+      .rename('NDBI')
+
+  ]);
+
+}
+
+var scenes2020 = ee.ImageCollection(
+  'LANDSAT/LC08/C02/T1_L2'
+)
+.filterBounds(roi)
+.filterDate('2020-01-01', '2021-01-01');
+
+var stack = addIndices(
+  scenes2020.map(prepareL8).median()
+)
+.select(BANDS)
+.clip(roi);
+
+// ============================================================
+// 3. CHECK AGAINST ARCHIVED 2020 TRAINING VALUES
+// ============================================================
+
+var archiveCheck = stack
+  .select(['red', 'NDVI'])
+  .sampleRegions({
+
+    collection: training.map(function(f) {
+
+      return f
+        .set('archive_red', f.get('red'))
+        .set('archive_ndvi', f.get('NDVI'));
+
+    }),
+
+    properties: [
+      'archive_red',
+      'archive_ndvi'
+    ],
+
+    projection: GRID,
+    scale: SCALE,
+    geometries: false,
+    tileScale: 8
+
+  })
+  .map(function(f) {
+
+    return f.set(
+      'red_difference',
+      ee.Number(f.get('red'))
+        .subtract(
+          ee.Number(f.get('archive_red'))
+        ).abs()
+    )
+    .set(
+      'ndvi_difference',
+      ee.Number(f.get('NDVI'))
+        .subtract(
+          ee.Number(f.get('archive_ndvi'))
+        ).abs()
+    );
+
+  });
+
+// ============================================================
+// 4. RANDOM FOREST CLASSIFIER
+// ============================================================
+
+function makeRF() {
+
+  return ee.Classifier.smileRandomForest({
+
+    numberOfTrees: 150,
+    variablesPerSplit: 3,
+    minLeafPopulation: 3,
+    bagFraction: 0.7,
+    seed: 20261013
+
+  });
+
+}
+
+var rf = makeRF().train({
+
+  features: training,
+  classProperty: 'class_id',
+  inputProperties: BANDS
+
+});
+
+// ============================================================
+// 5. VALIDATE RANDOM FOREST
+// ============================================================
+
+var validationPixels = stack.sampleRegions({
+
+  collection: validation,
+  properties: ['class_id'],
+  projection: GRID,
+  scale: SCALE,
+  geometries: false,
+  tileScale: 8
+
+});
+
+var rfPred = validationPixels.classify(
+  rf,
+  'classification'
+);
+
+var rfCM = rfPred.errorMatrix(
+  'class_id',
+  'classification',
+  CLASSES
+);
+
+// ============================================================
+// 6. VALIDATE ORIGINAL 2020 GAUSSIAN MLC
+// ============================================================
+
+var mlcPred = originalMLC.sampleRegions({
+
+  collection: validation,
+  properties: ['class_id'],
+  projection: GRID,
+  scale: SCALE,
+  geometries: false,
+  tileScale: 8
+
+});
+
+var mlcCM = mlcPred.errorMatrix(
+  'class_id',
+  'classification',
+  CLASSES
+);
+
+// ============================================================
+// 7. FIVE-FOLD SITE-HELD-OUT RF CROSS-VALIDATION
+// ============================================================
+
+// Keep every training polygon's pixels in one fold.
+// Folds are assigned separately within each class.
+
+function assignFolds(classId) {
+
+  var subset = training.filter(
+    ee.Filter.eq('class_id', classId)
+  );
+
+  var siteIds = ee.List(
+    subset.aggregate_array(SITE_FIELD)
+  ).distinct().sort();
+
+  return subset.map(function(f) {
+
+    var fold = ee.Number(
+      siteIds.indexOf(
+        f.get(SITE_FIELD)
+      )
+    ).mod(5);
+
+    return f.set('site_fold', fold);
+
+  });
+
+}
+
+var withFolds = ee.FeatureCollection([]);
+
+CLASSES.forEach(function(classId) {
+
+  withFolds = withFolds.merge(
+    assignFolds(classId)
+  );
+
+});
+
+var cvPred = ee.FeatureCollection(
+
+  ee.List.sequence(0, 4).iterate(
+
+    function(fold, accumulator) {
+
+      fold = ee.Number(fold);
+
+      var cvTraining = withFolds.filter(
+        ee.Filter.neq('site_fold', fold)
+      );
+
+      var cvTesting = withFolds.filter(
+        ee.Filter.eq('site_fold', fold)
+      );
+
+      var foldRF = makeRF().train({
+
+        features: cvTraining,
+        classProperty: 'class_id',
+        inputProperties: BANDS
+
+      });
+
+      return ee.FeatureCollection(accumulator)
+        .merge(
+          cvTesting.classify(
+            foldRF,
+            'classification'
+          )
+        );
+
+    },
+
+    ee.FeatureCollection([])
+
+  )
+
+);
+
+var cvCM = cvPred.errorMatrix(
+  'class_id',
+  'classification',
+  CLASSES
+);
+
+// ============================================================
+// 8. PREFLIGHT OUTPUT
+// ============================================================
+
+print('====================================================');
+print('STAGE 07Y — 2020 RANDOM FOREST COMPARISON');
+print('====================================================');
+
+print('Landsat 8 scenes:');
+print(scenes2020.size());
+
+print('Training points (expected 600):');
+print(training.size());
+
+print('Training per class:');
+print(training.aggregate_histogram('class_id'));
+
+print('Validation points (expected 300):');
+print(validation.size());
+
+print('Validation per class:');
+print(validation.aggregate_histogram('class_id'));
+
+print('Training feature properties:');
+print(training.first().propertyNames());
+
+print('Training points with valid poly_id (expected 600):');
+print(
+  training.filter(
+    ee.Filter.notNull([SITE_FIELD])
+  ).size()
+);
+
+print('Training points with all nine predictors:');
+print(
+  training.filter(
+    ee.Filter.notNull(BANDS)
+  ).size()
+);
+
+print('Archived band comparison count (expected 600):');
+print(archiveCheck.size());
+
+print('Maximum red band difference (expected near zero):');
+print(
+  archiveCheck.aggregate_max('red_difference')
+);
+
+print('Maximum NDVI difference (expected near zero):');
+print(
+  archiveCheck.aggregate_max('ndvi_difference')
+);
+
+print('Re-extracted validation count (expected 300):');
+print(validationPixels.size());
+
+// ============================================================
+// 9. ORIGINAL GAUSSIAN MLC RESULTS
+// ============================================================
+
+print('====================================================');
+print('2020 ORIGINAL GAUSSIAN MLC');
+print('====================================================');
+
+print('Gaussian MLC confusion matrix:');
+print(mlcCM);
+
+print('Gaussian MLC accuracy (%):');
+print(
+  ee.Number(mlcCM.accuracy()).multiply(100)
+);
+
+print('Gaussian MLC producer accuracies:');
+print(mlcCM.producersAccuracy());
+
+// ============================================================
+// 10. RANDOM FOREST RESULTS
+// ============================================================
+
+print('====================================================');
+print('2020 RANDOM FOREST — DEVELOPMENT VALIDATION');
+print('====================================================');
+
+print('RF confusion matrix:');
+print(rfCM);
+
+print('RF overall accuracy (%):');
+print(
+  ee.Number(rfCM.accuracy()).multiply(100)
+);
+
+print('RF producer accuracies:');
+print(rfCM.producersAccuracy());
+
+print('RF Built-up reference predictions:');
+print(
+  rfPred
+    .filter(ee.Filter.eq('class_id', 1))
+    .aggregate_histogram('classification')
+);
+
+print('RF Vacant/Open reference predictions:');
+print(
+  rfPred
+    .filter(ee.Filter.eq('class_id', 5))
+    .aggregate_histogram('classification')
+);
+
+// ============================================================
+// 11. GROUPED CROSS-VALIDATION RESULTS
+// ============================================================
+
+print('====================================================');
+print('2020 RF SITE-HELD-OUT CROSS-VALIDATION');
+print('====================================================');
+
+print('Number of distinct training sites:');
+print(
+  training.aggregate_count_distinct(SITE_FIELD)
+);
+
+print('Five-fold sample distribution:');
+print(
+  withFolds.aggregate_histogram('site_fold')
+);
+
+print('CV prediction count (expected 600):');
+print(cvPred.size());
+
+print('Grouped CV confusion matrix:');
+print(cvCM);
+
+print('Grouped CV accuracy (%):');
+print(
+  ee.Number(cvCM.accuracy()).multiply(100)
+);
+
+print('Grouped CV producer accuracies:');
+print(cvCM.producersAccuracy());
+
+print('RF variable importance:');
+print(
+  ee.Dictionary(rf.explain()).get('importance')
+);
+
+// ============================================================
+// 12. MAP DISPLAY
+// ============================================================
+
+Map.layers().reset();
+Map.centerObject(roi, 10);
+
+Map.addLayer(
+  originalMLC,
+  {
+    min: 1,
+    max: 5,
+    palette: [
+      'ff0000',
+      '008000',
+      '0000ff',
+      'ffff00',
+      'd2b48c'
+    ]
+  },
+  '2020 ORIGINAL GAUSSIAN MLC',
+  true
+);
+
+print('====================================================');
+print('END STAGE 07Y — 2020');
+print('No classification exports created.');
+print('No existing assets modified.');
+print('====================================================');

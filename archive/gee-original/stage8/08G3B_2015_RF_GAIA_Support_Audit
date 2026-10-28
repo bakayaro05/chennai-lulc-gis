@@ -1,0 +1,256 @@
+
+// ============================================================
+// CHENNAI LULC - STAGE 08G-3B
+// AUTOMATED CITYWIDE BUILT-UP CORRECTION SUPPORT AUDIT
+//
+// Compares the ORIGINAL and EXPERIMENTAL 2015 rasters
+// against independent-time GAIA impervious-year categories.
+//
+// NOTE: GAIA was used for RF pseudo-training, so this is
+// NOT independent validation.
+//
+// NO TRAINING, NO MANUAL INSPECTION, NO EXPORTS.
+// ============================================================
+
+// 1. LOCKED ASSETS
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var roiFC = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+);
+
+var roi = roiFC.geometry();
+
+var original = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2015'
+).select(0).rename('original');
+
+var experimental = ee.Image(
+  ROOT + 'chennai_2015_08G3_gaia_assisted_RF_experimental_v1'
+).select(0).rename('experimental');
+
+var grid = original.projection();
+
+// 2. GAIA CONVERSION YEARS
+
+var gaia = ee.Image(
+  'Tsinghua/FROM-GLC/GAIA/v10'
+).select('change_year_index').unmask(0);
+
+var gaiaBy2010 = gaia.gte(9)
+  .and(gaia.lte(34));
+
+var gaia2011to2015 = gaia.gte(4)
+  .and(gaia.lte(8));
+
+var gaiaBy2015 = gaiaBy2010
+  .or(gaia2011to2015);
+
+var gaiaNotBy2015 = gaiaBy2015.not();
+
+// 3. VALID PIXELS IN BOTH MAPS
+
+var common = original.mask()
+  .and(experimental.mask());
+
+var originalBU = original.eq(1);
+var newBU = experimental.eq(1);
+
+var gained = newBU.and(originalBU.not());
+var lost = originalBU.and(newBU.not());
+
+// 4. AREA BANDS
+
+function km2(mask, name) {
+  return ee.Image.pixelArea()
+    .divide(1000000)
+    .updateMask(mask)
+    .updateMask(common)
+    .rename(name);
+}
+
+var metrics = ee.Image.cat([
+
+  km2(originalBU, 'original_BU_km2'),
+
+  km2(newBU, 'RF_BU_km2'),
+
+  km2(gained, 'total_new_BU_km2'),
+
+  km2(lost, 'total_lost_BU_km2'),
+
+  // NEW BUILT-UP: THREE EXCLUSIVE GAIA GROUPS
+
+  km2(
+    gained.and(gaiaBy2010),
+    'new_BU_GAIA_impervious_by_2010_km2'
+  ),
+
+  km2(
+    gained.and(gaia2011to2015),
+    'new_BU_GAIA_conversion_2011_2015_km2'
+  ),
+
+  km2(
+    gained.and(gaiaNotBy2015),
+    'new_BU_not_in_GAIA_by_2015_km2'
+  ),
+
+  // ORIGINAL CLASS CONTRIBUTIONS
+
+  km2(
+    gained.and(original.eq(4)),
+    'new_BU_from_AgriculturalOpen_km2'
+  ),
+
+  km2(
+    gained.and(original.eq(5)),
+    'new_BU_from_BarrenFallow_km2'
+  ),
+
+  // GAIA SUPPORT OF THE TWO COMPLETE MAPS
+
+  km2(
+    originalBU.and(gaiaBy2015),
+    'original_BU_inside_GAIA2015_km2'
+  ),
+
+  km2(
+    newBU.and(gaiaBy2015),
+    'RF_BU_inside_GAIA2015_km2'
+  ),
+
+  km2(
+    originalBU.and(gaiaNotBy2015),
+    'original_BU_outside_GAIA2015_km2'
+  ),
+
+  km2(
+    newBU.and(gaiaNotBy2015),
+    'RF_BU_outside_GAIA2015_km2'
+  ),
+
+  // GAIA HISTORICAL IMPERVIOUS EXTENT
+
+  km2(
+    gaiaBy2010,
+    'GAIA_impervious_by_2010_km2'
+  ),
+
+  km2(
+    gaiaBy2015,
+    'GAIA_impervious_by_2015_km2'
+  ),
+
+  // EXISTING BUILT-UP REMOVED BY RF
+
+  km2(
+    lost.and(gaiaBy2015),
+    'RF_lost_BU_supported_by_GAIA2015_km2'
+  ),
+
+  km2(
+    lost.and(gaiaNotBy2015),
+    'RF_lost_BU_outside_GAIA2015_km2'
+  )
+
+]);
+
+// 5. SINGLE CITYWIDE AGGREGATION
+
+var summary = metrics.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: roi,
+  crs: 'EPSG:32644',
+  crsTransform: [
+    30, 0, 399060,
+    0, -30, 1463250
+  ],
+  maxPixels: 1e8,
+  tileScale: 8
+});
+
+// 6. CONSOLE
+
+print('===========================================');
+print('STAGE 08G-3B | RF BUILT-UP SUPPORT AUDIT');
+print('===========================================');
+
+print('Original grid:');
+print(grid);
+
+print('Experimental grid:');
+print(experimental.projection());
+
+print('GAIA interpretation:');
+print('>=9: impervious by 2010');
+print('4..8: converted during 2011-2015');
+print('0..3: not impervious by 2015');
+
+print('===========================================');
+print('CITYWIDE AREA SUMMARY IN KM2');
+print('===========================================');
+
+print(summary);
+
+print('CHECK: three new-BU GAIA categories');
+print('should sum to total_new_BU_km2.');
+
+print('GAIA support is NOT independent validation.');
+print('Original assets remain unchanged.');
+print('No new classification or export performed.');
+
+// 7. OPTIONAL MAP INSPECTION
+
+Map.layers().reset();
+Map.setOptions('SATELLITE');
+
+var palette = [
+  'ff0000',
+  '008000',
+  '0000ff',
+  'ffff00',
+  'd2b48c'
+];
+
+Map.addLayer(
+  original,
+  {min:1, max:5, palette:palette},
+  '2015 Original MLC',
+  true
+);
+
+Map.addLayer(
+  experimental,
+  {min:1, max:5, palette:palette},
+  '2015 Experimental RF',
+  false
+);
+
+Map.addLayer(
+  gained.and(gaiaBy2010).selfMask(),
+  {palette:['00ff00']},
+  'New BU - GAIA impervious by 2010',
+  false
+);
+
+Map.addLayer(
+  gained.and(gaia2011to2015).selfMask(),
+  {palette:['00ffff']},
+  'New BU - GAIA conversion 2011-2015',
+  false
+);
+
+Map.addLayer(
+  gained.and(gaiaNotBy2015).selfMask(),
+  {palette:['ff00ff']},
+  'New BU - NOT in GAIA by 2015',
+  false
+);
+
+Map.centerObject(roi, 10);
+
+// ============================================================
+// END STAGE 08G-3B
+// ============================================================

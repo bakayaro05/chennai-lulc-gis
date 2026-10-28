@@ -1,0 +1,199 @@
+
+ // =====================================================
+ // SCRIPT 03 - THANJAVUR 2020 ACCURACY AUDIT
+ // Uses independent reference data
+ // No training or retraining
+ // =====================================================
+
+ var ROOT = 'projects/assignment-482806/assets/';
+
+ var ROI_ASSET =
+   ROOT + 'tnj_city_trace_pilot_roi_2020';
+
+ var MAP_ASSET =
+   ROOT + 'thanjavur_mlc_transfer_2020_frozen_chennai';
+
+ var VALIDATION_ASSET =
+   ROOT + 'thanjavur_reference_2020_independently_labelled';
+
+ var CRS = 'EPSG:32644';
+ var SCALE = 30;
+ var CLASSES = [1, 2, 3, 4, 5];
+
+ var roi = ee.FeatureCollection(ROI_ASSET).geometry();
+ var mapped = ee.Image(MAP_ASSET).select('mapped_class');
+ var reference = ee.FeatureCollection(VALIDATION_ASSET);
+
+ // 1. REFERENCE QUALITY ASSURANCE
+ print('REFERENCE SAMPLE COUNT');
+ print(reference.size());
+
+ print('REFERENCE CLASS DISTRIBUTION');
+ print(reference.aggregate_histogram('reference_class'));
+
+ print('UNLABELLED COUNT - MUST BE ZERO');
+ print(
+   reference.filter(
+     ee.Filter.eq('reference_class', -1)
+   ).size()
+ );
+
+ print('INVALID REFERENCE CLASS COUNT - MUST BE ZERO');
+ print(
+   reference.filter(
+     ee.Filter.inList('reference_class', CLASSES).not()
+   ).size()
+ );
+
+ // 2. EXTRACT MAPPED CLASS AT REFERENCE POINTS
+ var checked = mapped.sampleRegions({
+   collection: reference,
+   properties: ['reference_class'],
+   scale: SCALE,
+   projection: ee.Projection(CRS),
+   geometries: true,
+   tileScale: 8
+ });
+
+ print('POINTS MATCHED TO VALID MAP PIXELS');
+ print(checked.size());
+
+ print('ORIGINAL REFERENCE COUNT - MUST MATCH');
+ print(reference.size());
+
+ // 3. CONFUSION MATRIX
+ // Rows = actual class, columns = predicted class
+ var cm = checked.errorMatrix(
+   'reference_class',
+   'mapped_class',
+   CLASSES
+ );
+
+ print('THANJAVUR CONFUSION MATRIX');
+ print(cm);
+
+ print('UNWEIGHTED SAMPLE ACCURACY');
+ print(cm.accuracy());
+
+ print('SAMPLE KAPPA');
+ print(cm.kappa());
+
+ print('SAMPLE PRODUCERS ACCURACY');
+ print(cm.producersAccuracy());
+
+ print('SAMPLE USERS ACCURACY');
+ print(cm.consumersAccuracy());
+
+ // 4. MAPPED CLASS AREAS
+ var areas = ee.Image.pixelArea()
+   .rename('area_m2')
+   .addBands(mapped)
+   .reduceRegion({
+     reducer: ee.Reducer.sum().group({
+       groupField: 1,
+       groupName: 'mapped_class'
+     }),
+     geometry: roi,
+     crs: CRS,
+     scale: SCALE,
+     maxPixels: 1e13,
+     tileScale: 8
+   });
+
+ var groups = ee.List(areas.get('groups'));
+
+ var areaDict = ee.Dictionary.fromLists(
+   groups.map(function(g) {
+     return ee.Number(
+       ee.Dictionary(g).get('mapped_class')
+     ).format('%d');
+   }),
+   groups.map(function(g) {
+     return ee.Number(
+       ee.Dictionary(g).get('sum')
+     );
+   })
+ );
+
+ var total = ee.Number(
+   groups.iterate(function(g, sum) {
+     return ee.Number(sum).add(
+       ee.Number(ee.Dictionary(g).get('sum'))
+     );
+   }, 0)
+ );
+
+ print('CLASSIFIED PIXEL AREA km2');
+ print(total.divide(1e6));
+
+ // 5. AREA-ADJUSTED OVERALL ACCURACY
+ // Sampling was stratified by mapped class.
+ var table = ee.FeatureCollection(
+   ee.List.sequence(1, 5).map(function(k) {
+
+     k = ee.Number(k);
+
+     var subset = checked.filter(
+       ee.Filter.eq('mapped_class', k)
+     );
+
+     var n = subset.size();
+
+     var correct = subset.filter(
+       ee.Filter.eq('reference_class', k)
+     ).size();
+
+     var p = ee.Number(
+       ee.Algorithms.If(
+         n.gt(0),
+         correct.divide(n),
+         0
+       )
+     );
+
+     var classArea = ee.Number(
+       areaDict.get(k.format('%d'), 0)
+     );
+
+     var weight = classArea.divide(total);
+
+     return ee.Feature(null, {
+       mapped_class: k,
+       validation_points: n,
+       correct_points: correct,
+       user_accuracy: p,
+       mapped_area_km2: classArea.divide(1e6),
+       mapped_area_weight: weight,
+       weighted_correct: weight.multiply(p)
+     });
+   })
+ );
+
+ print('AREA ADJUSTMENT TABLE');
+ print(table);
+
+ print('MISSING MAPPED STRATA - MUST BE ZERO');
+ print(
+   table.filter(
+     ee.Filter.and(
+       ee.Filter.gt('mapped_area_km2', 0),
+       ee.Filter.eq('validation_points', 0)
+     )
+   ).size()
+ );
+
+ print('AREA-ADJUSTED OVERALL ACCURACY');
+ print(table.aggregate_sum('weighted_correct'));
+
+ // 6. EXPORT REPORT
+ Export.table.toDrive({
+   collection: table,
+   description: 'TNJ_2020_GAUSSIAN_MLC_ACCURACY',
+   fileNamePrefix:
+     'tnj_2020_gaussian_mlc_accuracy',
+   fileFormat: 'CSV'
+ });
+
+ print('Accuracy must be rejected if QA checks fail.');
+ print('Do not treat unweighted OA as area-wide OA.');
+ print('Document independent reference provenance.');

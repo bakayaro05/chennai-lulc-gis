@@ -1,0 +1,660 @@
+
+ // ============================================================
+ // CHENNAI LULC - STAGE 08F-3
+ // EXPERIMENT X2: 5x5 SPATIAL CONTEXT GAUSSIAN MLC
+ // DATE: 21 OCTOBER 2026
+ //
+ // ORIGINAL 600 TRAINING / 300 VALIDATION POINTS
+ // 11 FEATURES: 9 SPECTRAL + 2 NEIGHBOURHOOD
+ //
+ // CONTROLLED CHANGE FROM 08F-X1:
+ // 3x3 window -> 5x5 window
+ //
+ // READ ONLY. NO ASSET EXPORT. NO OVERWRITING.
+ // ============================================================
+
+ // ============================================================
+ // 1. LOCKED PROJECT ASSETS
+ // ============================================================
+
+ var ROOT = 'projects/assignment-482806/assets/';
+
+ var roiFC = ee.FeatureCollection(
+   ROOT + 'chennai_admin_study_area_clean'
+ );
+
+ var roi = roiFC.geometry();
+
+ var originalTraining = ee.FeatureCollection(
+   ROOT + 'chennai_training_2015_final'
+ );
+
+ var originalValidation = ee.FeatureCollection(
+   ROOT + 'chennai_validation_2015_final'
+ );
+
+ var originalMap = ee.Image(
+   ROOT + 'chennai_mlc_lulc_2015'
+ ).select(0).rename('baseline');
+
+ // Reuse exact original raster projection and grid origin.
+ var grid = originalMap.projection();
+
+ var BANDS9 = [
+   'blue', 'green', 'red',
+   'nir', 'swir1', 'swir2',
+   'NDVI', 'NDWI', 'NDBI'
+ ];
+
+ var EXTRA = [
+   'NDBI_5x5_mean',
+   'red_5x5_sd'
+ ];
+
+ var BANDS11 = BANDS9.concat(EXTRA);
+
+ var CLASSES = [1, 2, 3, 4, 5];
+
+ var CLASS_NAMES = [
+   'Built-up',
+   'Vegetation',
+   'Water',
+   'Agricultural/Open',
+   'Barren/Fallow'
+ ];
+
+ var REGULARIZATION = 1e-6;
+
+ // PRE-REGISTERED EXPERIMENT SIZE.
+ // Do not tune this using validation results.
+ var KERNEL_RADIUS = 2;
+
+ // Archived X1 results, for reference only.
+ var X1_ACCURACY = 0.85;
+ var X1_BUILTUP_CORRECT = 49;
+
+ // ============================================================
+ // 2. REBUILD ORIGINAL LANDSAT 2015 SPECTRAL COMPOSITE
+ // ============================================================
+
+ function preprocessL8(image) {
+
+   var qa = image.select('QA_PIXEL');
+
+   var clear = qa.bitwiseAnd(1 << 0).eq(0)
+     .and(qa.bitwiseAnd(1 << 1).eq(0))
+     .and(qa.bitwiseAnd(1 << 2).eq(0))
+     .and(qa.bitwiseAnd(1 << 3).eq(0))
+     .and(qa.bitwiseAnd(1 << 4).eq(0))
+     .and(qa.bitwiseAnd(1 << 5).eq(0))
+     .and(image.select('QA_RADSAT').eq(0));
+
+   return image.select(
+       [
+         'SR_B2', 'SR_B3', 'SR_B4',
+         'SR_B5', 'SR_B6', 'SR_B7'
+       ],
+       [
+         'blue', 'green', 'red',
+         'nir', 'swir1', 'swir2'
+       ]
+     )
+     .multiply(0.0000275)
+     .subtract(0.2)
+     .updateMask(clear)
+     .copyProperties(image, ['system:time_start']);
+ }
+
+ function addIndices(image) {
+
+   var green = image.select('green');
+   var red = image.select('red');
+   var nir = image.select('nir');
+   var swir1 = image.select('swir1');
+
+   var ndvi = nir.subtract(red)
+     .divide(nir.add(red))
+     .rename('NDVI');
+
+   var ndwi = green.subtract(nir)
+     .divide(green.add(nir))
+     .rename('NDWI');
+
+   var ndbi = swir1.subtract(nir)
+     .divide(swir1.add(nir))
+     .rename('NDBI');
+
+   return image.addBands([ndvi, ndwi, ndbi])
+     .select(BANDS9);
+ }
+
+ var collection2015 = ee.ImageCollection(
+   'LANDSAT/LC08/C02/T1_L2'
+ )
+   .filterBounds(roi)
+   .filterDate('2015-01-01', '2016-01-01')
+   .map(preprocessL8);
+
+ var spectral9 = addIndices(
+   collection2015.median()
+ ).reproject(grid);
+
+ // ============================================================
+ // 3. BUILD 5x5 NEIGHBOURHOOD FEATURES
+ // ============================================================
+
+ // 5x5 = 25 pixels.
+ // One centre pixel and 24 surrounding pixels.
+ //
+ // Calculate BEFORE clipping the study boundary.
+
+ var kernel5 = ee.Kernel.square({
+   radius: KERNEL_RADIUS,
+   units: 'pixels',
+   normalize: false
+ });
+
+ // Feature 10: mean NDBI across 25 pixels.
+
+ var contextNDBI = spectral9.select('NDBI')
+   .reduceNeighborhood({
+     reducer: ee.Reducer.mean(),
+     kernel: kernel5,
+     skipMasked: true
+   })
+   .rename('NDBI_5x5_mean');
+
+ // Feature 11: red reflectance standard deviation
+ // across 25 pixels.
+
+ var contextTexture = spectral9.select('red')
+   .reduceNeighborhood({
+     reducer: ee.Reducer.stdDev(),
+     kernel: kernel5,
+     skipMasked: true
+   })
+   .rename('red_5x5_sd');
+
+ // QA ONLY: count usable neighbourhood pixels.
+ // Not included in the classifier.
+
+ var validNeighbours = spectral9.select('red')
+   .mask()
+   .reduceNeighborhood({
+     reducer: ee.Reducer.sum(),
+     kernel: kernel5
+   })
+   .rename('n_valid_5x5');
+
+ var stack11 = spectral9
+   .addBands([contextNDBI, contextTexture])
+   .select(BANDS11)
+   .clip(roi);
+
+ // ============================================================
+ // 4. SAMPLE ORIGINAL FROZEN TRAINING LOCATIONS
+ // ============================================================
+
+ var sampledTraining = stack11
+   .addBands(validNeighbours.clip(roi))
+   .sampleRegions({
+     collection: originalTraining,
+     properties: ['class_id', 'poly_id'],
+     projection: grid,
+     geometries: false,
+     tileScale: 8
+   });
+
+ var sampledValidation = stack11
+   .addBands(validNeighbours.clip(roi))
+   .sampleRegions({
+     collection: originalValidation,
+     properties: ['class_id', 'val_poly_id'],
+     projection: grid,
+     geometries: false,
+     tileScale: 8
+   });
+
+ // ============================================================
+ // 5. CHECK ORIGINAL SPECTRAL VALUES ARE UNCHANGED
+ // ============================================================
+
+ var trainingWithArchives = originalTraining.map(
+   function(f) {
+     return f.set({
+       original_red_archived: f.get('red'),
+       original_NDBI_archived: f.get('NDBI')
+     });
+   }
+ );
+
+ var trainingCheck = stack11.sampleRegions({
+   collection: trainingWithArchives,
+   properties: [
+     'class_id',
+     'original_red_archived',
+     'original_NDBI_archived'
+   ],
+   projection: grid,
+   geometries: false,
+   tileScale: 8
+ }).map(function(f) {
+
+   return f.set({
+     red_abs_delta: ee.Number(f.get('red'))
+       .subtract(
+         ee.Number(f.get('original_red_archived'))
+       ).abs(),
+
+     NDBI_abs_delta: ee.Number(f.get('NDBI'))
+       .subtract(
+         ee.Number(f.get('original_NDBI_archived'))
+       ).abs()
+   });
+
+ });
+
+ // ============================================================
+ // 6. FIT 11-DIMENSIONAL GAUSSIAN MLC
+ // ============================================================
+
+ function gaussianParameters(classID) {
+
+   var fc = sampledTraining.filter(
+     ee.Filter.eq('class_id', classID)
+   );
+
+   var mean = ee.Array([
+     BANDS11.map(function(band) {
+       return fc.aggregate_mean(band);
+     })
+   ]).transpose();
+
+   var withArray = fc.makeArray(
+     BANDS11,
+     'feature_vector'
+   );
+
+   var covariance = ee.Array(
+     withArray.reduceColumns({
+       reducer: ee.Reducer.covariance()
+         .setOutputs(['covariance']),
+       selectors: ['feature_vector']
+     }).get('covariance')
+   );
+
+   var regularized = covariance.add(
+     ee.Array.identity(BANDS11.length)
+       .multiply(REGULARIZATION)
+   );
+
+   return ee.Dictionary({
+     class_id: classID,
+     count: fc.size(),
+     mean: mean,
+     raw_determinant: covariance.matrixDeterminant(),
+     determinant: regularized.matrixDeterminant(),
+     inverse: regularized.matrixInverse()
+   });
+ }
+
+ var model = ee.List(
+   CLASSES.map(gaussianParameters)
+ );
+
+ // ============================================================
+ // 7. GAUSSIAN LOGLIKELIHOOD CLASSIFICATION
+ // ============================================================
+
+ var pixelColumn = stack11
+   .toArray()
+   .toArray(1);
+
+ function gaussianScore(parameters, name) {
+
+   var p = ee.Dictionary(parameters);
+
+   var mu = ee.Image.constant(
+     ee.Array(p.get('mean'))
+   );
+
+   var inverse = ee.Image.constant(
+     ee.Array(p.get('inverse'))
+   );
+
+   var det = ee.Number(
+     p.get('determinant')
+   );
+
+   var d = pixelColumn.subtract(mu);
+
+   var squaredDistance = d.arrayTranspose()
+     .matrixMultiply(inverse)
+     .matrixMultiply(d)
+     .arrayGet([0, 0]);
+
+   return squaredDistance.multiply(-0.5)
+     .subtract(
+       ee.Image.constant(
+         det.max(1e-300).log()
+       ).multiply(0.5)
+     )
+     .rename(name);
+ }
+
+ var scoreStack = ee.Image.cat([
+
+   gaussianScore(model.get(0), 'score_1'),
+   gaussianScore(model.get(1), 'score_2'),
+   gaussianScore(model.get(2), 'score_3'),
+   gaussianScore(model.get(3), 'score_4'),
+   gaussianScore(model.get(4), 'score_5')
+
+ ]);
+
+ var experimentalMap = scoreStack
+   .toArray()
+   .arrayArgmax()
+   .arrayGet([0])
+   .add(1)
+   .rename('experimental')
+   .toInt8()
+   .clip(roi);
+
+ // ============================================================
+ // 8. TEST ON SAME ORIGINAL VALIDATION POINTS
+ // ============================================================
+
+ var originalPredictions = originalMap.sampleRegions({
+   collection: originalValidation,
+   properties: ['class_id', 'val_poly_id'],
+   projection: grid,
+   geometries: false,
+   tileScale: 8
+ });
+
+ var experimentalPredictions = experimentalMap.sampleRegions({
+   collection: originalValidation,
+   properties: ['class_id', 'val_poly_id'],
+   projection: grid,
+   geometries: false,
+   tileScale: 8
+ });
+
+ var order = [1, 2, 3, 4, 5];
+
+ var cmOriginal = originalPredictions.errorMatrix(
+   'class_id',
+   'baseline',
+   order
+ );
+
+ var cmExperiment = experimentalPredictions.errorMatrix(
+   'class_id',
+   'experimental',
+   order
+ );
+
+ // ============================================================
+ // 9. EXPERIMENT QA
+ // ============================================================
+
+ print('==========================================');
+ print('STAGE 08F-3 | 5x5 SPATIAL CONTEXT MLC');
+ print('==========================================');
+
+ print('Original raster projection:');
+ print(grid);
+
+ print('Raster nominal scale:');
+ print(grid.nominalScale());
+
+ print('2015 Landsat scenes (expected 19):');
+ print(collection2015.size());
+
+ print('Predictor bands (expected 11):');
+ print(stack11.bandNames());
+
+ print('Original training count (expected 600):');
+ print(originalTraining.size());
+
+ print('Resampled training count (expected 600):');
+ print(sampledTraining.size());
+
+ print('Training pixels by class (expected 120 each):');
+ print(sampledTraining.aggregate_histogram('class_id'));
+
+ print('Original validation count (expected 300):');
+ print(originalValidation.size());
+
+ print('Resampled validation count (expected 300):');
+ print(sampledValidation.size());
+
+ print('Maximum RED spectral mismatch (expected 0):');
+ print(trainingCheck.aggregate_max('red_abs_delta'));
+
+ print('Maximum NDBI mismatch (expected 0):');
+ print(trainingCheck.aggregate_max('NDBI_abs_delta'));
+
+ print('VALID 5x5 NEIGHBOURHOOD SUPPORT - TRAINING:');
+ print(
+   sampledTraining.aggregate_histogram('n_valid_5x5')
+ );
+
+ print('VALID 5x5 NEIGHBOURHOOD SUPPORT - VALIDATION:');
+ print(
+   sampledValidation.aggregate_histogram('n_valid_5x5')
+ );
+
+ // ============================================================
+ // 10. COVARIANCE QUALITY ASSURANCE
+ // ============================================================
+
+ print('GAUSSIAN COVARIANCE QA');
+
+ for (var i = 0; i < 5; i++) {
+
+   var p = ee.Dictionary(model.get(i));
+
+   print(
+     ee.String(CLASS_NAMES[i])
+       .cat(' | n=')
+       .cat(
+         ee.Number(p.get('count')).format('%d')
+       )
+       .cat(' | raw det=')
+       .cat(
+         ee.Number(
+           p.get('raw_determinant')
+         ).format('%.10e')
+       )
+       .cat(' | regularized det=')
+       .cat(
+         ee.Number(
+           p.get('determinant')
+         ).format('%.10e')
+       )
+   );
+ }
+
+ // ============================================================
+ // 11. ACCURACY COMPARISON
+ // ============================================================
+
+ print('==========================================');
+ print('2015 EXPERIMENTAL ACCURACY COMPARISON');
+ print('==========================================');
+
+ print('Original validation predictions (expected 300):');
+ print(originalPredictions.size());
+
+ print('Experimental validation predictions (expected 300):');
+ print(experimentalPredictions.size());
+
+ print('ORIGINAL 2015 CONFUSION MATRIX:');
+ print(cmOriginal);
+
+ print('EXPERIMENTAL 5x5 CONFUSION MATRIX:');
+ print(cmExperiment);
+
+ print('Original overall accuracy:');
+ print(cmOriginal.accuracy());
+
+ print('Experimental 5x5 overall accuracy:');
+ print(cmExperiment.accuracy());
+
+ print('Accuracy change versus ORIGINAL (percentage points):');
+ print(
+   ee.Number(cmExperiment.accuracy())
+     .subtract(cmOriginal.accuracy())
+     .multiply(100)
+ );
+
+ print('Archived X1 3x3 overall accuracy:');
+ print(X1_ACCURACY);
+
+ print('Accuracy change versus X1 3x3 (percentage points):');
+ print(
+   ee.Number(cmExperiment.accuracy())
+     .subtract(X1_ACCURACY)
+     .multiply(100)
+ );
+
+ print('Original Kappa:');
+ print(cmOriginal.kappa());
+
+ print('Experimental 5x5 Kappa:');
+ print(cmExperiment.kappa());
+
+ print('Original producer accuracy:');
+ print(cmOriginal.producersAccuracy());
+
+ print('Experimental 5x5 producer accuracy:');
+ print(cmExperiment.producersAccuracy());
+
+ print('Original user accuracy:');
+ print(cmOriginal.consumersAccuracy());
+
+ print('Experimental 5x5 user accuracy:');
+ print(cmExperiment.consumersAccuracy());
+
+ // ============================================================
+ // 12. BUILT-UP TARGETED METRICS
+ // ============================================================
+
+ // Class 1 is Built-up, so row 0 is actual Built-up.
+ var originalArray = ee.Array(cmOriginal.array());
+ var experimentArray = ee.Array(cmExperiment.array());
+
+ var originalBuiltupTP = ee.Number(
+   originalArray.get([0, 0])
+ );
+
+ var experimentBuiltupTP = ee.Number(
+   experimentArray.get([0, 0])
+ );
+
+ print('==========================================');
+ print('BUILT-UP RECALL COMPARISON');
+ print('==========================================');
+
+ print('Original correctly classified Built-up pixels:');
+ print(originalBuiltupTP);
+
+ print('Previous X1 3x3 correctly classified Built-up pixels:');
+ print(X1_BUILTUP_CORRECT);
+
+ print('New X2 5x5 correctly classified Built-up pixels:');
+ print(experimentBuiltupTP);
+
+ print('Built-up true-positive change versus original:');
+ print(
+   experimentBuiltupTP.subtract(originalBuiltupTP)
+ );
+
+ print('Built-up true-positive change versus X1:');
+ print(
+   experimentBuiltupTP.subtract(X1_BUILTUP_CORRECT)
+ );
+
+ print('==========================================');
+ print('STAGE 08F-3 EXECUTION FINISHED');
+ print('NO EXPERIMENT HAS BEEN ACCEPTED YET.');
+ print('NO ORIGINAL ASSETS HAVE BEEN MODIFIED.');
+ print('==========================================');
+
+ // ============================================================
+ // 13. MAP VISUALIZATION
+ // ============================================================
+
+ Map.layers().reset();
+ Map.setOptions('SATELLITE');
+
+ var palette = [
+   'ff0000',
+   '008000',
+   '0000ff',
+   'ffff00',
+   'd2b48c'
+ ];
+
+ Map.addLayer(
+   originalMap,
+   {
+     min: 1,
+     max: 5,
+     palette: palette
+   },
+   'ORIGINAL 2015 MLC',
+   true
+ );
+
+ Map.addLayer(
+   experimentalMap,
+   {
+     min: 1,
+     max: 5,
+     palette: palette
+   },
+   'EXPERIMENTAL 5x5 MLC',
+   false
+ );
+
+ Map.addLayer(
+   contextNDBI.clip(roi),
+   {
+     min: -0.4,
+     max: 0.4,
+     palette: ['2166ac', 'ffffff', 'b2182b']
+   },
+   '5x5 Mean NDBI',
+   false
+ );
+
+ Map.addLayer(
+   contextTexture.clip(roi),
+   {
+     min: 0,
+     max: 0.08,
+     palette: ['ffffff', 'feb24c', 'bd0026']
+   },
+   '5x5 Red Texture',
+   false
+ );
+
+ Map.addLayer(
+   roiFC.style({
+     color: 'ffffff',
+     fillColor: '00000000',
+     width: 2
+   }),
+   {},
+   'Study Area Boundary',
+   false
+ );
+
+ Map.centerObject(roi, 10);
+
+ // ============================================================
+ // END STAGE 08F-3
+ // ============================================================

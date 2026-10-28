@@ -1,0 +1,137 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var barren2010_01 = /* color: #d63000 */ee.Geometry.MultiPoint();
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+// ============================================================
+// CHENNAI LULC — STAGE 07B2A
+// EXPORT 2010 TRAINING EXCLUSION ZONES TO GOOGLE EARTH
+// ============================================================
+//
+// PURPOSE:
+// Export all reserved 2010 validation locations
+// with conservative 60 m buffers.
+//
+// Use this KML in Google Earth while drawing
+// historical 2010 training polygons.
+//
+// NO TRAINING.
+// NO CLASSIFICATION.
+// NO MODIFICATION OF VALIDATION ASSETS.
+//
+// ============================================================
+
+// 1. SETTINGS
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var BUFFER_METRES = 60;
+
+
+// 2. LOAD LOCKED STUDY AREA
+
+var roiFC = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+);
+
+var roi = roiFC.geometry();
+
+
+// 3. LOAD SAVED 2010 VALIDATION POLYGONS
+
+var validation2010 = ee.FeatureCollection(
+  ROOT + 'chennai_validation_polygons_2010_manual_master'
+);
+
+
+// 4. BUILD INDIVIDUAL EXCLUSION ZONES
+
+var exclusionZones = validation2010.map(function(f) {
+
+  f = ee.Feature(f);
+
+  var bufferedGeometry = f.geometry().buffer(
+    BUFFER_METRES,
+    1
+  );
+
+  // Deliberately omit validation class labels.
+  // This overlay is only for avoiding overlap.
+
+  return ee.Feature(
+    bufferedGeometry,
+    {
+      zone_type: 'NO_TRAINING',
+      buffer_m: BUFFER_METRES
+    }
+  );
+
+});
+
+
+// 5. CONSOLE VERIFICATION
+
+print('====================================');
+print('2010 TRAINING EXCLUSION EXPORT');
+print('====================================');
+
+print('Reserved validation polygon count:');
+print(validation2010.size());
+
+print('Exclusion zone count:');
+print(exclusionZones.size());
+
+print('Buffer distance in metres:');
+print(BUFFER_METRES);
+
+
+// 6. DISPLAY IN GEE FOR CHECKING
+
+Map.layers().reset();
+
+Map.setOptions('SATELLITE');
+
+Map.centerObject(roi, 11);
+
+Map.addLayer(
+  roiFC.style({
+    color: 'FF0000',
+    fillColor: '00000000',
+    width: 2
+  }),
+  {},
+  'Locked Chennai ROI',
+  true
+);
+
+Map.addLayer(
+  exclusionZones.style({
+    color: 'FF00FF',
+    fillColor: 'FF00FF44',
+    width: 2
+  }),
+  {},
+  'NO TRAINING — 2010 Exclusion Zones',
+  true
+);
+
+
+// 7. EXPORT KML TO GOOGLE DRIVE
+
+Export.table.toDrive({
+
+  collection: exclusionZones,
+
+  description:
+    'Chennai_2010_Validation_Exclusion_60m',
+
+  fileNamePrefix:
+    'Chennai_2010_Validation_Exclusion_60m',
+
+  fileFormat: 'KML'
+
+});
+
+
+// ============================================================
+// END
+// ============================================================

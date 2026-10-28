@@ -1,0 +1,646 @@
+
+// ============================================================
+// CHENNAI LULC — STAGE 07S
+// TARGETED 2010 vs 2015 HISTORICAL DISAGREEMENT AUDIT
+//
+// READ-ONLY — NO CLASSIFIER, NO EXPORTS, NO RELABELLING
+//
+// Review where:
+// 2010 Built-up -> 2015 Agricultural or Vacant/Open
+//
+// Include stable and reverse-transition controls.
+//
+// 2010: Landsat 5+7 experimental classification
+// 2015: Saved locked classification
+//
+// Outputs:
+// - 35 stratified random audit locations
+// - 2010/2015 historical RGB comparison layers
+// - Transition-specific inspection points
+// ============================================================
+
+
+// ------------------------------------------------------------
+// 1. CONFIGURATION
+// ------------------------------------------------------------
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var CRS = 'EPSG:32644';
+
+var GRID = [
+  30, 0, 399060,
+  0, -30, 1463250
+];
+
+var PROJ = ee.Projection(CRS, GRID);
+
+var roiFC = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+);
+
+var roi = roiFC.geometry();
+
+
+// ------------------------------------------------------------
+// 2. LOAD EXISTING CLASSIFICATIONS
+// ------------------------------------------------------------
+
+var classification2010 = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2010_L5L7_manual_exp_v1'
+).select('classification').clip(roi);
+
+var classification2015 = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2015'
+).select('classification').clip(roi);
+
+
+// ------------------------------------------------------------
+// 3. BUILD COMMON-GRID TRANSITION CODES
+// ------------------------------------------------------------
+
+var commonMask = classification2010.mask()
+  .and(classification2015.mask());
+
+var transition = classification2010
+  .updateMask(commonMask)
+  .multiply(10)
+  .add(
+    classification2015.updateMask(commonMask)
+  )
+  .rename('transition')
+  .toInt16();
+
+
+// ------------------------------------------------------------
+// 4. SELECT HISTORICAL AUDIT LOCATIONS
+// ------------------------------------------------------------
+//
+// Stratify by mapped transition category.
+//
+// Points are randomly selected within the ROI.
+// They are not used to fit a model or compute accuracy.
+//
+// A total of 35 locations is requested.
+// ------------------------------------------------------------
+
+var TRANSITION_CODES = [
+  11, 14, 15, 41, 44
+];
+
+var POINT_COUNTS = [
+  5, 12, 8, 5, 5
+];
+
+var samples = transition.stratifiedSample({
+
+  numPoints: 0,
+
+  classBand: 'transition',
+
+  classValues: TRANSITION_CODES,
+
+  classPoints: POINT_COUNTS,
+
+  region: roi,
+
+  projection: PROJ,
+
+  scale: 30,
+
+  seed: 201015,
+
+  geometries: true,
+
+  dropNulls: true,
+
+  tileScale: 8
+
+});
+
+
+// ------------------------------------------------------------
+// 5. ADD LOCATION AND TRANSITION METADATA
+// ------------------------------------------------------------
+
+var auditPoints = samples.map(function(f) {
+
+  f = ee.Feature(f);
+
+  var code = ee.Number(
+    f.get('transition')
+  );
+
+  var coords = f.geometry().coordinates();
+
+  return f.set({
+
+    class_2010: code.divide(10).floor(),
+
+    class_2015: code.mod(10),
+
+    longitude: coords.get(0),
+
+    latitude: coords.get(1),
+
+    review_status: 'NOT_REVIEWED',
+
+    purpose: 'HISTORICAL_CLASS_CONSISTENCY_AUDIT'
+
+  });
+
+});
+
+
+// ------------------------------------------------------------
+// 6. LOAD HISTORICAL 2010 RGB
+// ------------------------------------------------------------
+
+var rgb2010 = ee.Image(
+  ROOT + 'chennai_predictor_stack_2010_L5L7_exp_v1'
+).select([
+  'red', 'green', 'blue'
+]);
+
+
+// ------------------------------------------------------------
+// 7. REBUILD 2015 LANDSAT 8 RGB
+// ------------------------------------------------------------
+//
+// Use the project's original full-year Landsat 8
+// collection and preprocessing rules.
+//
+// This display does NOT alter the saved 2015 model.
+// ------------------------------------------------------------
+
+function preprocess2015(image) {
+
+  var qa = image.select('QA_PIXEL');
+
+  var sat = image.select('QA_RADSAT');
+
+  var clear = qa.bitwiseAnd(1 << 0).eq(0)
+    .and(qa.bitwiseAnd(1 << 1).eq(0))
+    .and(qa.bitwiseAnd(1 << 2).eq(0))
+    .and(qa.bitwiseAnd(1 << 3).eq(0))
+    .and(qa.bitwiseAnd(1 << 4).eq(0))
+    .and(qa.bitwiseAnd(1 << 5).eq(0))
+    .and(sat.eq(0));
+
+  return image.select(
+    [
+      'SR_B2', 'SR_B3', 'SR_B4',
+      'SR_B5', 'SR_B6', 'SR_B7'
+    ],
+    [
+      'blue', 'green', 'red',
+      'nir', 'swir1', 'swir2'
+    ]
+  )
+  .multiply(0.0000275)
+  .add(-0.2)
+  .updateMask(clear);
+
+}
+
+var landsat2015 = ee.ImageCollection(
+  'LANDSAT/LC08/C02/T1_L2'
+)
+.filterBounds(roi)
+.filterDate('2015-01-01', '2016-01-01')
+.map(preprocess2015);
+
+var rgb2015 = landsat2015
+  .median()
+  .select(['red', 'green', 'blue'])
+  .clip(roi);
+
+
+// ------------------------------------------------------------
+// 8. AUDIT QUALITY ASSURANCE
+// ------------------------------------------------------------
+
+print('========================================');
+print('STAGE 07S — CROSS-YEAR HISTORICAL AUDIT');
+print('========================================');
+
+print('ROI area (km2):');
+print(
+  roi.area(1, ee.Projection(CRS))
+    .divide(1e6)
+);
+
+print('2010 projection:');
+print(classification2010.projection());
+
+print('2015 projection:');
+print(classification2015.projection());
+
+print('2015 Landsat 8 scenes (expected 19):');
+print(landsat2015.size());
+
+print('========================================');
+print('AUDIT SITE SELECTION');
+print('========================================');
+
+print('Requested transition categories:');
+print(TRANSITION_CODES);
+
+print('Requested count per transition:');
+print(POINT_COUNTS);
+
+print('Selected audit locations (expected 35):');
+print(auditPoints.size());
+
+print('Selected counts by transition code:');
+print(
+  auditPoints.aggregate_histogram('transition')
+);
+
+print('Audit point locations:');
+print(
+  auditPoints.sort('transition')
+);
+
+
+// ------------------------------------------------------------
+// 9. TRANSITION-SPECIFIC POINT GROUPS
+// ------------------------------------------------------------
+
+var builtToAgriculture = auditPoints.filter(
+  ee.Filter.eq('transition', 14)
+);
+
+var builtToVacant = auditPoints.filter(
+  ee.Filter.eq('transition', 15)
+);
+
+var stableBuilt = auditPoints.filter(
+  ee.Filter.eq('transition', 11)
+);
+
+var agricultureToBuilt = auditPoints.filter(
+  ee.Filter.eq('transition', 41)
+);
+
+var stableAgriculture = auditPoints.filter(
+  ee.Filter.eq('transition', 44)
+);
+
+
+// ------------------------------------------------------------
+// 10. MAP VISUALIZATION
+// ------------------------------------------------------------
+
+Map.layers().reset();
+
+Map.setOptions('SATELLITE');
+
+Map.centerObject(roi, 10);
+
+
+// Historical RGB layers.
+
+Map.addLayer(
+  rgb2010,
+  {
+    bands: ['red', 'green', 'blue'],
+    min: 0.02,
+    max: 0.30
+  },
+  '2010 L5+L7 HISTORICAL RGB',
+  true
+);
+
+Map.addLayer(
+  rgb2015,
+  {
+    bands: ['red', 'green', 'blue'],
+    min: 0.02,
+    max: 0.30
+  },
+  '2015 L8 HISTORICAL RGB',
+  false
+);
+
+
+// Original classification layers.
+
+var palette = [
+  'ff0000',
+  '008000',
+  '0000ff',
+  'ffff00',
+  'd2b48c'
+];
+
+Map.addLayer(
+  classification2010,
+  {
+    min: 1,
+    max: 5,
+    palette: palette
+  },
+  '2010 EXPERIMENTAL CLASSIFICATION',
+  false
+);
+
+Map.addLayer(
+  classification2015,
+  {
+    min: 1,
+    max: 5,
+    palette: palette
+  },
+  '2015 LOCKED CLASSIFICATION',
+  false
+);
+
+
+// Geographic dispute areas.
+
+Map.addLayer(
+  transition.eq(14).selfMask(),
+  {
+    palette: ['FF00FF']
+  },
+  'FULL AREA: Built 2010 -> Agriculture 2015',
+  false
+);
+
+Map.addLayer(
+  transition.eq(15).selfMask(),
+  {
+    palette: ['FFA500']
+  },
+  'FULL AREA: Built 2010 -> Vacant 2015',
+  false
+);
+
+
+// Sampling point layers.
+
+Map.addLayer(
+  builtToAgriculture.style({
+    color: 'FF00FF',
+    pointSize: 6
+  }),
+  {},
+  'AUDIT: Built -> Agricultural (12)',
+  true
+);
+
+Map.addLayer(
+  builtToVacant.style({
+    color: 'FFA500',
+    pointSize: 6
+  }),
+  {},
+  'AUDIT: Built -> Vacant/Open (8)',
+  true
+);
+
+Map.addLayer(
+  stableBuilt.style({
+    color: '00FF00',
+    pointSize: 6
+  }),
+  {},
+  'CONTROL: Built -> Built (5)',
+  true
+);
+
+Map.addLayer(
+  agricultureToBuilt.style({
+    color: '00FFFF',
+    pointSize: 6
+  }),
+  {},
+  'CONTROL: Agriculture -> Built (5)',
+  false
+);
+
+Map.addLayer(
+  stableAgriculture.style({
+    color: 'FFFF00',
+    pointSize: 6
+  }),
+  {},
+  'CONTROL: Agriculture -> Agriculture (5)',
+  false
+);
+
+
+// Study-area outline.
+
+Map.addLayer(
+  roiFC.style({
+    color: 'FFFFFF',
+    fillColor: '00000000',
+    width: 2
+  }),
+  {},
+  'LOCKED ROI',
+  true
+);
+
+
+// ------------------------------------------------------------
+// 11. COMPLETION MESSAGE
+// ------------------------------------------------------------
+
+print('========================================');
+print('STAGE 07S READY FOR HISTORICAL INSPECTION');
+print('========================================');
+
+print('Magenta = 2010 Built / 2015 Agriculture.');
+print('Orange = 2010 Built / 2015 Vacant.');
+print('Green = stable Built control.');
+print('Cyan = Agriculture to Built control.');
+print('Yellow = stable Agriculture control.');
+
+print('Compare the same location using historical');
+print('2010 and 2015 imagery.');
+
+print('Google Satellite basemap is NOT necessarily');
+print('historical imagery.');
+
+print('Sample points are for qualitative audit only.');
+print('Do not use as new training or validation.');
+print('No assets exported or modified.');
+
+print('========================================');
+print('END STAGE 07S');
+print('========================================');
+
+// ============================================================
+// END
+// ============================================================
+
+
+// ============================================================
+// STAGE 07S — ADD-ON: INTERACTIVE AUDIT POINT IDENTIFIER
+// Paste at the END of your existing Stage 07S script.
+//
+// Requires existing variable: auditPoints
+// Does not modify or export any assets.
+// ============================================================
+
+// 1. Assign IDs to the existing selected points.
+// Stable for the current deterministic Stage 07S selection.
+
+var sortedAudit = auditPoints.sort('system:index');
+
+var auditList = sortedAudit.toList(sortedAudit.size());
+
+var indexedAudit = ee.FeatureCollection(
+  ee.List.sequence(0, sortedAudit.size().subtract(1))
+    .map(function(i) {
+
+      i = ee.Number(i);
+
+      var f = ee.Feature(auditList.get(i));
+
+      var id = ee.String('AUDIT_')
+        .cat(i.add(1).format('%02d'));
+
+      return f.set('audit_id', id);
+
+    })
+);
+
+// 2. Print IDs and coordinates.
+
+print('========================================');
+print('STAGE 07S — AUDIT POINT IDENTIFICATION');
+print('========================================');
+
+print('Audit points with IDs:');
+print(
+  indexedAudit.select([
+    'audit_id',
+    'transition',
+    'class_2010',
+    'class_2015',
+    'latitude',
+    'longitude'
+  ]).sort('audit_id')
+);
+
+// 3. Create a small map identification panel.
+
+var identifyPanel = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    width: '340px',
+    padding: '8px'
+  }
+});
+
+identifyPanel.add(
+  ui.Label({
+    value: 'Chennai Historical Audit — Point Identifier',
+    style: {
+      fontWeight: 'bold',
+      fontSize: '14px'
+    }
+  })
+);
+
+var resultLabel = ui.Label(
+  'Click near a coloured audit point to identify it.'
+);
+
+identifyPanel.add(resultLabel);
+
+Map.add(identifyPanel);
+
+// 4. Click-based point identification.
+//
+// A 40-metre search radius helps select an audit point
+// without identifying unrelated pixels.
+
+Map.onClick(function(coords) {
+
+  resultLabel.setValue('Searching for audit point...');
+
+  var clicked = ee.Geometry.Point([
+    coords.lon,
+    coords.lat
+  ]);
+
+  var nearby = indexedAudit.filterBounds(
+    clicked.buffer(40)
+  );
+
+  nearby.size().evaluate(function(count) {
+
+    if (count === 0) {
+
+      resultLabel.setValue(
+        'No audit point within 40 m. Zoom in and click nearer.'
+      );
+
+      return;
+    }
+
+    var nearest = nearby.map(function(f) {
+
+      return ee.Feature(f).set(
+        'click_distance_m',
+        f.geometry().distance(clicked, 1)
+      );
+
+    }).sort('click_distance_m').first();
+
+    nearest.toDictionary([
+      'audit_id',
+      'transition',
+      'class_2010',
+      'class_2015',
+      'latitude',
+      'longitude',
+      'click_distance_m'
+    ]).evaluate(function(info) {
+
+      if (!info) {
+        resultLabel.setValue('Could not identify point.');
+        return;
+      }
+
+      resultLabel.setValue(
+        'ID: ' + info.audit_id +
+        '\nTransition: ' + info.transition +
+        '\n2010 Class: ' + info.class_2010 +
+        '\n2015 Class: ' + info.class_2015 +
+        '\nLatitude: ' + info.latitude +
+        '\nLongitude: ' + info.longitude +
+        '\nDistance from click: ' +
+        Number(info.click_distance_m).toFixed(1) + ' m'
+      );
+
+    });
+
+  });
+
+});
+
+// 5. Display the same audit points on the map.
+
+Map.addLayer(
+  indexedAudit.style({
+    color: 'FFFFFF',
+    pointSize: 4
+  }),
+  {},
+  'ALL 35 AUDIT POINTS — IDENTIFIABLE',
+  false
+);
+
+print('Click near a point on the map to display its audit ID.');
+print('No saved assets have been modified.');
+
+// ============================================================
+// END AUDIT IDENTIFIER
+// ============================================================
+

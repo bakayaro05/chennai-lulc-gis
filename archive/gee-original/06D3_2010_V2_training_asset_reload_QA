@@ -1,0 +1,348 @@
+// ============================================================================
+// 06D3_2010_V2_training_asset_reload_QA
+// ============================================================================
+//
+// PURPOSE:
+// Reload the materialized 2010 V2 final training asset and verify that
+// the exported asset is exactly what 06D2 intended.
+//
+// QA ONLY.
+// NO EXPORT.
+// NO CLASSIFIER.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 1. ASSETS
+// ============================================================================
+
+var TRAINING_V2_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final_v2';
+
+var VALIDATION_ASSET =
+  'projects/assignment-482806/assets/chennai_validation_2010_final';
+
+
+// ============================================================================
+// 2. PREDICTORS
+// ============================================================================
+
+var PREDICTORS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+
+// ============================================================================
+// 3. LOAD MATERIALIZED ASSETS
+// ============================================================================
+
+var training =
+  ee.FeatureCollection(
+    TRAINING_V2_ASSET
+  );
+
+var validation =
+  ee.FeatureCollection(
+    VALIDATION_ASSET
+  );
+
+
+// ============================================================================
+// 4. BASIC TRAINING QA
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D3 — MATERIALIZED V2 TRAINING ASSET QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    training_total:
+      training.size(),
+
+    expected_training_total:
+      600,
+
+    validation_total:
+      validation.size(),
+
+    expected_validation_total:
+      300
+
+  })
+);
+
+
+// ============================================================================
+// 5. CLASS HISTOGRAM
+// ============================================================================
+
+print(
+  'TRAINING CLASS HISTOGRAM — EXPECT 120 EACH'
+);
+
+
+print(
+  training.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+print(
+  'VALIDATION CLASS HISTOGRAM — EXPECT 60 EACH'
+);
+
+
+print(
+  validation.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ============================================================================
+// 6. PREDICTOR COMPLETENESS
+// ============================================================================
+
+var predictorComplete =
+  training.filter(
+    ee.Filter.notNull(
+      PREDICTORS
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D3 — PREDICTOR COMPLETENESS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    predictor_complete_n:
+      predictorComplete.size(),
+
+    expected:
+      600
+
+  })
+);
+
+
+// ============================================================================
+// 7. CLEAR-COUNT QA
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D3 — CLEAR OBSERVATION QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    min_clear_count:
+      training.aggregate_min(
+        'clear_count'
+      ),
+
+    max_clear_count:
+      training.aggregate_max(
+        'clear_count'
+      ),
+
+    mean_clear_count:
+      training.aggregate_mean(
+        'clear_count'
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 8. SELECTION PROVENANCE
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D3 — TRAINING PROVENANCE'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  'Selection role histogram'
+);
+
+
+print(
+  training.aggregate_histogram(
+    'selection_role'
+  )
+);
+
+
+print(
+  'Training source histogram'
+);
+
+
+print(
+  training.aggregate_histogram(
+    'reuse_asset'
+  )
+);
+
+
+// ============================================================================
+// 9. PIXEL UNIQUENESS
+// ============================================================================
+
+var uniqueClassPixel =
+  training.distinct([
+    'pixel_class_key'
+  ]);
+
+
+var uniqueSpatialPixel =
+  training.distinct([
+    'auth_pixel_key'
+  ]);
+
+
+print(
+  '========================================'
+);
+
+print(
+  '06D3 — PIXEL UNIQUENESS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    total_rows:
+      training.size(),
+
+    unique_class_pixels:
+      uniqueClassPixel.size(),
+
+    unique_spatial_pixels:
+      uniqueSpatialPixel.size(),
+
+    duplicate_same_class_rows:
+      ee.Number(
+        training.size()
+      )
+      .subtract(
+        uniqueClassPixel.size()
+      ),
+
+    cross_class_conflict_excess:
+      ee.Number(
+        uniqueClassPixel.size()
+      )
+      .subtract(
+        uniqueSpatialPixel.size()
+      )
+
+  })
+);
+
+
+// ============================================================================
+// 10. FINAL CHECKPOINT
+// ============================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '06D3 COMPLETE — QA ONLY'
+);
+
+print(
+  'Expected:'
+);
+
+print(
+  'Training = 600'
+);
+
+print(
+  'Classes = 120 / 120 / 120 / 120 / 120'
+);
+
+print(
+  'Predictor complete = 600'
+);
+
+print(
+  'Duplicate same-class rows = 0'
+);
+
+print(
+  'Cross-class conflict excess = 0'
+);
+
+print(
+  'If all pass, V2 training asset is LOCKED.'
+);
+
+print(
+  'Next stage = 2010 V2 Gaussian MLC + independent validation.'
+);
+
+print(
+  '========================================'
+);

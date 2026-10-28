@@ -1,0 +1,389 @@
+
+// ============================================================
+// CHENNAI LULC - STAGE 08G-4C
+// 2020 BUILT-UP FUSION: GAIA 2015 vs GAIA 2018
+//
+// Same original MLC, same ESA WorldCover 2020,
+// same 67% Built-up threshold.
+// ONLY difference is the GAIA historical cutoff.
+//
+// No retraining. No exports. No original modifications.
+// ============================================================
+
+// 1. PROJECT ASSETS
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var roi = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+).geometry();
+
+var original = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2020'
+).select(0).rename('original');
+
+var validation = ee.FeatureCollection(
+  ROOT + 'chennai_validation_2020_final'
+);
+
+var CRS = 'EPSG:32644';
+
+var GRID = [
+  30, 0, 399060,
+  0, -30, 1463250
+];
+
+var WC_THRESHOLD = 0.67;
+
+// ============================================================
+// 2. GAIA HISTORICAL IMPERVIOUS LAYERS
+// ============================================================
+
+var gaia = ee.Image(
+  'Tsinghua/FROM-GLC/GAIA/v10'
+).select('change_year_index').unmask(0);
+
+// Impervious by 2015.
+var gaia2015 = gaia.gte(4).and(gaia.lte(34));
+
+// Impervious by 2018.
+var gaia2018 = gaia.gte(1).and(gaia.lte(34));
+
+// Converted during 2016-2018 only.
+var gaia2016to2018 = gaia.gte(1).and(gaia.lte(3));
+
+// ============================================================
+// 3. SAME WORLD COVER 2020 PROCESSING
+// ============================================================
+
+var worldCover = ee.ImageCollection(
+  'ESA/WorldCover/v100'
+).first().select('Map');
+
+// ESA WorldCover class 50 = Built-up.
+
+var wcFraction = worldCover.eq(50)
+  .toFloat()
+  .reduceResolution({
+    reducer: ee.Reducer.mean(),
+    maxPixels: 1024
+  })
+  .reproject({
+    crs: CRS,
+    crsTransform: GRID
+  })
+  .rename('wc_built_fraction');
+
+var wcHigh = wcFraction.gte(WC_THRESHOLD);
+
+// ============================================================
+// 4. TWO CONTROLLED FUSION VERSIONS
+// ============================================================
+
+var suspect = original.eq(4).or(original.eq(5));
+
+// Existing GAIA-2015 fusion.
+var promote15 = suspect
+  .and(gaia2015)
+  .and(wcHigh);
+
+// New GAIA-2018 fusion.
+var promote18 = suspect
+  .and(gaia2018)
+  .and(wcHigh);
+
+// Newly eligible ONLY because of 2016-2018 GAIA.
+var extraPromotions = promote18.and(
+  promote15.not()
+);
+
+// Sanity check against GAIA year 2016-2018.
+var extraFromNewYears = extraPromotions.and(
+  gaia2016to2018
+);
+
+var fusion15 = original.where(promote15, 1)
+  .rename('fusion15')
+  .toByte();
+
+var fusion18 = original.where(promote18, 1)
+  .rename('fusion18')
+  .toByte();
+
+// ============================================================
+// 5. SAME 300 ORIGINAL VALIDATION POINTS
+// ============================================================
+
+var paired = original.addBands([
+  fusion15,
+  fusion18
+]).sampleRegions({
+  collection: validation,
+  properties: ['class_id'],
+  projection: original.projection(),
+  geometries: false,
+  tileScale: 8
+});
+
+var classes = [1, 2, 3, 4, 5];
+
+var cmOriginal = paired.errorMatrix(
+  'class_id', 'original', classes
+);
+
+var cm15 = paired.errorMatrix(
+  'class_id', 'fusion15', classes
+);
+
+var cm18 = paired.errorMatrix(
+  'class_id', 'fusion18', classes
+);
+
+var builtTruth = paired.filter(
+  ee.Filter.eq('class_id', 1)
+);
+
+var nonBuiltTruth = paired.filter(
+  ee.Filter.neq('class_id', 1)
+);
+
+// Extra changed predictions compared with fusion15.
+var changed = paired.map(function(f) {
+
+  var actual = ee.Number(f.get('class_id'));
+  var a = ee.Number(f.get('fusion15'));
+  var b = ee.Number(f.get('fusion18'));
+
+  return f.set({
+    changed: a.neq(b),
+    delta: b.eq(actual).subtract(a.eq(actual))
+  });
+
+});
+
+// ============================================================
+// 6. CITYWIDE AREA SUMMARY
+// ============================================================
+
+function area(mask, name) {
+
+  return ee.Image.pixelArea()
+    .divide(1000000)
+    .updateMask(mask)
+    .updateMask(original.mask())
+    .rename(name);
+
+}
+
+var areaImage = ee.Image.cat([
+
+  area(
+    original.eq(1),
+    'original_BU_km2'
+  ),
+
+  area(
+    fusion15.eq(1),
+    'fusion_GAIA2015_BU_km2'
+  ),
+
+  area(
+    fusion18.eq(1),
+    'fusion_GAIA2018_BU_km2'
+  ),
+
+  area(
+    promote15,
+    'GAIA2015_added_BU_km2'
+  ),
+
+  area(
+    promote18,
+    'GAIA2018_added_BU_km2'
+  ),
+
+  area(
+    extraPromotions,
+    'EXTRA_BU_from_2018_cutoff_km2'
+  ),
+
+  area(
+    extraFromNewYears,
+    'EXTRA_BU_GAIA_2016_2018_km2'
+  ),
+
+  area(
+    extraPromotions.and(original.eq(4)),
+    'EXTRA_from_AgriculturalOpen_km2'
+  ),
+
+  area(
+    extraPromotions.and(original.eq(5)),
+    'EXTRA_from_BarrenFallow_km2'
+  )
+
+]);
+
+var summary = areaImage.reduceRegion({
+
+  reducer: ee.Reducer.sum(),
+
+  geometry: roi,
+
+  crs: CRS,
+
+  crsTransform: GRID,
+
+  maxPixels: 1e8,
+
+  tileScale: 8
+
+});
+
+// ============================================================
+// 7. CONSOLE RESULTS
+// ============================================================
+
+print('============================================');
+print('STAGE 08G-4C | 2020 FUSION COMPARISON');
+print('============================================');
+
+print('ONLY change: GAIA cutoff 2015 vs 2018.');
+print('WorldCover 2020 Built-up threshold = 0.67');
+
+print('Validation count (expect 300):');
+print(paired.size());
+
+print('ORIGINAL MLC confusion matrix:');
+print(cmOriginal);
+
+print('GAIA2015 + WorldCover confusion matrix:');
+print(cm15);
+
+print('GAIA2018 + WorldCover confusion matrix:');
+print(cm18);
+
+print('OVERALL ACCURACY COMPARISON:');
+print(ee.Dictionary({
+  original: cmOriginal.accuracy(),
+  fusion2015: cm15.accuracy(),
+  fusion2018: cm18.accuracy()
+}));
+
+print('BUILT-UP RECALL COMPARISON:');
+print(ee.Dictionary({
+  original: cmOriginal.producersAccuracy().get([0,0]),
+  fusion2015: cm15.producersAccuracy().get([0,0]),
+  fusion2018: cm18.producersAccuracy().get([0,0])
+}));
+
+print('BUILT-UP TRUE POSITIVES:');
+print(ee.Dictionary({
+
+  original: builtTruth.filter(
+    ee.Filter.eq('original', 1)
+  ).size(),
+
+  fusion2015: builtTruth.filter(
+    ee.Filter.eq('fusion15', 1)
+  ).size(),
+
+  fusion2018: builtTruth.filter(
+    ee.Filter.eq('fusion18', 1)
+  ).size()
+
+}));
+
+print('BUILT-UP FALSE POSITIVES:');
+print(ee.Dictionary({
+
+  original: nonBuiltTruth.filter(
+    ee.Filter.eq('original', 1)
+  ).size(),
+
+  fusion2015: nonBuiltTruth.filter(
+    ee.Filter.eq('fusion15', 1)
+  ).size(),
+
+  fusion2018: nonBuiltTruth.filter(
+    ee.Filter.eq('fusion18', 1)
+  ).size()
+
+}));
+
+print('2018 FUSION vs 2015 FUSION:');
+print(ee.Dictionary({
+
+  changed_predictions: changed.filter(
+    ee.Filter.eq('changed', 1)
+  ).size(),
+
+  newly_correct: changed.filter(
+    ee.Filter.eq('delta', 1)
+  ).size(),
+
+  newly_wrong: changed.filter(
+    ee.Filter.eq('delta', -1)
+  ).size()
+
+}));
+
+print('============================================');
+print('CITYWIDE BUILT-UP AREA COMPARISON (km2)');
+print('============================================');
+
+print(summary);
+
+print('NOTE: This is repeated exploratory validation.');
+print('GAIA and WorldCover are supporting map products.');
+print('No original asset modified.');
+print('NO EXPORTS.');
+
+// ============================================================
+// 8. MAP VISUALIZATION
+// ============================================================
+
+var palette = [
+  'ff0000',
+  '008000',
+  '0000ff',
+  'ffff00',
+  'd2b48c'
+];
+
+Map.layers().reset();
+Map.setOptions('SATELLITE');
+
+Map.addLayer(
+  original,
+  {min: 1, max: 5, palette: palette},
+  '2020 ORIGINAL MLC',
+  true
+);
+
+Map.addLayer(
+  fusion15,
+  {min: 1, max: 5, palette: palette},
+  '2020 GAIA2015 + WORLDCOVER',
+  false
+);
+
+Map.addLayer(
+  fusion18,
+  {min: 1, max: 5, palette: palette},
+  '2020 GAIA2018 + WORLDCOVER',
+  false
+);
+
+Map.addLayer(
+  extraPromotions.selfMask(),
+  {palette: ['00ffff']},
+  'ADDITIONAL BUILT-UP: 2018 CUTOFF',
+  false
+);
+
+Map.centerObject(roi, 10);
+
+// ============================================================
+// END STAGE 08G-4C
+// ============================================================

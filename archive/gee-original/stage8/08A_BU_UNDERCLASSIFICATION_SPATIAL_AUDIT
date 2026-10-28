@@ -1,0 +1,291 @@
+
+ // ============================================================
+ // CHENNAI LULC — STAGE 08B
+ // LIGHTWEIGHT BUILT-UP / OPEN-LAND DISAGREEMENT AUDIT
+ //
+ // READ ONLY
+ // No classification, retraining, exports or asset changes.
+ // ============================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var CRS = 'EPSG:32644';
+
+var TX = [
+  30, 0, 399060,
+  0, -30, 1463250
+];
+
+var GRID = ee.Projection(CRS, TX);
+
+var roiFC = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+);
+
+var roi = roiFC.geometry();
+
+// Change to 2020 or 2025 for later audits.
+
+var TARGET_YEAR = 2025;
+
+// Keep FALSE until the magenta layer renders correctly.
+
+var GENERATE_50_REVIEW_POINTS = true;
+
+// ============================================================
+// 1. VERIFIED EXPORTED CLASSIFICATION ASSETS
+// ============================================================
+
+var assets = {
+  2010: 'chennai_lulc4_2010_L5L7_provisional_v1',
+  2015: 'chennai_lulc4_2015_v1',
+  2020: 'chennai_lulc4_2020_v1',
+  2025: 'chennai_lulc4_2025_v1'
+};
+
+var original2010 = ee.Image(
+  ROOT + assets[2010]
+).select('classification');
+
+var later = ee.Image(
+  ROOT + assets[TARGET_YEAR]
+).select('classification');
+
+// Both exported rasters already share the locked grid.
+// Do not repeatedly clip or reproject them.
+
+// ============================================================
+// 2. DISAGREEMENT AND CONTROL PIXELS
+// ============================================================
+
+var disagreement = original2010
+  .eq(1)
+  .and(later.eq(4))
+  .rename('flag');
+
+var stableBuilt = original2010
+  .eq(1)
+  .and(later.eq(1))
+  .rename('stable');
+
+var reverse = original2010
+  .eq(4)
+  .and(later.eq(1))
+  .rename('reverse');
+
+// ============================================================
+// 3. CONSOLE
+// ============================================================
+
+print('==========================================');
+print('CHENNAI STAGE 08B — LIGHTWEIGHT AUDIT');
+print('==========================================');
+
+print('Comparison: 2010 versus ' + TARGET_YEAR);
+
+print('2010 raster projection:');
+print(original2010.projection());
+
+print('Later raster projection:');
+print(later.projection());
+
+print('Candidate review sampling enabled:');
+print(GENERATE_50_REVIEW_POINTS);
+
+print('Magenta = 2010 Built-up, later Open');
+print('Cyan = Built-up in both maps');
+print('Green = 2010 Open, later Built-up');
+
+print('2010 labels are provisional.');
+print('Color differences are not proof of misclassification.');
+
+// ============================================================
+// 4. MAP — KEEP RENDERING SIMPLE
+// ============================================================
+
+Map.layers().reset();
+
+Map.setOptions('SATELLITE');
+
+Map.centerObject(roi, 11);
+
+var palette = [
+  'e53935',
+  '2e7d32',
+  '1976d2',
+  'd8b365'
+];
+
+Map.addLayer(
+  later,
+  {
+    min: 1,
+    max: 4,
+    palette: palette
+  },
+  TARGET_YEAR + ' LULC',
+  false,
+  0.65
+);
+
+Map.addLayer(
+  original2010,
+  {
+    min: 1,
+    max: 4,
+    palette: palette
+  },
+  '2010 LULC — PROVISIONAL',
+  false,
+  0.65
+);
+
+Map.addLayer(
+  disagreement.selfMask(),
+  {
+    palette: ['ff00ff']
+  },
+  'CHECK — 2010 Built-up to ' +
+    TARGET_YEAR + ' Open',
+  true,
+  0.65
+);
+
+Map.addLayer(
+  stableBuilt.selfMask(),
+  {
+    palette: ['00ffff']
+  },
+  'CONTROL — Built-up in both years',
+  false,
+  0.6
+);
+
+Map.addLayer(
+  reverse.selfMask(),
+  {
+    palette: ['00ff66']
+  },
+  'CONTROL — Open to Built-up',
+  false,
+  0.6
+);
+
+Map.addLayer(
+  roiFC.style({
+    color: 'ffff00',
+    fillColor: '00000000',
+    width: 1
+  }),
+  {},
+  'Study boundary',
+  true
+);
+
+// ============================================================
+// 5. OPTIONAL 50-POINT STRATIFIED SAMPLE
+// ============================================================
+
+if (GENERATE_50_REVIEW_POINTS) {
+
+  var reviewPoints = disagreement
+    .selfMask()
+    .stratifiedSample({
+
+      numPoints: 50,
+
+      classBand: 'flag',
+
+      classValues: [1],
+
+      classPoints: [50],
+
+      region: roi,
+
+      projection: GRID,
+
+      scale: 30,
+
+      seed: 20261021,
+
+      geometries: true,
+
+      tileScale: 16
+
+    });
+
+  print('Review point count:');
+  print(reviewPoints.size());
+
+  print('Review points:');
+  print(reviewPoints);
+
+  Map.addLayer(
+    reviewPoints,
+    {
+      color: 'ffffff'
+    },
+    '50 Review Points',
+    false
+  );
+
+}
+
+// ============================================================
+// 6. CLICK MAP TO INSPECT BOTH CLASSIFICATIONS
+// ============================================================
+
+var inspectImage = ee.Image.cat([
+
+  original2010.rename('class_2010'),
+
+  later.rename('class_later')
+
+]);
+
+Map.onClick(function(location) {
+
+  var point = ee.Geometry.Point([
+    location.lon,
+    location.lat
+  ]);
+
+  print('------------------------------------------');
+
+  print('Clicked geographic coordinates:');
+
+  print([
+    location.lon,
+    location.lat
+  ]);
+
+  print('2010 and later classification IDs:');
+
+  print(
+    inspectImage.reduceRegion({
+
+      reducer: ee.Reducer.first(),
+
+      geometry: point,
+
+      crs: CRS,
+
+      crsTransform: TX,
+
+      maxPixels: 100000
+
+    })
+  );
+
+});
+
+// ============================================================
+// END
+// ============================================================
+
+print('==========================================');
+print('Audit ready.');
+print('No Landsat median computations.');
+print('No heavy area-reduction computations.');
+print('No exports.');
+print('==========================================');

@@ -1,0 +1,349 @@
+
+// ============================================================
+// CHENNAI LULC — STAGE 07C
+// 2010 NATIVE BARREN/FALLOW BATCH QA
+// VERSION 1 — AUDIT ONLY
+// ============================================================
+
+// 1. SETTINGS
+
+var ROOT = 'projects/assignment-482806/assets/';
+var CRS = 'EPSG:32644';
+var SCALE = 30;
+
+var bands = [
+  'blue', 'green', 'red',
+  'nir', 'swir1', 'swir2',
+  'NDVI', 'NDWI', 'NDBI'
+];
+
+var proj = ee.Projection(CRS).atScale(SCALE);
+
+// 2. LOAD ASSETS
+
+var roiFC = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+);
+
+var roi = roiFC.geometry();
+
+var stack2010 = ee.Image(
+  ROOT + 'chennai_predictor_stack_2010'
+).select(bands).clip(roi);
+
+var nativeSites = ee.FeatureCollection(
+  ROOT + 'chennai_training_2010_barren_native_candidates'
+);
+
+var validationPolygons = ee.FeatureCollection(
+  ROOT + 'chennai_validation_polygons_2010_manual_master'
+);
+
+var finalValidation = ee.FeatureCollection(
+  ROOT + 'chennai_validation_2010_final'
+);
+
+// 3. RESERVED EXCLUSION ZONES
+
+// Conservative 60 m around validation polygons.
+
+var polygonExclusion = validationPolygons
+  .geometry()
+  .buffer(60, 1);
+
+// Also protect saved final validation points.
+// 60 m buffer used for this initial review.
+
+var pointExclusion = finalValidation
+  .geometry()
+  .buffer(60, 1);
+
+// 4. INITIAL ASSET QA
+
+print('===================================');
+print('07C — 2010 NATIVE TRAINING BATCH QA');
+print('===================================');
+
+print('Imported candidate site count:');
+print(nativeSites.size());
+
+print('Original site identifiers:');
+print(nativeSites.aggregate_histogram('site_id'));
+
+print('Original review statuses:');
+print(nativeSites.aggregate_histogram('review_sta'));
+
+print('Imported feature example:');
+print(nativeSites.first());
+
+print('Reserved validation polygons:');
+print(validationPolygons.size());
+
+print('Saved final validation points:');
+print(finalValidation.size());
+
+print('2010 predictor bands:');
+print(stack2010.bandNames());
+
+// 5. PIXEL GRID
+
+var xy = ee.Image.pixelCoordinates(proj)
+  .rename(['grid_x', 'grid_y']);
+
+var samplingImage = stack2010.addBands(xy);
+
+// 6. SAMPLE 2010 IMAGE WITH NEW POLYGONS
+
+var rawSamples = samplingImage.sampleRegions({
+  collection: nativeSites,
+  properties: ['site_id', 'class_id'],
+  projection: proj,
+  scale: SCALE,
+  geometries: true,
+  tileScale: 8
+});
+
+print('===================================');
+print('INITIAL PIXEL SAMPLING');
+print('===================================');
+
+print('Raw valid 2010 samples:');
+print(rawSamples.size());
+
+print('Raw samples by site:');
+print(rawSamples.aggregate_histogram('site_id'));
+
+// 7. EXCLUDE VALIDATION POLYGONS
+
+var afterPolygonExclusion = rawSamples.filter(
+  ee.Filter.bounds(polygonExclusion).not()
+);
+
+print('After validation polygon exclusion:');
+print(afterPolygonExclusion.size());
+
+// 8. EXCLUDE SAVED FINAL VALIDATION POINTS
+
+var afterPointExclusion =
+  afterPolygonExclusion.filter(
+    ee.Filter.bounds(pointExclusion).not()
+  );
+
+print('After final validation point exclusion:');
+print(afterPointExclusion.size());
+
+// 9. GRID KEY AND DEDUPLICATION
+
+var keyed = afterPointExclusion.map(function(f) {
+
+  var gx = ee.Number(f.get('grid_x'))
+    .format('%.6f');
+
+  var gy = ee.Number(f.get('grid_y'))
+    .format('%.6f');
+
+  return f.set(
+    'grid_key',
+    gx.cat('_').cat(gy)
+  );
+});
+
+var uniqueSamples = keyed.distinct(['grid_key']);
+
+print('===================================');
+print('UNIQUE ELIGIBLE CANDIDATES');
+print('===================================');
+
+print('Samples before deduplication:');
+print(keyed.size());
+
+print('Unique grid pixels:');
+print(uniqueSamples.size());
+
+print('Repeated pixels removed:');
+print(keyed.size().subtract(uniqueSamples.size()));
+
+print('Eligible unique pixels by site:');
+print(uniqueSamples.aggregate_histogram('site_id'));
+
+// 10. SPECTRAL DIAGNOSTICS
+
+print('===================================');
+print('SPECTRAL QA');
+print('===================================');
+
+print('Overall NDVI statistics:');
+print(uniqueSamples.aggregate_stats('NDVI'));
+
+print('Overall NDBI statistics:');
+print(uniqueSamples.aggregate_stats('NDBI'));
+
+print('Overall NDWI statistics:');
+print(uniqueSamples.aggregate_stats('NDWI'));
+
+// Per-site spectral summaries
+
+var siteIDs = ee.List(
+  nativeSites.aggregate_array('site_id')
+).distinct();
+
+var siteSummary = ee.FeatureCollection(
+  siteIDs.map(function(id) {
+
+    var samples = uniqueSamples.filter(
+      ee.Filter.eq('site_id', id)
+    );
+
+    return ee.Feature(null, {
+      site_id: id,
+      candidate_count: samples.size(),
+      NDVI_mean: samples.aggregate_mean('NDVI'),
+      NDVI_min: samples.aggregate_min('NDVI'),
+      NDVI_max: samples.aggregate_max('NDVI'),
+      NDBI_mean: samples.aggregate_mean('NDBI'),
+      NDWI_mean: samples.aggregate_mean('NDWI')
+    });
+
+  })
+);
+
+print('Per-site spectral and count summary:');
+print(siteSummary);
+
+// 11. TARGET COVERAGE
+
+var totalEligible = uniqueSamples.size();
+
+print('===================================');
+print('CLASS 5 TRAINING COVERAGE');
+print('===================================');
+
+print('Available unapproved candidate pixels:');
+print(totalEligible);
+
+print('Target Class 5 training pixels:');
+print(120);
+
+print('Numerical shortfall, before manual approval:');
+print(ee.Number(120).subtract(totalEligible).max(0));
+
+// 12. MAP
+
+Map.layers().reset();
+Map.setOptions('TERRAIN');
+Map.centerObject(nativeSites, 13);
+
+Map.addLayer(
+  stack2010,
+  {
+    bands: ['red', 'green', 'blue'],
+    min: 0.02,
+    max: 0.30
+  },
+  '2010 TRUE COLOR',
+  true
+);
+
+Map.addLayer(
+  nativeSites.style({
+    color: 'FFFF00',
+    fillColor: 'FFFF0022',
+    width: 2
+  }),
+  {},
+  'NEW BARREN/FALLOW SITES',
+  true
+);
+
+Map.addLayer(
+  validationPolygons.style({
+    color: 'FF00FF',
+    fillColor: 'FF00FF22',
+    width: 2
+  }),
+  {},
+  'RESERVED VALIDATION POLYGONS',
+  false
+);
+
+Map.addLayer(
+  uniqueSamples.style({
+    color: '00FFFF',
+    pointSize: 3
+  }),
+  {},
+  'ELIGIBLE 2010 PIXELS',
+  true
+);
+
+// 13. FINAL STATUS
+
+print('===================================');
+print('07C AUDIT COMPLETE');
+print('===================================');
+
+print('Historical class verification still required.');
+print('These pixels are CANDIDATES, not final training.');
+print('No final training asset exported.');
+print('No MLC classifier executed.');
+
+// ============================================================
+// END STAGE 07C
+// ============================================================
+
+// ============================================================
+// STAGE 07C1 — DIAGNOSE NATIVE TRAINING SITE COVERAGE
+// NO EXPORT / NO CLASSIFICATION
+// ============================================================
+
+var siteDiagnostics = nativeSites.map(function(f) {
+
+  f = ee.Feature(f);
+
+  var geom = f.geometry();
+
+  var overlap = geom.intersection(roi, 1);
+
+  return f.set({
+    'area_m2': geom.area(1),
+    'inside_roi_m2': overlap.area(1),
+    'centroid_lonlat': geom.centroid(1).coordinates()
+  });
+
+});
+
+print('===================================');
+print('07C1 — SITE GEOMETRY DIAGNOSTICS');
+print('===================================');
+
+print('Site areas and ROI coverage:');
+print(siteDiagnostics.select([
+  'site_id',
+  'area_m2',
+  'inside_roi_m2',
+  'centroid_lonlat'
+]));
+
+// Compare valid 2010 sampling with geometric pixel centres.
+
+var constantPixelImage = ee.Image.constant(1)
+  .rename('pixel_presence')
+  .clip(roi);
+
+var geometrySamples = constantPixelImage.sampleRegions({
+  collection: nativeSites,
+  properties: ['site_id'],
+  projection: proj,
+  scale: SCALE,
+  geometries: true,
+  tileScale: 8
+});
+
+print('Pixel centres inside sites, independent of 2010 band masks:');
+print(geometrySamples.aggregate_histogram('site_id'));
+
+print('Valid 2010 nine-band samples by site:');
+print(rawSamples.aggregate_histogram('site_id'));
+
+print('===================================');
+print('END 07C1 — DIAGNOSTICS ONLY');

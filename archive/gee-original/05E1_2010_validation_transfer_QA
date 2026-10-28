@@ -1,0 +1,2184 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05E1
+//
+// 2015 -> 2010 INDEPENDENT VALIDATION TRANSFER QA
+//
+// PURPOSE
+// -------
+// Transfer the LOCKED 2015 independent validation reference
+// locations toward 2010 using the same cross-sensor philosophy
+// used for automated historical training transfer.
+//
+// IMPORTANT INDEPENDENCE RULE
+// ---------------------------
+// Validation class signatures are built ONLY from the
+// 2015 independent validation reference set.
+//
+// The FINAL 2010 training asset is used ONLY for:
+//     30 m spatial exclusion.
+//
+// Training is NOT used to define validation spectral signatures.
+// Validation is NOT used to modify training.
+//
+// CROSS-SENSOR LOGIC
+// ------------------
+// 2015 = Landsat 8 OLI
+// 2010 = Landsat 5 TM
+//
+// Each year is normalized independently:
+//
+// z ~= (x - median) / (IQR / 1.349)
+//
+// Then 2010 normalized pixels are evaluated against
+// class signatures derived from normalized 2015 validation pixels.
+//
+// SCREENING THRESHOLDS — LOCKED
+// -----------------------------
+// own standardized RMS distance <= 1.25
+// class separation margin       >= 0.25
+// 2010 clear_count              >= 2
+// nearest class                 = reference class
+// local valid neighbours        >= 5
+// local same-class fraction     >= 5/9
+//
+// Plus:
+// 30 m exclusion from FINAL 2010 training.
+//
+// OUTPUT
+// ------
+// QA candidate asset:
+// chennai_validation_transfer_2015_to_2010_QA_05E1
+//
+// DO NOT START EXPORT UNTIL CONSOLE QA IS REVIEWED.
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSETS
+// ================================================================
+
+var ROI_ASSET =
+  'projects/assignment-482806/assets/chennai_admin_study_area_clean';
+
+
+var VALIDATION_2015_ASSET =
+  'projects/assignment-482806/assets/chennai_validation_2015_final';
+
+
+var STACK_2010_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var TRAINING_2010_ASSET =
+  'projects/assignment-482806/assets/chennai_training_2010_final';
+
+
+var OUTPUT_ASSET =
+  'projects/assignment-482806/assets/chennai_validation_transfer_2015_to_2010_QA_05E1';
+
+
+// ================================================================
+// 2. LOCKED SETTINGS
+// ================================================================
+
+var ANALYSIS_CRS =
+  'EPSG:32644';
+
+
+var SCALE =
+  30;
+
+
+var TARGET_PER_CLASS =
+  60;
+
+
+var DISTANCE_THRESHOLD =
+  1.25;
+
+
+var MARGIN_THRESHOLD =
+  0.25;
+
+
+var MIN_CLEAR_COUNT =
+  2;
+
+
+var MIN_LOCAL_VALID =
+  5;
+
+
+var MIN_LOCAL_FRACTION =
+  5 / 9;
+
+
+var TRAINING_EXCLUSION_METERS =
+  30;
+
+
+var EPSILON =
+  1e-6;
+
+
+var NO_DATA_VALUE =
+  -9999;
+
+
+var PREDICTORS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+var CLASS_IDS =
+  [1, 2, 3, 4, 5];
+
+
+var CLASS_NAMES = [
+
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+
+];
+
+
+// ================================================================
+// 3. LOAD LOCKED MATERIALIZED DATA
+// ================================================================
+
+var roiFC =
+  ee.FeatureCollection(
+    ROI_ASSET
+  );
+
+
+var roi =
+  roiFC.geometry();
+
+
+var validation2015 =
+  ee.FeatureCollection(
+    VALIDATION_2015_ASSET
+  );
+
+
+var stack2010 =
+  ee.Image(
+    STACK_2010_ASSET
+  );
+
+
+var training2010 =
+  ee.FeatureCollection(
+    TRAINING_2010_ASSET
+  );
+
+
+var stackProjection =
+  stack2010
+    .select(
+      'blue'
+    )
+    .projection();
+
+
+// ================================================================
+// 4. GIVE EACH 2015 VALIDATION POINT A REFERENCE ID
+// ================================================================
+
+validation2015 =
+  validation2015.map(
+    function(feature) {
+
+      return feature.set(
+        'reference_id',
+        feature.get(
+          'system:index'
+        )
+      );
+
+    }
+  );
+
+
+// ================================================================
+// 5. INPUT QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05E1 — LOCKED INPUT CHECK'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    validation_2015_total:
+      validation2015.size(),
+
+    training_2010_total:
+      training2010.size()
+
+  })
+);
+
+
+print(
+  '2015 validation class histogram'
+);
+
+
+print(
+  validation2015.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ================================================================
+// 6. LANDSAT 8 PREPROCESSING — 2015
+// ================================================================
+//
+// Locked C2 T1 L2 preprocessing.
+//
+// QA_PIXEL rejected:
+//
+// bit 0 = fill
+// bit 1 = dilated cloud
+// bit 2 = cirrus
+// bit 3 = cloud
+// bit 4 = cloud shadow
+// bit 5 = snow
+//
+// QA_RADSAT must equal zero.
+//
+// ================================================================
+
+function preprocessL8(
+  image
+) {
+
+  var qa =
+    image.select(
+      'QA_PIXEL'
+    );
+
+
+  var qaMask =
+    qa.bitwiseAnd(
+      1 << 0
+    )
+    .eq(0)
+
+    .and(
+      qa.bitwiseAnd(
+        1 << 1
+      )
+      .eq(0)
+    )
+
+    .and(
+      qa.bitwiseAnd(
+        1 << 2
+      )
+      .eq(0)
+    )
+
+    .and(
+      qa.bitwiseAnd(
+        1 << 3
+      )
+      .eq(0)
+    )
+
+    .and(
+      qa.bitwiseAnd(
+        1 << 4
+      )
+      .eq(0)
+    )
+
+    .and(
+      qa.bitwiseAnd(
+        1 << 5
+      )
+      .eq(0)
+    );
+
+
+  var saturationMask =
+    image
+      .select(
+        'QA_RADSAT'
+      )
+      .eq(
+        0
+      );
+
+
+  var optical =
+    image
+
+      .select(
+        [
+          'SR_B2',
+          'SR_B3',
+          'SR_B4',
+          'SR_B5',
+          'SR_B6',
+          'SR_B7'
+        ]
+      )
+
+      .multiply(
+        0.0000275
+      )
+
+      .add(
+        -0.2
+      )
+
+      .rename(
+        [
+          'blue',
+          'green',
+          'red',
+          'nir',
+          'swir1',
+          'swir2'
+        ]
+      );
+
+
+  return optical
+
+    .updateMask(
+      qaMask
+    )
+
+    .updateMask(
+      saturationMask
+    )
+
+    .copyProperties(
+      image,
+      [
+        'system:time_start'
+      ]
+    );
+
+}
+
+
+// ================================================================
+// 7. INDEX FUNCTION
+// ================================================================
+//
+// IMPORTANT:
+// indices are calculated AFTER annual median reflectance composite.
+//
+// ================================================================
+
+function addIndices(
+  image
+) {
+
+  var blue =
+    image.select(
+      'blue'
+    );
+
+
+  var green =
+    image.select(
+      'green'
+    );
+
+
+  var red =
+    image.select(
+      'red'
+    );
+
+
+  var nir =
+    image.select(
+      'nir'
+    );
+
+
+  var swir1 =
+    image.select(
+      'swir1'
+    );
+
+
+  var swir2 =
+    image.select(
+      'swir2'
+    );
+
+
+  var ndvi =
+    nir
+      .subtract(
+        red
+      )
+      .divide(
+        nir.add(
+          red
+        )
+      )
+      .rename(
+        'NDVI'
+      );
+
+
+  var ndwi =
+    green
+      .subtract(
+        nir
+      )
+      .divide(
+        green.add(
+          nir
+        )
+      )
+      .rename(
+        'NDWI'
+      );
+
+
+  var ndbi =
+    swir1
+      .subtract(
+        nir
+      )
+      .divide(
+        swir1.add(
+          nir
+        )
+      )
+      .rename(
+        'NDBI'
+      );
+
+
+  return image
+    .select(
+      [
+        'blue',
+        'green',
+        'red',
+        'nir',
+        'swir1',
+        'swir2'
+      ]
+    )
+    .addBands(
+      [
+        ndvi,
+        ndwi,
+        ndbi
+      ]
+    );
+
+}
+
+
+// ================================================================
+// 8. BUILD LOCKED 2015 FULL-YEAR STACK
+// ================================================================
+
+var landsat2015 =
+  ee.ImageCollection(
+    'LANDSAT/LC08/C02/T1_L2'
+  )
+
+  .filterBounds(
+    roi
+  )
+
+  .filterDate(
+    '2015-01-01',
+    '2016-01-01'
+  )
+
+  .map(
+    preprocessL8
+  );
+
+
+print(
+  '2015 L8 scene count'
+);
+
+
+print(
+  landsat2015.size()
+);
+
+
+var composite2015 =
+  landsat2015
+
+    .median()
+
+    .clip(
+      roi
+    );
+
+
+var stack2015 =
+  addIndices(
+    composite2015
+  )
+
+  .select(
+    PREDICTORS
+  )
+
+  .clip(
+    roi
+  );
+
+
+// ================================================================
+// 9. ROBUST WITHIN-YEAR NORMALIZATION STATISTICS
+// ================================================================
+//
+// Percentiles are derived separately for each year over the
+// SAME fixed Chennai ROI.
+//
+// robust scale = IQR / 1.349
+//
+// ================================================================
+
+function getRobustStats(
+  image
+) {
+
+  return image
+    .select(
+      PREDICTORS
+    )
+    .reduceRegion({
+
+      reducer:
+        ee.Reducer.percentile(
+          [
+            25,
+            50,
+            75
+          ]
+        ),
+
+      geometry:
+        roi,
+
+      scale:
+        SCALE,
+
+      crs:
+        ANALYSIS_CRS,
+
+      maxPixels:
+        1e8,
+
+      tileScale:
+        4
+
+    });
+
+}
+
+
+var stats2015 =
+  getRobustStats(
+    stack2015
+  );
+
+
+var stats2010 =
+  getRobustStats(
+    stack2010
+  );
+
+
+// ================================================================
+// 10. ROBUST NORMALIZATION FUNCTION
+// ================================================================
+
+function robustNormalize(
+  image,
+  stats
+) {
+
+  var medians =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          stats.get(
+            band + '_p50'
+          )
+        );
+
+      }
+    );
+
+
+  var scales =
+    PREDICTORS.map(
+      function(band) {
+
+        var p25 =
+          ee.Number(
+            stats.get(
+              band + '_p25'
+            )
+          );
+
+
+        var p75 =
+          ee.Number(
+            stats.get(
+              band + '_p75'
+            )
+          );
+
+
+        return p75
+          .subtract(
+            p25
+          )
+          .divide(
+            1.349
+          )
+          .max(
+            EPSILON
+          );
+
+      }
+    );
+
+
+  var medianImage =
+    ee.Image.constant(
+      medians
+    )
+    .rename(
+      PREDICTORS
+    );
+
+
+  var scaleImage =
+    ee.Image.constant(
+      scales
+    )
+    .rename(
+      PREDICTORS
+    );
+
+
+  return image
+
+    .select(
+      PREDICTORS
+    )
+
+    .subtract(
+      medianImage
+    )
+
+    .divide(
+      scaleImage
+    )
+
+    .rename(
+      PREDICTORS
+    );
+
+}
+
+
+var normalized2015 =
+  robustNormalize(
+    stack2015,
+    stats2015
+  );
+
+
+var normalized2010 =
+  robustNormalize(
+    stack2010,
+    stats2010
+  );
+
+
+// ================================================================
+// 11. SAMPLE NORMALIZED 2015 VALIDATION REFERENCE
+// ================================================================
+//
+// This set is used to build the independent validation-transfer
+// class signatures.
+//
+// It is NOT 2010 training.
+//
+// ================================================================
+
+var validationReference2015 =
+  normalized2015.sampleRegions({
+
+    collection:
+      validation2015,
+
+    properties: [
+
+      'reference_id',
+      'class_id',
+      'class_name',
+      'poly_id',
+      'source'
+
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      ee.Projection(
+        ANALYSIS_CRS
+      ),
+
+    geometries:
+      true,
+
+    tileScale:
+      4
+
+  });
+
+
+print(
+  'Normalized 2015 validation samples'
+);
+
+
+print(
+  validationReference2015.size()
+);
+
+
+print(
+  'Normalized 2015 validation class histogram'
+);
+
+
+print(
+  validationReference2015.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ================================================================
+// 12. BUILD 2015 VALIDATION-DERIVED CLASS SIGNATURES
+// ================================================================
+//
+// For every class:
+//
+// mean vector
+// sample SD vector
+//
+// These are calculated in ROBUST NORMALIZED feature space.
+//
+// ================================================================
+
+function buildValidationSignature(
+  classId
+) {
+
+  var classSamples =
+    validationReference2015.filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    );
+
+
+  var means =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_mean(
+            band
+          )
+        );
+
+      }
+    );
+
+
+  var sds =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_sample_sd(
+            band
+          )
+        )
+        .max(
+          EPSILON
+        );
+
+      }
+    );
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      means:
+        ee.List(
+          means
+        ),
+
+      sds:
+        ee.List(
+          sds
+        ),
+
+      n:
+        classSamples.size()
+
+    }
+  );
+
+}
+
+
+var validationSignatures =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      buildValidationSignature
+    )
+  );
+
+
+print(
+  '2015 validation-derived normalized signatures'
+);
+
+
+print(
+  validationSignatures
+);
+
+
+// ================================================================
+// 13. STANDARDIZED DISTANCE TO EACH CLASS
+// ================================================================
+
+function distanceToClass(
+  normalizedImage,
+  classId
+) {
+
+  var signature =
+    ee.Feature(
+      validationSignatures
+
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+
+        .first()
+    );
+
+
+  var meanImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'means'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    );
+
+
+  var sdImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'sds'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    )
+    .max(
+      EPSILON
+    );
+
+
+  return normalizedImage
+
+    .select(
+      PREDICTORS
+    )
+
+    .subtract(
+      meanImage
+    )
+
+    .divide(
+      sdImage
+    )
+
+    .pow(
+      2
+    )
+
+    .reduce(
+      ee.Reducer.mean()
+    )
+
+    .sqrt()
+
+    .rename(
+      'd' + classId
+    );
+
+}
+
+
+// ================================================================
+// 14. 2010 CLASS-DISTANCE IMAGES
+// ================================================================
+
+var d1 =
+  distanceToClass(
+    normalized2010,
+    1
+  );
+
+
+var d2 =
+  distanceToClass(
+    normalized2010,
+    2
+  );
+
+
+var d3 =
+  distanceToClass(
+    normalized2010,
+    3
+  );
+
+
+var d4 =
+  distanceToClass(
+    normalized2010,
+    4
+  );
+
+
+var d5 =
+  distanceToClass(
+    normalized2010,
+    5
+  );
+
+
+var distanceImages = [
+
+  d1,
+  d2,
+  d3,
+  d4,
+  d5
+
+];
+
+
+var distanceStack =
+  ee.Image.cat(
+    distanceImages
+  );
+
+
+// ================================================================
+// 15. BEST + SECOND-BEST 2010 CLASS
+// ================================================================
+
+var bestDist =
+  d1.rename(
+    'best_dist'
+  );
+
+
+var bestClass =
+  ee.Image.constant(
+    1
+  )
+  .rename(
+    'best_class'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+var secondDist =
+  ee.Image.constant(
+    9999
+  )
+  .rename(
+    'second_dist'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+for (
+  var i = 1;
+  i < CLASS_IDS.length;
+  i++
+) {
+
+  var classId =
+    CLASS_IDS[i];
+
+
+  var currentDistance =
+    distanceImages[i];
+
+
+  var better =
+    currentDistance.lt(
+      bestDist
+    );
+
+
+  var previousBest =
+    bestDist;
+
+
+  var updatedSecond =
+    secondDist.where(
+      better,
+      previousBest
+    );
+
+
+  var currentAsSecond =
+    currentDistance.where(
+      better,
+      9999
+    );
+
+
+  updatedSecond =
+    updatedSecond.min(
+      currentAsSecond
+    );
+
+
+  bestDist =
+    previousBest
+      .where(
+        better,
+        currentDistance
+      )
+      .rename(
+        'best_dist'
+      );
+
+
+  bestClass =
+    bestClass
+      .where(
+        better,
+        classId
+      )
+      .rename(
+        'best_class'
+      );
+
+
+  secondDist =
+    updatedSecond.rename(
+      'second_dist'
+    );
+
+}
+
+
+var margin =
+  secondDist
+
+    .subtract(
+      bestDist
+    )
+
+    .rename(
+      'margin'
+    );
+
+
+// ================================================================
+// 16. 3 x 3 LOCAL CONSISTENCY
+// ================================================================
+
+var kernel3x3 =
+  ee.Kernel.square({
+
+    radius:
+      1,
+
+    units:
+      'pixels',
+
+    normalize:
+      false
+
+  });
+
+
+var localValidN =
+  bestClass
+
+    .reduceNeighborhood({
+
+      reducer:
+        ee.Reducer.count(),
+
+      kernel:
+        kernel3x3,
+
+      skipMasked:
+        true
+
+    })
+
+    .rename(
+      'local_valid_n'
+    );
+
+
+var localSameN =
+  ee.Image.constant(
+    0
+  )
+
+  .rename(
+    'local_same_n'
+  )
+
+  .updateMask(
+    bestClass.mask()
+  );
+
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var neighbourCount =
+      bestClass
+
+        .eq(
+          classId
+        )
+
+        .reduceNeighborhood({
+
+          reducer:
+            ee.Reducer.sum(),
+
+          kernel:
+            kernel3x3,
+
+          skipMasked:
+            true
+
+        });
+
+
+    localSameN =
+      localSameN.where(
+
+        bestClass.eq(
+          classId
+        ),
+
+        neighbourCount
+
+      );
+
+  }
+);
+
+
+var localFraction =
+  localSameN
+
+    .divide(
+      localValidN.max(
+        1
+      )
+    )
+
+    .rename(
+      'local_fraction'
+    );
+
+
+// ================================================================
+// 17. 30 m FINAL-TRAINING EXCLUSION GEOMETRY
+// ================================================================
+//
+// The training data is used ONLY here.
+//
+// Each final 2010 training point receives a 30 m buffer.
+//
+// ================================================================
+
+var trainingBuffers =
+  training2010.map(
+    function(feature) {
+
+      return ee.Feature(
+        feature
+          .geometry()
+          .buffer(
+            TRAINING_EXCLUSION_METERS
+          )
+      );
+
+    }
+  );
+
+
+var trainingExclusionGeometry =
+  trainingBuffers.geometry();
+
+
+// ================================================================
+// 18. TARGET-YEAR QA IMAGE
+// ================================================================
+
+var qaImage2010 =
+  distanceStack
+
+    .addBands(
+      bestClass
+    )
+
+    .addBands(
+      bestDist
+    )
+
+    .addBands(
+      secondDist
+    )
+
+    .addBands(
+      margin
+    )
+
+    .addBands(
+      stack2010.select(
+        'clear_count'
+      )
+    )
+
+    .addBands(
+      localValidN
+    )
+
+    .addBands(
+      localFraction
+    );
+
+
+// ================================================================
+// 19. SAMPLE 2010 AT THE 2015 VALIDATION LOCATIONS
+// ================================================================
+//
+// unmask(-9999) guarantees that reference locations are retained
+// even if 2010 data are missing.
+//
+// ================================================================
+
+var sampled2010 =
+  qaImage2010
+
+    .unmask(
+      NO_DATA_VALUE
+    )
+
+    .sampleRegions({
+
+      collection:
+        validation2015,
+
+      properties: [
+
+        'reference_id',
+        'class_id',
+        'class_name',
+        'poly_id',
+        'source'
+
+      ],
+
+      scale:
+        SCALE,
+
+      projection:
+        stackProjection,
+
+      geometries:
+        true,
+
+      tileScale:
+        4
+
+    });
+
+
+print(
+  '2010 sampled validation reference count'
+);
+
+
+print(
+  sampled2010.size()
+);
+
+
+// ================================================================
+// 20. EVALUATE EACH TRANSFERRED VALIDATION POINT
+// ================================================================
+
+var evaluatedValidation =
+  sampled2010.map(
+    function(feature) {
+
+      var classId =
+        ee.Number(
+          feature.get(
+            'class_id'
+          )
+        );
+
+
+      var bestClassValue =
+        ee.Number(
+          feature.get(
+            'best_class'
+          )
+        );
+
+
+      var marginValue =
+        ee.Number(
+          feature.get(
+            'margin'
+          )
+        );
+
+
+      var clearCount =
+        ee.Number(
+          feature.get(
+            'clear_count'
+          )
+        );
+
+
+      var localN =
+        ee.Number(
+          feature.get(
+            'local_valid_n'
+          )
+        );
+
+
+      var localFrac =
+        ee.Number(
+          feature.get(
+            'local_fraction'
+          )
+        );
+
+
+      var ownDistanceDictionary =
+        ee.Dictionary({
+
+          '1':
+            feature.get(
+              'd1'
+            ),
+
+          '2':
+            feature.get(
+              'd2'
+            ),
+
+          '3':
+            feature.get(
+              'd3'
+            ),
+
+          '4':
+            feature.get(
+              'd4'
+            ),
+
+          '5':
+            feature.get(
+              'd5'
+            )
+
+        });
+
+
+      var ownDistance =
+        ee.Number(
+          ownDistanceDictionary.get(
+            classId.format(
+              '%.0f'
+            )
+          )
+        );
+
+
+      // ----------------------------------------------------------
+      // DATA AVAILABILITY
+      // ----------------------------------------------------------
+
+      var hasData =
+        clearCount.neq(
+          NO_DATA_VALUE
+        )
+
+        .and(
+          bestClassValue.neq(
+            NO_DATA_VALUE
+          )
+        )
+
+        .and(
+          ownDistance.neq(
+            NO_DATA_VALUE
+          )
+        );
+
+
+      // ----------------------------------------------------------
+      // LOCKED SCREENING FLAGS
+      // ----------------------------------------------------------
+
+      var clearOkay =
+        clearCount.gte(
+          MIN_CLEAR_COUNT
+        );
+
+
+      var predictedOwnClass =
+        bestClassValue.eq(
+          classId
+        );
+
+
+      var distanceOkay =
+        ownDistance.lte(
+          DISTANCE_THRESHOLD
+        );
+
+
+      var marginOkay =
+        marginValue.gte(
+          MARGIN_THRESHOLD
+        );
+
+
+      var localNOkay =
+        localN.gte(
+          MIN_LOCAL_VALID
+        );
+
+
+      var localFractionOkay =
+        localFrac.gte(
+          MIN_LOCAL_FRACTION
+        );
+
+
+      var localOkay =
+        localNOkay.and(
+          localFractionOkay
+        );
+
+
+      var stableCore =
+        hasData
+
+          .and(
+            clearOkay
+          )
+
+          .and(
+            predictedOwnClass
+          )
+
+          .and(
+            distanceOkay
+          )
+
+          .and(
+            marginOkay
+          )
+
+          .and(
+            localOkay
+          );
+
+
+      // ----------------------------------------------------------
+      // CHANGED FLAG
+      //
+      // A confidently different nearest class is treated as
+      // CHANGED rather than merely uncertain.
+      // ----------------------------------------------------------
+
+      var changedCore =
+        hasData
+
+          .and(
+            clearOkay
+          )
+
+          .and(
+            predictedOwnClass.not()
+          )
+
+          .and(
+            marginOkay
+          )
+
+          .and(
+            localOkay
+          );
+
+
+      // ----------------------------------------------------------
+      // 30 m TRAINING EXCLUSION
+      // ----------------------------------------------------------
+
+    var trainingExcluded =
+  ee.Number(
+    ee.Algorithms.If(
+      trainingExclusionGeometry.intersects(
+        feature.geometry(),
+        1
+      ),
+      1,
+      0
+    )
+  );
+
+
+      // ----------------------------------------------------------
+      // TRANSFER STATUS
+      // ----------------------------------------------------------
+
+      var status =
+        ee.String(
+
+          ee.Algorithms.If(
+
+            hasData.not(),
+
+            'NO_DATA',
+
+            ee.Algorithms.If(
+
+              stableCore,
+
+              'STABLE',
+
+              ee.Algorithms.If(
+
+                changedCore,
+
+                'CHANGED',
+
+                'UNCERTAIN'
+
+              )
+
+            )
+
+          )
+
+        );
+
+
+      // ----------------------------------------------------------
+      // ELIGIBLE FOR TARGET VALIDATION POOL
+      //
+      // Must be STABLE
+      // AND outside final 2010 training exclusion.
+      // ----------------------------------------------------------
+
+     var eligible =
+  stableCore
+
+    .and(
+      trainingExcluded.eq(
+        0
+      )
+    );
+
+
+      return feature.set({
+
+        own_distance:
+          ownDistance,
+
+        predicted_class:
+          bestClassValue,
+
+        transfer_status:
+          status,
+
+        flag_has_data:
+          ee.Number(
+            ee.Algorithms.If(
+              hasData,
+              1,
+              0
+            )
+          ),
+
+        flag_clear_ok:
+          ee.Number(
+            ee.Algorithms.If(
+              clearOkay,
+              1,
+              0
+            )
+          ),
+
+        flag_class_match:
+          ee.Number(
+            ee.Algorithms.If(
+              predictedOwnClass,
+              1,
+              0
+            )
+          ),
+
+        flag_distance_ok:
+          ee.Number(
+            ee.Algorithms.If(
+              distanceOkay,
+              1,
+              0
+            )
+          ),
+
+        flag_margin_ok:
+          ee.Number(
+            ee.Algorithms.If(
+              marginOkay,
+              1,
+              0
+            )
+          ),
+
+        flag_local_n_ok:
+          ee.Number(
+            ee.Algorithms.If(
+              localNOkay,
+              1,
+              0
+            )
+          ),
+
+        flag_local_fraction_ok:
+          ee.Number(
+            ee.Algorithms.If(
+              localFractionOkay,
+              1,
+              0
+            )
+          ),
+
+       training_excluded_30m:
+  trainingExcluded,
+  
+        eligible_2010_validation:
+          ee.Number(
+            ee.Algorithms.If(
+              eligible,
+              1,
+              0
+            )
+          ),
+
+        transfer_stage:
+          '05E1',
+
+        target_year:
+          2010
+
+      });
+
+    }
+  );
+
+
+// ================================================================
+// 21. OVERALL STATUS QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05E1 — OVERALL VALIDATION TRANSFER QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    total_reference:
+      evaluatedValidation.size(),
+
+    stable:
+      evaluatedValidation
+        .filter(
+          ee.Filter.eq(
+            'transfer_status',
+            'STABLE'
+          )
+        )
+        .size(),
+
+    uncertain:
+      evaluatedValidation
+        .filter(
+          ee.Filter.eq(
+            'transfer_status',
+            'UNCERTAIN'
+          )
+        )
+        .size(),
+
+    changed:
+      evaluatedValidation
+        .filter(
+          ee.Filter.eq(
+            'transfer_status',
+            'CHANGED'
+          )
+        )
+        .size(),
+
+    no_data:
+      evaluatedValidation
+        .filter(
+          ee.Filter.eq(
+            'transfer_status',
+            'NO_DATA'
+          )
+        )
+        .size(),
+
+    training_excluded_30m:
+      evaluatedValidation
+        .filter(
+          ee.Filter.eq(
+            'training_excluded_30m',
+            1
+          )
+        )
+        .size(),
+
+    eligible_after_training_exclusion:
+      evaluatedValidation
+        .filter(
+          ee.Filter.eq(
+            'eligible_2010_validation',
+            1
+          )
+        )
+        .size()
+
+  })
+);
+
+
+// ================================================================
+// 22. CLASS-WISE QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05E1 — CLASS-WISE VALIDATION STATUS'
+);
+
+print(
+  '========================================'
+);
+
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var classFC =
+      evaluatedValidation.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    var stableFC =
+      classFC.filter(
+        ee.Filter.eq(
+          'transfer_status',
+          'STABLE'
+        )
+      );
+
+
+    var eligibleFC =
+      classFC.filter(
+        ee.Filter.eq(
+          'eligible_2010_validation',
+          1
+        )
+      );
+
+
+    var eligibleN =
+      eligibleFC.size();
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        reference_n:
+          classFC.size(),
+
+        stable_n:
+          stableFC.size(),
+
+        uncertain_n:
+          classFC
+            .filter(
+              ee.Filter.eq(
+                'transfer_status',
+                'UNCERTAIN'
+              )
+            )
+            .size(),
+
+        changed_n:
+          classFC
+            .filter(
+              ee.Filter.eq(
+                'transfer_status',
+                'CHANGED'
+              )
+            )
+            .size(),
+
+        no_data_n:
+          classFC
+            .filter(
+              ee.Filter.eq(
+                'transfer_status',
+                'NO_DATA'
+              )
+            )
+            .size(),
+
+        training_excluded_n:
+          classFC
+            .filter(
+              ee.Filter.eq(
+                'training_excluded_30m',
+                1
+              )
+            )
+            .size(),
+
+        eligible_n:
+          eligibleN,
+
+        target_n:
+          TARGET_PER_CLASS,
+
+        deficit:
+          ee.Number(
+            TARGET_PER_CLASS
+          )
+          .subtract(
+            eligibleN
+          )
+          .max(
+            0
+          ),
+
+        mean_eligible_distance:
+          eligibleFC.aggregate_mean(
+            'own_distance'
+          ),
+
+        mean_eligible_margin:
+          eligibleFC.aggregate_mean(
+            'margin'
+          ),
+
+        mean_eligible_local_fraction:
+          eligibleFC.aggregate_mean(
+            'local_fraction'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 23. FAILURE-FLAG COUNTS
+// ================================================================
+//
+// These are diagnostic only.
+// We do NOT weaken thresholds to fill validation quotas.
+//
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05E1 — FAILURE FLAG DIAGNOSTIC'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    fail_clear:
+      evaluatedValidation
+        .filter(
+          ee.Filter.eq(
+            'flag_clear_ok',
+            0
+          )
+        )
+        .size(),
+
+    fail_class_match:
+      evaluatedValidation
+        .filter(
+          ee.Filter.eq(
+            'flag_class_match',
+            0
+          )
+        )
+        .size(),
+
+    fail_distance:
+      evaluatedValidation
+        .filter(
+          ee.Filter.eq(
+            'flag_distance_ok',
+            0
+          )
+        )
+        .size(),
+
+    fail_margin:
+      evaluatedValidation
+        .filter(
+          ee.Filter.eq(
+            'flag_margin_ok',
+            0
+          )
+        )
+        .size(),
+
+    fail_local_valid_n:
+      evaluatedValidation
+        .filter(
+          ee.Filter.eq(
+            'flag_local_n_ok',
+            0
+          )
+        )
+        .size(),
+
+    fail_local_fraction:
+      evaluatedValidation
+        .filter(
+          ee.Filter.eq(
+            'flag_local_fraction_ok',
+            0
+          )
+        )
+        .size()
+
+  })
+);
+
+
+// ================================================================
+// 24. ELIGIBLE CLASS HISTOGRAM
+// ================================================================
+
+var eligibleValidation =
+  evaluatedValidation.filter(
+    ee.Filter.eq(
+      'eligible_2010_validation',
+      1
+    )
+  );
+
+
+print(
+  'ELIGIBLE 2010 VALIDATION CLASS HISTOGRAM'
+);
+
+
+print(
+  eligibleValidation.aggregate_histogram(
+    'class_id'
+  )
+);
+
+
+// ================================================================
+// 25. CREATE MATERIALIZATION TASK
+// ================================================================
+//
+// DO NOT START THIS TASK UNTIL QA IS REVIEWED.
+//
+// Materializing the entire screened reference collection means
+// later stages do NOT need to rebuild the 2015 L8 normalization
+// computation.
+//
+// ================================================================
+
+Export.table.toAsset({
+
+  collection:
+    evaluatedValidation,
+
+  description:
+    'chennai_validation_transfer_2015_to_2010_QA_05E1',
+
+  assetId:
+    OUTPUT_ASSET
+
+});
+
+
+// ================================================================
+// 26. FINAL MESSAGE
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05E1 SCRIPT FINISHED'
+);
+
+print(
+  'DO NOT RUN THIS SCRIPT AGAIN.'
+);
+
+print(
+  'DO NOT START EXPORT UNTIL QA IS REVIEWED.'
+);
+
+print(
+  'Send OVERALL QA + CLASS-WISE STATUS + FAILURE FLAGS.'
+);
+
+print(
+  '========================================'
+);

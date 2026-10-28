@@ -1,0 +1,426 @@
+
+// ============================================================
+// CHENNAI LULC — STAGE 07H4
+// SIX-BAND GAUSSIAN MLC ABLATION
+// SITE-HELD-OUT CROSS-VALIDATION
+//
+// PURPOSE:
+// Compare six raw Landsat bands with the existing
+// nine-band Gaussian MLC site-held-out result.
+//
+// Same 600 manually interpreted training points.
+// Same five site-held-out folds as Stage 07H2.
+// Same Gaussian MLC method and regularization.
+//
+// No independent validation data used.
+// No assets exported or modified.
+// ============================================================
+
+// 1. CONFIGURATION
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var CRS = 'EPSG:32644';
+var SCALE = 30;
+var REG = 1e-6;
+
+var BANDS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2'
+];
+
+var NBANDS = BANDS.length;
+
+var CLASS_ORDER = [1, 2, 3, 4, 5];
+
+var projection = ee.Projection(CRS).atScale(SCALE);
+
+// 2. LOAD DATA
+
+var training = ee.FeatureCollection(
+  ROOT + 'chennai_training_2010_manual_final_v1'
+);
+
+var stack = ee.Image(
+  ROOT + 'chennai_predictor_stack_2010'
+).select(BANDS);
+
+// 3. RECREATE THE EXACT 07H2 SITE FOLDS
+
+var groups = [
+  {prefix: 'BU', count: 6},
+  {prefix: 'VG', count: 6},
+  {prefix: 'WT', count: 5},
+  {prefix: 'AG', count: 6},
+  {prefix: 'B', count: 5}
+];
+
+var foldMapping = {};
+
+groups.forEach(function(g) {
+
+  for (var i = 1; i <= g.count; i++) {
+
+    var suffix = ('0' + i).slice(-2);
+
+    var siteID = g.prefix + '2010_' + suffix;
+
+    foldMapping[siteID] = (i - 1) % 5;
+
+  }
+
+});
+
+var lookup = ee.Dictionary(foldMapping);
+
+var tagged = training.map(function(f) {
+
+  return ee.Feature(f).set(
+    'cv_fold',
+    lookup.get(f.get('site_id'))
+  );
+
+});
+
+// 4. ESTIMATE CLASS-SPECIFIC GAUSSIAN PARAMETERS
+
+function parametersForClass(fc, classID) {
+
+  var sub = fc.filter(
+    ee.Filter.eq('class_id', classID)
+  );
+
+  var means = BANDS.map(function(b) {
+    return sub.aggregate_mean(b);
+  });
+
+  var meanArray = ee.Array([means]).transpose();
+
+  var arrays = sub.makeArray(
+    BANDS,
+    'six_band_vector'
+  );
+
+  var result = arrays.reduceColumns({
+    reducer: ee.Reducer.covariance()
+      .setOutputs(['covariance']),
+    selectors: ['six_band_vector']
+  });
+
+  var covariance = ee.Array(
+    result.get('covariance')
+  );
+
+  var regularized = covariance.add(
+    ee.Array.identity(NBANDS).multiply(REG)
+  );
+
+  return ee.Dictionary({
+    mean: meanArray,
+    inverse: regularized.matrixInverse(),
+    determinant: regularized.matrixDeterminant(),
+    sample_count: sub.size()
+  });
+
+}
+
+// 5. GAUSSIAN LOG-LIKELIHOOD FUNCTION
+
+var predictorColumn = stack
+  .toArray()
+  .toArray(1);
+
+function gaussianScore(params, bandName) {
+
+  params = ee.Dictionary(params);
+
+  var mean = ee.Image.constant(
+    ee.Array(params.get('mean'))
+  );
+
+  var inverse = ee.Image.constant(
+    ee.Array(params.get('inverse'))
+  );
+
+  var determinant = ee.Number(
+    params.get('determinant')
+  ).max(1e-300);
+
+  var difference = predictorColumn.subtract(mean);
+
+  var distanceSquared = difference
+    .arrayTranspose()
+    .matrixMultiply(inverse)
+    .matrixMultiply(difference)
+    .arrayGet([0, 0]);
+
+  return distanceSquared.multiply(-0.5)
+    .subtract(
+      ee.Image.constant(
+        determinant.log()
+      ).multiply(0.5)
+    )
+    .rename(bandName);
+
+}
+
+// 6. BUILD THE CLASSIFIER
+
+function classifyFold(fitFC) {
+
+  var scores = CLASS_ORDER.map(function(k) {
+
+    return gaussianScore(
+      parametersForClass(fitFC, k),
+      'score_' + k
+    );
+
+  });
+
+  return ee.Image.cat(scores)
+    .toArray()
+    .arrayArgmax()
+    .arrayGet([0])
+    .add(1)
+    .rename('prediction')
+    .toInt8();
+
+}
+
+// 7. EXECUTE FIVE FOLDS
+
+var predictionsList = [];
+var foldRows = [];
+
+for (var fold = 0; fold < 5; fold++) {
+
+  var fitFC = tagged.filter(
+    ee.Filter.neq('cv_fold', fold)
+  );
+
+  var testFC = tagged.filter(
+    ee.Filter.eq('cv_fold', fold)
+  );
+
+  var image = classifyFold(fitFC);
+
+  var predictions = image.sampleRegions({
+    collection: testFC,
+    properties: [
+      'class_id',
+      'site_id',
+      'cv_fold'
+    ],
+    projection: projection,
+    scale: SCALE,
+    geometries: true,
+    tileScale: 8
+  });
+
+  predictions = predictions.map(function(f) {
+
+    var actual = ee.Number(f.get('class_id'));
+
+    var predicted = ee.Number(
+      f.get('prediction')
+    );
+
+    return f.set(
+      'correct',
+      ee.Number(actual.eq(predicted)).int()
+    );
+
+  });
+
+  predictionsList.push(predictions);
+
+  var cm = predictions.errorMatrix(
+    'class_id',
+    'prediction',
+    CLASS_ORDER
+  );
+
+  foldRows.push(
+    ee.Feature(null, {
+      fold: fold,
+      training_count: fitFC.size(),
+      heldout_count: testFC.size(),
+      predicted_count: predictions.size(),
+      accuracy_percent:
+        ee.Number(cm.accuracy()).multiply(100),
+      kappa: cm.kappa()
+    })
+  );
+
+}
+
+// 8. COMBINE HELD-OUT RESULTS
+
+var allPredictions = ee.FeatureCollection(
+  predictionsList
+).flatten();
+
+var foldSummary = ee.FeatureCollection(foldRows);
+
+var combinedMatrix = allPredictions.errorMatrix(
+  'class_id',
+  'prediction',
+  CLASS_ORDER
+);
+
+// 9. CLASS-WISE GENERALIZATION
+
+var classRows = CLASS_ORDER.map(function(k) {
+
+  var sub = allPredictions.filter(
+    ee.Filter.eq('class_id', k)
+  );
+
+  var correct = sub.filter(
+    ee.Filter.eq('correct', 1)
+  ).size();
+
+  return ee.Feature(null, {
+    class_id: k,
+    total: sub.size(),
+    correct: correct,
+    producer_accuracy_percent:
+      ee.Number(correct)
+        .divide(ee.Number(sub.size()).max(1))
+        .multiply(100)
+  });
+
+});
+
+var classSummary = ee.FeatureCollection(classRows);
+
+// 10. SITE-WISE GENERALIZATION
+
+var siteIDs = ee.List(
+  tagged.aggregate_array('site_id')
+).distinct().sort();
+
+var siteRows = siteIDs.map(function(id) {
+
+  var sub = allPredictions.filter(
+    ee.Filter.eq('site_id', id)
+  );
+
+  var correct = sub.filter(
+    ee.Filter.eq('correct', 1)
+  ).size();
+
+  var total = sub.size();
+
+  return ee.Feature(null, {
+    site_id: id,
+    class_id: sub.first().get('class_id'),
+    total: total,
+    correct: correct,
+    accuracy_percent:
+      ee.Number(correct)
+        .divide(ee.Number(total).max(1))
+        .multiply(100)
+  });
+
+});
+
+var siteSummary = ee.FeatureCollection(siteRows);
+
+// 11. PRINT AUDIT RESULTS
+
+print('========================================');
+print('07H4 — SIX-BAND GAUSSIAN MLC ABLATION');
+print('========================================');
+
+print('Original training count:');
+print(training.size());
+
+print('Predictor bands:');
+print(BANDS);
+
+print('Distinct training sites:');
+print(training.aggregate_count_distinct('site_id'));
+
+print('Site fold membership counts:');
+print(tagged.aggregate_histogram('cv_fold'));
+
+print('Held-out predictions (expected 600):');
+print(allPredictions.size());
+
+print('========================================');
+print('FIVE-FOLD PERFORMANCE');
+print('========================================');
+
+print(foldSummary.sort('fold'));
+
+print('========================================');
+print('SIX-BAND HELD-OUT CONFUSION MATRIX');
+print('========================================');
+
+print(combinedMatrix);
+
+print('========================================');
+print('SIX-BAND HELD-OUT ACCURACY');
+print('========================================');
+
+print(
+  ee.Number(combinedMatrix.accuracy())
+    .multiply(100)
+);
+
+print('Six-band held-out Kappa:');
+print(combinedMatrix.kappa());
+
+print('========================================');
+print('SIX-BAND GENERALIZATION BY CLASS');
+print('========================================');
+
+print(classSummary);
+
+print('========================================');
+print('SIX-BAND GENERALIZATION BY SITE');
+print('========================================');
+
+print(siteSummary.sort('accuracy_percent'));
+
+// 12. REFERENCE COMPARISON
+
+print('========================================');
+print('REFERENCE: PREVIOUS NINE-BAND RESULTS');
+print('========================================');
+
+print('Nine-band held-out OA: 64.6667%');
+print('Nine-band held-out Kappa: 0.5583');
+
+print('Class 1: 85.83%');
+print('Class 2: 51.67%');
+print('Class 3: 90.00%');
+print('Class 4: 48.33%');
+print('Class 5: 47.50%');
+
+print('These are prior observed results.');
+print('Compare with the six-band outputs above.');
+
+// 13. FINAL SAFEGUARDS
+
+print('========================================');
+print('07H4 COMPLETE — DIAGNOSTIC ONLY');
+print('========================================');
+
+print('No independent validation points used.');
+print('No original training labels changed.');
+print('No new classification raster exported.');
+print('No changes to the locked nine-band baseline.');
+
+print('========================================');
+print('END OF STAGE 07H4');
+print('========================================');
+
+// ============================================================
+// END STAGE 07H4
+// ============================================================

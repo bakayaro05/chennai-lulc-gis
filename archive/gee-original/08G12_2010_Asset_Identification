@@ -1,0 +1,195 @@
+
+ // ============================================================
+ // CHENNAI LULC — STAGE 08G-12
+ // WHICH 2010 FIVE-CLASS ASSET BELONGS IN ANALYSIS A?
+ // Read-only. Does NOT pick a map based on an area target.
+ // ============================================================
+
+ var ROOT = 'projects/assignment-482806/assets/';
+
+ var roi = ee.FeatureCollection(
+   ROOT + 'chennai_admin_study_area_clean'
+ ).geometry();
+
+ var validation = ee.FeatureCollection(
+   ROOT + 'chennai_validation_2010_final'
+ );
+
+ var projection = ee.Projection(
+   'EPSG:32644',
+   [30,0,399060,0,-30,1463250]
+ );
+
+ var candidates = [
+   {
+     key:'ARCHIVE',
+     asset:'chennai_mlc_lulc_2010'
+   },
+   {
+     key:'MANUAL_V1',
+     asset:'chennai_mlc_lulc_2010_manual_v1'
+   },
+   {
+     key:'V2C',
+     asset:'chennai_mlc_lulc_2010_v2c'
+   },
+   {
+     key:'L5L7_MANUAL_EXP',
+     asset:'chennai_mlc_lulc_2010_L5L7_manual_exp_v1'
+   }
+ ];
+
+ function areaBand(mask, name) {
+   return ee.Image.pixelArea()
+     .divide(1e6)
+     .updateMask(mask)
+     .rename(name);
+ }
+
+ var imgs = [];
+ var areaBands = [];
+
+ candidates.forEach(function(item) {
+
+   var im = ee.Image(ROOT + item.asset)
+     .select(0)
+     .rename(item.key);
+
+   imgs.push(im);
+
+   areaBands.push(
+     areaBand(im.eq(1), item.key + '_BU_km2')
+   );
+
+   areaBands.push(
+     areaBand(im.mask(), item.key + '_valid_km2')
+   );
+
+ });
+
+ var areaResults = ee.Image.cat(areaBands)
+   .reduceRegion({
+     reducer: ee.Reducer.sum(),
+     geometry: roi,
+     crs: 'EPSG:32644',
+     crsTransform: [30,0,399060,0,-30,1463250],
+     maxPixels: 1e8,
+     tileScale: 8
+   });
+
+ print('============================================');
+ print('STAGE 08G-12 | 2010 ASSET IDENTIFICATION');
+ print('============================================');
+
+ print('279.82 km2 is a checkpoint, NOT a selection rule.');
+
+ print('The archived 2010 asset returned 127.52 km2.');
+
+ print('Original 2010 validation collection count:');
+ print(validation.size());
+
+ print('Original 2010 validation labels:');
+ print(validation.aggregate_histogram('class_id'));
+
+ print('2010 CANDIDATE BUILT-UP & VALID AREAS (km2):');
+ print(areaResults);
+
+ candidates.forEach(function(item, i) {
+
+   var im = imgs[i];
+
+   var pts = im.sampleRegions({
+     collection: validation,
+     properties: ['class_id'],
+     projection: projection,
+     tileScale: 8,
+     geometries: false
+   });
+
+   var cm = pts.errorMatrix(
+     'class_id',
+     item.key,
+     [1,2,3,4,5]
+   );
+
+   var bu = pts.filter(
+     ee.Filter.eq('class_id',1)
+   );
+
+   var nonBu = pts.filter(
+     ee.Filter.neq('class_id',1)
+   );
+
+   print('--------------------------------------------');
+   print('CANDIDATE: ' + item.key + ' | ' + item.asset);
+
+   print('Raster projection:');
+   print(im.projection());
+
+   print('Sampled validation points:');
+   print(pts.size());
+
+   print('Predicted class distribution:');
+   print(pts.aggregate_histogram(item.key));
+
+   print('Confusion matrix:');
+   print(cm);
+
+   print('Accuracy, Built-up recall and false positives:');
+
+   print(ee.Dictionary({
+
+     accuracy: cm.accuracy(),
+
+     builtup_recall:
+       cm.producersAccuracy().get([0,0]),
+
+     builtup_true_positive:
+       bu.filter(
+         ee.Filter.eq(item.key,1)
+       ).size(),
+
+     builtup_false_positive:
+       nonBu.filter(
+         ee.Filter.eq(item.key,1)
+       ).size()
+
+   }));
+
+ });
+
+ // ============================================================
+ // MAP COMPARISON
+ // ============================================================
+
+ Map.layers().reset();
+ Map.setOptions('SATELLITE');
+
+ var palette = [
+   'ff0000',
+   '008000',
+   '0000ff',
+   'ffff00',
+   'd2b48c'
+ ];
+
+ candidates.forEach(function(item, i) {
+
+   Map.addLayer(
+     imgs[i],
+     {min:1,max:5,palette:palette},
+     '2010 ' + item.key,
+     i === 0
+   );
+
+ });
+
+ Map.centerObject(roi, 10);
+
+ print('READ ONLY. No asset changes or exports.');
+ print('Choose a 2010 map using provenance and validation,');
+ print('not merely because its area matches an expected number.');
+
+ // ============================================================
+ // END STAGE 08G-12
+ // ============================================================

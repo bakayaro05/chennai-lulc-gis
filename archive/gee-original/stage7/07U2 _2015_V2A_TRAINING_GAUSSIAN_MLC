@@ -1,0 +1,674 @@
+
+ // =============================================================
+ // CHENNAI LULC -- STAGE 07U2 -- 2015 V2A TRAINING + GAUSSIAN MLC
+ //
+ // INPUT GEE TABLE ASSET:
+ // projects/assignment-482806/assets/
+ // chennai_training_polygons_2015_v2_clean9
+ //
+ // SOURCE:
+ // Chennai_2015_V2_New_Training_CLEAN_9.geojson
+ //
+ // Verify all 9 polygon labels against historical 2015 imagery.
+ // Existing Earth Engine assets will not be overwritten.
+ //
+ // RUN_V2_EXPORT=false: Preflight checks only.
+ // RUN_V2_EXPORT=true: Validate candidate and create export task.
+ // =============================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var NEW_POLYGON_ASSET =
+  ROOT + 'chennai_training_polygons_2015_v2_clean9';
+
+var OUTPUT_ASSET =
+  ROOT + 'chennai_mlc_lulc_2015_V2A_exp_v1';
+
+var RUN_V2_EXPORT = true;
+
+var SCALE = 30;
+var CRS = 'EPSG:32644';
+
+var TRANSFORM = [
+  30, 0, 399060,
+  0, -30, 1463250
+];
+
+var PROJECTION = ee.Projection(CRS, TRANSFORM);
+
+var BANDS = [
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+];
+
+var CLASS_IDS = [1, 2, 3, 4, 5];
+
+// 4 Built-up polygons * 8 pixels = 32
+// 3 Agricultural polygons * 7 pixels = 21
+// 2 Vacant/Open polygons * 10 pixels = 20
+// Total new training pixels = 73
+
+var NEW_PER_POLYGON = {
+  1: 8,
+  4: 7,
+  5: 10
+};
+
+// Retain 527 old pixels + add 73 new pixels.
+// Final target remains 600, with 120 per class.
+
+var OLD_TO_KEEP = {
+  1: 88,
+  2: 120,
+  3: 120,
+  4: 99,
+  5: 100
+};
+
+// Reduce domination by individual source polygons.
+
+var OLD_PER_POLYGON_CAP = {
+  1: 14,
+  2: 120,
+  3: 120,
+  4: 12,
+  5: 32
+};
+
+// =============================================================
+// A. LOAD ORIGINAL ASSETS
+// =============================================================
+
+var roiFC = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+);
+
+var roi = roiFC.geometry();
+
+var oldTraining = ee.FeatureCollection(
+  ROOT + 'chennai_training_2015_final'
+);
+
+var validation = ee.FeatureCollection(
+  ROOT + 'chennai_validation_2015_final'
+);
+
+var oldMap = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2015'
+).select('classification');
+
+var newPolys = ee.FeatureCollection(
+  NEW_POLYGON_ASSET
+);
+
+// =============================================================
+// B. RECONSTRUCT 2015 LANDSAT 8 PREDICTOR STACK
+// =============================================================
+
+function maskScaleL8(im) {
+
+  var qa = im.select('QA_PIXEL');
+  var rad = im.select('QA_RADSAT');
+
+  var mask = qa.bitwiseAnd(1 << 0).eq(0)
+    .and(qa.bitwiseAnd(1 << 1).eq(0))
+    .and(qa.bitwiseAnd(1 << 2).eq(0))
+    .and(qa.bitwiseAnd(1 << 3).eq(0))
+    .and(qa.bitwiseAnd(1 << 4).eq(0))
+    .and(qa.bitwiseAnd(1 << 5).eq(0))
+    .and(rad.eq(0));
+
+  return im.select(
+    [
+      'SR_B2',
+      'SR_B3',
+      'SR_B4',
+      'SR_B5',
+      'SR_B6',
+      'SR_B7'
+    ],
+    [
+      'blue',
+      'green',
+      'red',
+      'nir',
+      'swir1',
+      'swir2'
+    ]
+  )
+  .multiply(0.0000275)
+  .add(-0.2)
+  .updateMask(mask);
+
+}
+
+function addIndices(im) {
+
+  var green = im.select('green');
+  var red = im.select('red');
+  var nir = im.select('nir');
+  var swir = im.select('swir1');
+
+  return im.addBands([
+    nir.subtract(red)
+      .divide(nir.add(red))
+      .rename('NDVI'),
+
+    green.subtract(nir)
+      .divide(green.add(nir))
+      .rename('NDWI'),
+
+    swir.subtract(nir)
+      .divide(swir.add(nir))
+      .rename('NDBI')
+  ]);
+
+}
+
+var l8 = ee.ImageCollection(
+  'LANDSAT/LC08/C02/T1_L2'
+)
+.filterBounds(roi)
+.filterDate('2015-01-01', '2016-01-01')
+.map(maskScaleL8);
+
+var stack = addIndices(
+  l8.median().clip(roi)
+).select(BANDS);
+
+// =============================================================
+// C. VERIFY RECONSTRUCTED STACK AGAINST ARCHIVED TRAINING
+// =============================================================
+
+var oldWithArchive = oldTraining.map(function(f) {
+
+  return f
+    .set('arch_NDVI', f.get('NDVI'))
+    .set('arch_red', f.get('red'));
+
+});
+
+var stackMatch = stack
+  .select(['NDVI', 'red'])
+  .sampleRegions({
+    collection: oldWithArchive,
+    properties: [
+      'arch_NDVI',
+      'arch_red'
+    ],
+    projection: PROJECTION,
+    scale: SCALE,
+    geometries: false,
+    tileScale: 8
+  })
+  .map(function(f) {
+
+    return f
+      .set(
+        'diffNDVI',
+        ee.Number(f.get('NDVI'))
+          .subtract(
+            ee.Number(f.get('arch_NDVI'))
+          )
+          .abs()
+      )
+      .set(
+        'diffRed',
+        ee.Number(f.get('red'))
+          .subtract(
+            ee.Number(f.get('arch_red'))
+          )
+          .abs()
+      );
+
+  });
+
+print('================================================');
+print('07U2 2015 V2A PREFLIGHT');
+print('================================================');
+
+print('Landsat 8 scenes (expected 19):');
+print(l8.size());
+
+print('Imported NEW polygon count (expected 9):');
+print(newPolys.size());
+
+print('NEW polygon class histogram (expected 4 / 3 / 2):');
+print(newPolys.aggregate_histogram('class_id'));
+
+print('Original training count (600):');
+print(oldTraining.size());
+
+print('Validation count (300):');
+print(validation.size());
+
+print('Reconstructed stack overlap with archived sample count:');
+print(stackMatch.size());
+
+print('Mean absolute NDVI difference (ideally near zero):');
+print(stackMatch.aggregate_mean('diffNDVI'));
+
+print('Maximum absolute NDVI difference (ideally near zero):');
+print(stackMatch.aggregate_max('diffNDVI'));
+
+print('Mean absolute red difference (ideally near zero):');
+print(stackMatch.aggregate_mean('diffRed'));
+
+// =============================================================
+// D. CHECK VALIDATION BUFFER INTERSECTIONS
+// =============================================================
+
+var exclusion = validation.map(function(v) {
+
+  return ee.Feature(
+    v.geometry().buffer(60, 1)
+  );
+
+});
+
+var bufferIntersects = exclusion.filterBounds(
+  newPolys.geometry()
+);
+
+print('2015 validation buffers intersecting new polygons (expected 0):');
+print(bufferIntersects.size());
+
+// Cleaned polygons already have an additional
+// 30-metre validation safety margin.
+
+// =============================================================
+// E. GENERATE NEW TRAINING PIXELS
+// =============================================================
+
+var emptyFC = ee.FeatureCollection([]);
+
+var newPoints = ee.FeatureCollection(
+  newPolys.iterate(function(obj, acc) {
+
+    var poly = ee.Feature(obj);
+
+    var label = ee.Number(
+      poly.get('class_id')
+    );
+
+    var perPoly = ee.Number(
+      ee.Dictionary({
+        '1': NEW_PER_POLYGON[1],
+        '4': NEW_PER_POLYGON[4],
+        '5': NEW_PER_POLYGON[5]
+      }).get(
+        label.format('%.0f')
+      )
+    );
+
+    // Inward buffer reduces boundary/mixed-pixel sampling.
+
+    var core = poly.geometry().buffer(-15, 1);
+
+    var selected = stack.sample({
+      region: core,
+      projection: PROJECTION,
+      scale: SCALE,
+      geometries: true,
+      tileScale: 8,
+      dropNulls: true
+    })
+    .randomColumn(
+      'new_selection_random',
+      2015007
+    )
+    .sort('new_selection_random')
+    .limit(perPoly);
+
+    selected = selected.map(function(pt) {
+
+      return ee.Feature(pt)
+        .set('class_id', label)
+        .set('class_name', poly.get('class_name'))
+        .set('poly_id', poly.get('poly_id'))
+        .set('source', '2015_V2A_historical_native');
+
+    });
+
+    return ee.FeatureCollection(acc)
+      .merge(selected);
+
+  }, emptyFC)
+);
+
+print('================================================');
+print('NEW TRAINING SAMPLES');
+print('================================================');
+
+print('New training pixel count (expected 73):');
+print(newPoints.size());
+
+print('New pixels by class:');
+print(
+  newPoints.aggregate_histogram('class_id')
+);
+
+print('New pixels by source polygon:');
+print(
+  newPoints.aggregate_histogram('poly_id')
+);
+
+// =============================================================
+// F. RETAIN OLD SAMPLES WITH POLYGON BALANCING
+// =============================================================
+
+function retainedOldClass(classId) {
+
+  var cl = oldTraining.filter(
+    ee.Filter.eq('class_id', classId)
+  );
+
+  var maxPer = OLD_PER_POLYGON_CAP[classId];
+
+  var sourceIds = cl.aggregate_array(
+    'poly_id'
+  ).distinct();
+
+  var capped = ee.FeatureCollection(
+    sourceIds.iterate(function(pid, acc) {
+
+      var part = cl.filter(
+        ee.Filter.eq('poly_id', pid)
+      )
+      .randomColumn(
+        'old_poly_random',
+        2015081
+      )
+      .sort('old_poly_random')
+      .limit(maxPer);
+
+      return ee.FeatureCollection(acc)
+        .merge(part);
+
+    }, emptyFC)
+  );
+
+  return capped
+    .randomColumn(
+      'old_total_random',
+      2015109
+    )
+    .sort('old_total_random')
+    .limit(OLD_TO_KEEP[classId]);
+
+}
+
+var retained = retainedOldClass(1)
+  .merge(retainedOldClass(2))
+  .merge(retainedOldClass(3))
+  .merge(retainedOldClass(4))
+  .merge(retainedOldClass(5));
+
+var finalTraining = retained.merge(
+  newPoints
+);
+
+print('================================================');
+print('FINAL 2015 V2A TRAINING COMPOSITION');
+print('================================================');
+
+print('Retained old count (expected 527):');
+print(retained.size());
+
+print('Final candidate training count (expected 600):');
+print(finalTraining.size());
+
+print('Final candidate class counts (expected 120 each):');
+print(
+  finalTraining.aggregate_histogram('class_id')
+);
+
+print('Retained old Built-up polygon histogram:');
+print(
+  retained
+    .filter(ee.Filter.eq('class_id', 1))
+    .aggregate_histogram('poly_id')
+);
+
+// =============================================================
+// G. TRUE GAUSSIAN MAXIMUM LIKELIHOOD CLASSIFIER
+// =============================================================
+
+// Nine predictor dimensions.
+// Equal class priors.
+// Class-specific mean and covariance.
+// Regularization = 1e-6 * identity matrix.
+
+function parameters(classId) {
+
+  var members = finalTraining.filter(
+    ee.Filter.eq('class_id', classId)
+  );
+
+  var mean = ee.Array([
+    BANDS.map(function(b) {
+
+      return members.aggregate_mean(b);
+
+    })
+  ]).transpose();
+
+  var reduced = members
+    .makeArray(BANDS, 'mlc_array')
+    .reduceColumns({
+      reducer: ee.Reducer.covariance()
+        .setOutputs(['covariance']),
+      selectors: ['mlc_array']
+    });
+
+  var cov = ee.Array(
+    reduced.get('covariance')
+  ).add(
+    ee.Array.identity(9)
+      .multiply(1e-6)
+  );
+
+  return ee.Dictionary({
+    mean: mean,
+    inverse: cov.matrixInverse(),
+    determinant: cov.matrixDeterminant()
+  });
+
+}
+
+var x = stack.toArray().toArray(1);
+
+function classScore(params, name) {
+
+  params = ee.Dictionary(params);
+
+  var meanImage = ee.Image.constant(
+    ee.Array(params.get('mean'))
+  );
+
+  var inverseImage = ee.Image.constant(
+    ee.Array(params.get('inverse'))
+  );
+
+  var det = ee.Number(
+    params.get('determinant')
+  ).max(1e-300);
+
+  var delta = x.subtract(
+    meanImage
+  );
+
+  var d2 = delta.arrayTranspose()
+    .matrixMultiply(inverseImage)
+    .matrixMultiply(delta)
+    .arrayGet([0, 0]);
+
+  return d2.multiply(-0.5)
+    .add(
+      ee.Image.constant(
+        det.log()
+      ).multiply(-0.5)
+    )
+    .rename(name);
+
+}
+
+var scores = classScore(
+  parameters(1), 'score_1'
+)
+.addBands(
+  classScore(parameters(2), 'score_2')
+)
+.addBands(
+  classScore(parameters(3), 'score_3')
+)
+.addBands(
+  classScore(parameters(4), 'score_4')
+)
+.addBands(
+  classScore(parameters(5), 'score_5')
+);
+
+var classified = scores
+  .toArray()
+  .arrayArgmax()
+  .arrayGet([0])
+  .add(1)
+  .rename('classification')
+  .toInt8()
+  .clip(roi);
+
+// =============================================================
+// H. OPTIONAL V2A VALIDATION AND EXPORT
+// =============================================================
+
+// The previous 2015 validation is for
+// development comparison, not fresh final accuracy.
+
+if (RUN_V2_EXPORT) {
+
+  var check = classified.sampleRegions({
+    collection: validation,
+    properties: ['class_id'],
+    projection: PROJECTION,
+    scale: SCALE,
+    geometries: false,
+    tileScale: 8
+  });
+
+  var cm = check.errorMatrix(
+    'class_id',
+    'classification',
+    CLASS_IDS
+  );
+
+  print('================================================');
+  print('2015 V2A VALIDATION — DEVELOPMENT COMPARISON');
+  print('================================================');
+
+  print('V2A saved-validation sample count (expected 300):');
+  print(check.size());
+
+  print('V2A validation confusion matrix:');
+  print(cm);
+
+  print('V2A validation OA (DEVELOPMENT ONLY):');
+  print(
+    ee.Number(cm.accuracy())
+      .multiply(100)
+  );
+
+  print('V2A producer accuracies:');
+  print(cm.producersAccuracy());
+
+  print('V2A user accuracies:');
+  print(cm.consumersAccuracy());
+
+  print('V2A Built-up reference prediction histogram:');
+  print(
+    check.filter(
+      ee.Filter.eq('class_id', 1)
+    ).aggregate_histogram('classification')
+  );
+
+  // Experimental asset — DOES NOT overwrite 2015 V1.
+
+  Export.image.toAsset({
+    image: classified,
+    description: '07U2_2015_V2A_Gaussian_MLC_Experimental',
+    assetId: OUTPUT_ASSET,
+    region: roi,
+    crs: CRS,
+    crsTransform: TRANSFORM,
+    maxPixels: 1e9,
+    pyramidingPolicy: {
+      '.default': 'mode'
+    }
+  });
+
+  print('V2A EXPERIMENTAL EXPORT TASK CREATED — run in Tasks.');
+  print(OUTPUT_ASSET);
+
+} else {
+
+  print('RUN_V2_EXPORT = false: PREFLIGHT ONLY, no export task.');
+  print('Verify all counts, archive band matching, and historical labels.');
+
+}
+
+// =============================================================
+// I. MAP DISPLAY
+// =============================================================
+
+Map.layers().reset();
+
+Map.centerObject(roi, 10);
+
+Map.addLayer(
+  oldMap,
+  {
+    min: 1,
+    max: 5,
+    palette: [
+      'ff0000',
+      '008000',
+      '0000ff',
+      'ffff00',
+      'd2b48c'
+    ]
+  },
+  '2015 V1 LOCKED',
+  true
+);
+
+Map.addLayer(
+  newPolys.style({
+    color: '00ffff',
+    fillColor: '00000000',
+    width: 2
+  }),
+  {},
+  '2015 V2A New polygons — Historical verify',
+  true
+);
+
+Map.addLayer(
+  newPoints.style({
+    color: 'ffffff',
+    pointSize: 3
+  }),
+  {},
+  '2015 V2A New training pixels',
+  false
+);
+
+print('================================================');
+print('END 07U2 — ORIGINAL ASSETS UNTOUCHED');
+print('================================================');

@@ -1,0 +1,1984 @@
+// ================================================================
+// CHENNAI MULTI-TEMPORAL LULC PROJECT
+// SCRIPT 05C2B
+//
+// 2010 CANDIDATE DIVERSITY + FAILURE DIAGNOSTICS
+//
+// PURPOSE
+// -------
+// This script performs DIAGNOSTICS ONLY.
+//
+// INPUTS:
+//   1. Authoritative materialized 2010 predictor stack
+//   2. 05A temporal-transfer QA table
+//   3. 05C1 corrected Pass-B candidate pool
+//   4. 05C2A rescued uncertain-anchor pool
+//
+// IT DOES:
+//
+// A. Check overlap between 05C1 and 05C2A pixels
+// B. Check whether any overlapping pixel has conflicting class labels
+// C. Build the unique combined candidate pool
+// D. Report class sufficiency after rescue
+// E. Report class-wise poly_id diversity / concentration
+// F. Re-evaluate all 05A UNCERTAIN points
+// G. Diagnose why uncertain points failed:
+//      - clear-count
+//      - class mismatch
+//      - distance
+//      - margin
+//      - local valid-neighbour count
+//      - local agreement
+//
+// IT DOES NOT:
+//
+// - expand buffers
+// - add training pixels
+// - change thresholds
+// - use validation
+// - run MLC
+// - export final training
+// - display map layers
+//
+// NO EXPORT TASK IS CREATED BY THIS SCRIPT.
+//
+// ================================================================
+
+
+// ================================================================
+// 1. ASSETS
+// ================================================================
+
+var STACK_ASSET =
+  'projects/assignment-482806/assets/chennai_predictor_stack_2010';
+
+
+var QA_05A_ASSET =
+  'projects/assignment-482806/assets/chennai_transfer_2015_to_2010_QA_05A';
+
+
+var PASSB_REQA_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_passB_reQA_05C1';
+
+
+var RESCUED_ASSET =
+  'projects/assignment-482806/assets/chennai_2010_rescued_uncertain_05C2A';
+
+
+// ================================================================
+// 2. LOCKED SETTINGS
+// ================================================================
+
+var SCALE =
+  30;
+
+
+var PREDICTORS = [
+
+  'blue',
+  'green',
+  'red',
+  'nir',
+  'swir1',
+  'swir2',
+  'NDVI',
+  'NDWI',
+  'NDBI'
+
+];
+
+
+var CLASS_IDS =
+  [1, 2, 3, 4, 5];
+
+
+var CLASS_NAMES = [
+
+  'Built-up',
+  'Vegetation',
+  'Water',
+  'Agricultural/Open',
+  'Barren/Fallow'
+
+];
+
+
+var TARGET_PER_CLASS =
+  120;
+
+
+// ------------------------------------------------
+// DO NOT CHANGE THESE HERE.
+//
+// We are diagnosing the existing method,
+// not tuning it.
+// ------------------------------------------------
+
+var DISTANCE_THRESHOLD =
+  1.25;
+
+
+var MARGIN_THRESHOLD =
+  0.25;
+
+
+var MIN_CLEAR_FOR_AUTO =
+  2;
+
+
+var MIN_LOCAL_FRACTION =
+  5 / 9;
+
+
+var MIN_VALID_NEIGHBOURS =
+  5;
+
+
+var EPSILON =
+  1e-6;
+
+
+// ================================================================
+// 3. LOAD MATERIALIZED DATA
+// ================================================================
+
+var stack2010 =
+  ee.Image(
+    STACK_ASSET
+  );
+
+
+var qa05A =
+  ee.FeatureCollection(
+    QA_05A_ASSET
+  );
+
+
+var passB05C1 =
+  ee.FeatureCollection(
+    PASSB_REQA_ASSET
+  );
+
+
+var rescued05C2A =
+  ee.FeatureCollection(
+    RESCUED_ASSET
+  );
+
+
+var stackProjection =
+  stack2010
+    .select('blue')
+    .projection();
+
+
+// ================================================================
+// 4. BASIC INPUT QA
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05C2B — 2010 CANDIDATE DIVERSITY + FAILURE QA'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    passB_05C1_n:
+      passB05C1.size(),
+
+    rescued_05C2A_n:
+      rescued05C2A.size()
+
+  })
+);
+
+
+// ================================================================
+// 5. CHECK PIXEL OVERLAP BETWEEN 05C1 AND 05C2A
+// ================================================================
+//
+// Both assets contain auth_pixel_key.
+//
+// We must establish whether all 9 rescued points are genuinely new
+// pixels or whether some already exist inside the 05C1 pool.
+//
+// ================================================================
+
+var overlapJoin =
+  ee.Join.inner().apply(
+
+    passB05C1,
+
+    rescued05C2A,
+
+    ee.Filter.equals({
+
+      leftField:
+        'auth_pixel_key',
+
+      rightField:
+        'auth_pixel_key'
+
+    })
+
+  );
+
+
+// ------------------------------------------------
+// Convert joined pairs into a normal feature collection
+// for conflict diagnostics.
+// ------------------------------------------------
+
+var overlapPairs =
+  ee.FeatureCollection(
+
+    overlapJoin.map(
+      function(joinedFeature) {
+
+        var baseFeature =
+          ee.Feature(
+            joinedFeature.get(
+              'primary'
+            )
+          );
+
+
+        var rescueFeature =
+          ee.Feature(
+            joinedFeature.get(
+              'secondary'
+            )
+          );
+
+
+        var baseClass =
+          ee.Number(
+            baseFeature.get(
+              'class_id'
+            )
+          );
+
+
+        var rescueClass =
+          ee.Number(
+            rescueFeature.get(
+              'class_id'
+            )
+          );
+
+
+        var sameClass =
+          baseClass.eq(
+            rescueClass
+          );
+
+
+        return ee.Feature(
+          null,
+          {
+
+            auth_pixel_key:
+              baseFeature.get(
+                'auth_pixel_key'
+              ),
+
+            base_class:
+              baseClass,
+
+            rescue_class:
+              rescueClass,
+
+            same_class:
+              ee.Number(
+                ee.Algorithms.If(
+                  sameClass,
+                  1,
+                  0
+                )
+              )
+
+          }
+        );
+
+      }
+    )
+
+  );
+
+
+var overlapConflicts =
+  overlapPairs.filter(
+    ee.Filter.eq(
+      'same_class',
+      0
+    )
+  );
+
+
+print(
+  '----------------------------------------'
+);
+
+print(
+  '05C1 ↔ 05C2A PIXEL OVERLAP CHECK'
+);
+
+print(
+  '----------------------------------------'
+);
+
+
+print(
+  ee.Dictionary({
+
+    overlapping_pixels:
+      overlapPairs.size(),
+
+    conflicting_class_overlaps:
+      overlapConflicts.size()
+
+  })
+);
+
+
+print(
+  'Overlap class-pair histogram'
+);
+
+
+var overlapClassPair =
+  overlapPairs.map(
+    function(feature) {
+
+      var pair =
+        ee.Number(
+          feature.get(
+            'base_class'
+          )
+        )
+        .format('%d')
+        .cat(
+          '->'
+        )
+        .cat(
+          ee.Number(
+            feature.get(
+              'rescue_class'
+            )
+          )
+          .format('%d')
+        );
+
+
+      return feature.set(
+        'class_pair',
+        pair
+      );
+
+    }
+  );
+
+
+print(
+  overlapClassPair.aggregate_histogram(
+    'class_pair'
+  )
+);
+
+
+// ================================================================
+// 6. TAG RESCUED POINTS AS NEW / DUPLICATE
+// ================================================================
+
+var passBPixelKeys =
+  ee.List(
+    passB05C1.aggregate_array(
+      'auth_pixel_key'
+    )
+  );
+
+
+var rescuedTagged =
+  rescued05C2A.map(
+    function(feature) {
+
+      var key =
+        feature.get(
+          'auth_pixel_key'
+        );
+
+
+      var alreadyExists =
+        passBPixelKeys.contains(
+          key
+        );
+
+
+      return feature.set({
+
+        overlap_with_05C1:
+          ee.Number(
+            ee.Algorithms.If(
+              alreadyExists,
+              1,
+              0
+            )
+          )
+
+      });
+
+    }
+  );
+
+
+var rescuedNew =
+  rescuedTagged.filter(
+    ee.Filter.eq(
+      'overlap_with_05C1',
+      0
+    )
+  );
+
+
+var rescuedDuplicate =
+  rescuedTagged.filter(
+    ee.Filter.eq(
+      'overlap_with_05C1',
+      1
+    )
+  );
+
+
+print(
+  ee.Dictionary({
+
+    rescued_total:
+      rescuedTagged.size(),
+
+    rescued_new_pixels:
+      rescuedNew.size(),
+
+    rescued_duplicate_pixels:
+      rescuedDuplicate.size()
+
+  })
+);
+
+
+// ================================================================
+// 7. BUILD UNIQUE COMBINED CANDIDATE POOL
+// ================================================================
+//
+// Only genuinely new rescued pixels are added.
+//
+// ================================================================
+
+var combinedCandidates =
+  passB05C1
+    .merge(
+      rescuedNew
+    )
+    .distinct(
+      [
+        'auth_pixel_key'
+      ]
+    );
+
+
+print(
+  ee.Dictionary({
+
+    passB_05C1:
+      passB05C1.size(),
+
+    new_rescued:
+      rescuedNew.size(),
+
+    combined_unique:
+      combinedCandidates.size()
+
+  })
+);
+
+
+// ================================================================
+// 8. CLASS-WISE COMBINED SUFFICIENCY SUMMARY
+// ================================================================
+
+function summarizeCombinedClass(
+  classId
+) {
+
+  var base =
+    passB05C1.filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    );
+
+
+  var rescueAll =
+    rescued05C2A.filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    );
+
+
+  var rescueNewClass =
+    rescuedNew.filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    );
+
+
+  var combined =
+    combinedCandidates.filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    );
+
+
+  var combinedN =
+    combined.size();
+
+
+  var deficit =
+    ee.Number(
+      TARGET_PER_CLASS
+    )
+    .subtract(
+      combinedN
+    )
+    .max(
+      0
+    );
+
+
+  var distinctPolys =
+    ee.List(
+      combined.aggregate_array(
+        'poly_id'
+      )
+    )
+    .distinct();
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      class_name:
+        CLASS_NAMES[
+          classId - 1
+        ],
+
+      base_05C1_n:
+        base.size(),
+
+      rescued_05C2A_n:
+        rescueAll.size(),
+
+      rescued_new_n:
+        rescueNewClass.size(),
+
+      combined_unique_n:
+        combinedN,
+
+      target_n:
+        TARGET_PER_CLASS,
+
+      deficit:
+        deficit,
+
+      sufficient_120:
+        combinedN.gte(
+          TARGET_PER_CLASS
+        ),
+
+      distinct_poly_id_n:
+        distinctPolys.size()
+
+    }
+  );
+}
+
+
+var combinedSummary =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      summarizeCombinedClass
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  'COMBINED 05C1 + NEW 05C2A CLASS SUMMARY'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  combinedSummary
+);
+
+
+// ================================================================
+// 9. FULL SOURCE-GROUP DISTRIBUTION
+// ================================================================
+//
+// Important for:
+//   Vegetation
+//   Agricultural/Open
+//   Barren/Fallow
+//
+// But all five classes are printed.
+//
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  'COMBINED POOL SOURCE-GROUP DIVERSITY'
+);
+
+print(
+  '========================================'
+);
+
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var fc =
+      combinedCandidates.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    var distinctPolyIds =
+      ee.List(
+        fc.aggregate_array(
+          'poly_id'
+        )
+      )
+      .distinct()
+      .sort();
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        candidate_n:
+          fc.size(),
+
+        distinct_poly_id_n:
+          distinctPolyIds.size(),
+
+        poly_ids:
+          distinctPolyIds,
+
+        poly_id_histogram:
+          fc.aggregate_histogram(
+            'poly_id'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 10. REBUILD 2010-NATIVE SIGNATURES
+// ================================================================
+//
+// This part is for failure diagnostics on the remaining 05A
+// UNCERTAIN points.
+//
+// Signatures are again derived ONLY from 05A STABLE anchors,
+// sampled from the authoritative saved 2010 raster.
+//
+// ================================================================
+
+var stableAnchors =
+  qa05A.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'STABLE'
+    )
+  );
+
+
+var uncertainAnchors =
+  qa05A.filter(
+    ee.Filter.eq(
+      'transfer_status',
+      'UNCERTAIN'
+    )
+  );
+
+
+var nativeSeeds =
+  stack2010
+    .select(
+      PREDICTORS
+    )
+    .sampleRegions({
+
+      collection:
+        stableAnchors,
+
+      properties: [
+        'class_id',
+        'class_name',
+        'poly_id'
+      ],
+
+      scale:
+        SCALE,
+
+      projection:
+        stackProjection,
+
+      geometries:
+        true,
+
+      tileScale:
+        4
+
+    });
+
+
+// ================================================================
+// 11. BUILD CLASS SIGNATURES
+// ================================================================
+
+function buildSignature(
+  classId
+) {
+
+  var classSamples =
+    nativeSeeds.filter(
+      ee.Filter.eq(
+        'class_id',
+        classId
+      )
+    );
+
+
+  var means =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_mean(
+            band
+          )
+        );
+
+      }
+    );
+
+
+  var sds =
+    PREDICTORS.map(
+      function(band) {
+
+        return ee.Number(
+          classSamples.aggregate_sample_sd(
+            band
+          )
+        )
+        .max(
+          EPSILON
+        );
+
+      }
+    );
+
+
+  return ee.Feature(
+    null,
+    {
+
+      class_id:
+        classId,
+
+      class_name:
+        CLASS_NAMES[
+          classId - 1
+        ],
+
+      n_seed:
+        classSamples.size(),
+
+      means:
+        ee.List(
+          means
+        ),
+
+      sds:
+        ee.List(
+          sds
+        )
+
+    }
+  );
+}
+
+
+var nativeSignatures =
+  ee.FeatureCollection(
+    CLASS_IDS.map(
+      buildSignature
+    )
+  );
+
+
+// ================================================================
+// 12. DISTANCE FUNCTION
+// ================================================================
+
+function distanceToClass(
+  image,
+  classId
+) {
+
+  var signature =
+    ee.Feature(
+      nativeSignatures
+        .filter(
+          ee.Filter.eq(
+            'class_id',
+            classId
+          )
+        )
+        .first()
+    );
+
+
+  var meanImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'means'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    );
+
+
+  var sdImage =
+    ee.Image.constant(
+      ee.List(
+        signature.get(
+          'sds'
+        )
+      )
+    )
+    .rename(
+      PREDICTORS
+    )
+    .max(
+      EPSILON
+    );
+
+
+  return image
+    .select(
+      PREDICTORS
+    )
+    .subtract(
+      meanImage
+    )
+    .divide(
+      sdImage
+    )
+    .pow(2)
+    .reduce(
+      ee.Reducer.mean()
+    )
+    .sqrt()
+    .rename(
+      'd' + classId
+    );
+}
+
+
+// ================================================================
+// 13. FIVE DISTANCE IMAGES
+// ================================================================
+
+var d1 =
+  distanceToClass(
+    stack2010,
+    1
+  );
+
+
+var d2 =
+  distanceToClass(
+    stack2010,
+    2
+  );
+
+
+var d3 =
+  distanceToClass(
+    stack2010,
+    3
+  );
+
+
+var d4 =
+  distanceToClass(
+    stack2010,
+    4
+  );
+
+
+var d5 =
+  distanceToClass(
+    stack2010,
+    5
+  );
+
+
+var distanceImages = [
+
+  d1,
+  d2,
+  d3,
+  d4,
+  d5
+
+];
+
+
+var distanceStack =
+  ee.Image.cat(
+    distanceImages
+  );
+
+
+// ================================================================
+// 14. BEST + SECOND BEST CLASS
+// ================================================================
+
+var bestDist =
+  d1.rename(
+    'best_dist'
+  );
+
+
+var bestClass =
+  ee.Image.constant(
+    1
+  )
+  .rename(
+    'best_class'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+var secondDist =
+  ee.Image.constant(
+    9999
+  )
+  .rename(
+    'second_dist'
+  )
+  .updateMask(
+    d1.mask()
+  );
+
+
+for (
+  var i = 1;
+  i < CLASS_IDS.length;
+  i++
+) {
+
+  var currentClass =
+    CLASS_IDS[i];
+
+
+  var currentDistance =
+    distanceImages[i];
+
+
+  var better =
+    currentDistance.lt(
+      bestDist
+    );
+
+
+  var previousBest =
+    bestDist;
+
+
+  var updatedSecond =
+    secondDist.where(
+      better,
+      previousBest
+    );
+
+
+  var currentAsSecond =
+    currentDistance.where(
+      better,
+      9999
+    );
+
+
+  updatedSecond =
+    updatedSecond.min(
+      currentAsSecond
+    );
+
+
+  bestDist =
+    previousBest
+      .where(
+        better,
+        currentDistance
+      )
+      .rename(
+        'best_dist'
+      );
+
+
+  bestClass =
+    bestClass
+      .where(
+        better,
+        currentClass
+      )
+      .rename(
+        'best_class'
+      );
+
+
+  secondDist =
+    updatedSecond
+      .rename(
+        'second_dist'
+      );
+
+}
+
+
+// ================================================================
+// 15. CLASS SEPARATION MARGIN
+// ================================================================
+
+var margin =
+  secondDist
+    .subtract(
+      bestDist
+    )
+    .rename(
+      'margin'
+    );
+
+
+// ================================================================
+// 16. 3 × 3 LOCAL CONSISTENCY
+// ================================================================
+
+var kernel3x3 =
+  ee.Kernel.square({
+
+    radius:
+      1,
+
+    units:
+      'pixels',
+
+    normalize:
+      false
+
+  });
+
+
+var localValidN =
+  bestClass
+    .reduceNeighborhood({
+
+      reducer:
+        ee.Reducer.count(),
+
+      kernel:
+        kernel3x3,
+
+      skipMasked:
+        true
+
+    })
+    .rename(
+      'local_valid_n'
+    );
+
+
+var localSameN =
+  ee.Image.constant(
+    0
+  )
+  .rename(
+    'local_same_n'
+  )
+  .updateMask(
+    bestClass.mask()
+  );
+
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var neighbourCount =
+      bestClass
+        .eq(
+          classId
+        )
+        .reduceNeighborhood({
+
+          reducer:
+            ee.Reducer.sum(),
+
+          kernel:
+            kernel3x3,
+
+          skipMasked:
+            true
+
+        });
+
+
+    localSameN =
+      localSameN.where(
+
+        bestClass.eq(
+          classId
+        ),
+
+        neighbourCount
+
+      );
+
+  }
+);
+
+
+var localFraction =
+  localSameN
+    .divide(
+      localValidN.max(
+        1
+      )
+    )
+    .rename(
+      'local_fraction'
+    );
+
+
+// ================================================================
+// 17. BUILD FAILURE-DIAGNOSTIC IMAGE
+// ================================================================
+
+var diagnosticImage =
+  distanceStack
+
+    .addBands(
+      bestClass
+    )
+
+    .addBands(
+      bestDist
+    )
+
+    .addBands(
+      secondDist
+    )
+
+    .addBands(
+      margin
+    )
+
+    .addBands(
+      stack2010.select(
+        'clear_count'
+      )
+    )
+
+    .addBands(
+      localValidN
+    )
+
+    .addBands(
+      localFraction
+    );
+
+
+// ================================================================
+// 18. SAMPLE ALL 05A UNCERTAIN POINTS
+// ================================================================
+
+var uncertainSamples =
+  diagnosticImage.sampleRegions({
+
+    collection:
+      uncertainAnchors,
+
+    properties: [
+      'class_id',
+      'class_name',
+      'poly_id',
+      'transfer_status'
+    ],
+
+    scale:
+      SCALE,
+
+    projection:
+      stackProjection,
+
+    geometries:
+      false,
+
+    tileScale:
+      4
+
+  });
+
+
+// ================================================================
+// 19. OWN-CLASS DISTANCE HELPER
+// ================================================================
+
+function ownClassDistance(
+  feature,
+  classId
+) {
+
+  return ee.Number(
+
+    ee.Algorithms.If(
+      classId.eq(1),
+
+      feature.get(
+        'd1'
+      ),
+
+      ee.Algorithms.If(
+        classId.eq(2),
+
+        feature.get(
+          'd2'
+        ),
+
+        ee.Algorithms.If(
+          classId.eq(3),
+
+          feature.get(
+            'd3'
+          ),
+
+          ee.Algorithms.If(
+            classId.eq(4),
+
+            feature.get(
+              'd4'
+            ),
+
+            feature.get(
+              'd5'
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
+
+// ================================================================
+// 20. ASSIGN PASS / FAILURE FLAGS
+// ================================================================
+//
+// FAILURE FLAGS ARE INDEPENDENT.
+//
+// Example:
+// one point may fail BOTH distance and local consistency.
+//
+// We also assign one hierarchical PRIMARY reason to make the
+// overall pattern easier to inspect.
+//
+// Hierarchy:
+//
+// clear count
+//      ↓
+// class mismatch
+//      ↓
+// distance
+//      ↓
+// margin
+//      ↓
+// local QA
+//      ↓
+// PASS_RESCUE
+//
+// ================================================================
+
+var diagnosedUncertain =
+  uncertainSamples.map(
+    function(feature) {
+
+      var sourceClass =
+        ee.Number(
+          feature.get(
+            'class_id'
+          )
+        );
+
+
+      var predictedClass =
+        ee.Number(
+          feature.get(
+            'best_class'
+          )
+        );
+
+
+      var ownDistance =
+        ownClassDistance(
+          feature,
+          sourceClass
+        );
+
+
+      var classMargin =
+        ee.Number(
+          feature.get(
+            'margin'
+          )
+        );
+
+
+      var clearCount =
+        ee.Number(
+          feature.get(
+            'clear_count'
+          )
+        );
+
+
+      var localN =
+        ee.Number(
+          feature.get(
+            'local_valid_n'
+          )
+        );
+
+
+      var localFrac =
+        ee.Number(
+          feature.get(
+            'local_fraction'
+          )
+        );
+
+
+      var passClear =
+        clearCount.gte(
+          MIN_CLEAR_FOR_AUTO
+        );
+
+
+      var passClass =
+        predictedClass.eq(
+          sourceClass
+        );
+
+
+      var passDistance =
+        ownDistance.lte(
+          DISTANCE_THRESHOLD
+        );
+
+
+      var passMargin =
+        classMargin.gte(
+          MARGIN_THRESHOLD
+        );
+
+
+      var passLocalN =
+        localN.gte(
+          MIN_VALID_NEIGHBOURS
+        );
+
+
+      var passLocalFraction =
+        localFrac.gte(
+          MIN_LOCAL_FRACTION
+        );
+
+
+      var passLocal =
+        passLocalN.and(
+          passLocalFraction
+        );
+
+
+      var accepted =
+        passClear
+
+          .and(
+            passClass
+          )
+
+          .and(
+            passDistance
+          )
+
+          .and(
+            passMargin
+          )
+
+          .and(
+            passLocal
+          );
+
+
+      // ------------------------------------------------
+      // Hierarchical primary failure reason
+      // ------------------------------------------------
+
+      var primaryFailure =
+        ee.String(
+
+          ee.Algorithms.If(
+
+            accepted,
+
+            'PASS_RESCUE',
+
+            ee.Algorithms.If(
+
+              passClear,
+
+              ee.Algorithms.If(
+
+                passClass,
+
+                ee.Algorithms.If(
+
+                  passDistance,
+
+                  ee.Algorithms.If(
+
+                    passMargin,
+
+                    ee.Algorithms.If(
+
+                      passLocal,
+
+                      'FAIL_OTHER',
+
+                      'FAIL_LOCAL'
+
+                    ),
+
+                    'FAIL_MARGIN'
+
+                  ),
+
+                  'FAIL_DISTANCE'
+
+                ),
+
+                'FAIL_CLASS_MISMATCH'
+
+              ),
+
+              'FAIL_CLEAR_COUNT'
+
+            )
+
+          )
+
+        );
+
+
+      return feature.set({
+
+        own_distance:
+          ownDistance,
+
+        predicted_class:
+          predictedClass,
+
+        diagnostic_margin:
+          classMargin,
+
+
+        // ------------------------------------------
+        // Independent failure flags
+        // ------------------------------------------
+
+        fail_clear:
+          ee.Number(
+            ee.Algorithms.If(
+              passClear,
+              0,
+              1
+            )
+          ),
+
+
+        fail_class:
+          ee.Number(
+            ee.Algorithms.If(
+              passClass,
+              0,
+              1
+            )
+          ),
+
+
+        fail_distance:
+          ee.Number(
+            ee.Algorithms.If(
+              passDistance,
+              0,
+              1
+            )
+          ),
+
+
+        fail_margin:
+          ee.Number(
+            ee.Algorithms.If(
+              passMargin,
+              0,
+              1
+            )
+          ),
+
+
+        fail_local_n:
+          ee.Number(
+            ee.Algorithms.If(
+              passLocalN,
+              0,
+              1
+            )
+          ),
+
+
+        fail_local_fraction:
+          ee.Number(
+            ee.Algorithms.If(
+              passLocalFraction,
+              0,
+              1
+            )
+          ),
+
+
+        rescue_pass:
+          ee.Number(
+            ee.Algorithms.If(
+              accepted,
+              1,
+              0
+            )
+          ),
+
+
+        primary_failure:
+          primaryFailure
+
+      });
+
+    }
+  );
+
+
+// ================================================================
+// 21. GLOBAL FAILURE QA
+// ================================================================
+
+var recomputedRescued =
+  diagnosedUncertain.filter(
+    ee.Filter.eq(
+      'rescue_pass',
+      1
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  'UNCERTAIN-POINT FAILURE DIAGNOSTICS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    uncertain_input:
+      uncertainAnchors.size(),
+
+    uncertain_sampled:
+      uncertainSamples.size(),
+
+    recomputed_rescue_n:
+      recomputedRescued.size(),
+
+    saved_05C2A_rescue_n:
+      rescued05C2A.size()
+
+  })
+);
+
+
+print(
+  'Global primary failure histogram'
+);
+
+
+print(
+  diagnosedUncertain.aggregate_histogram(
+    'primary_failure'
+  )
+);
+
+
+// ================================================================
+// 22. CLASS-WISE FAILURE DIAGNOSTICS
+// ================================================================
+//
+// Counts below are NOT mutually exclusive except:
+// primary_failure_histogram.
+//
+// For example:
+//
+// fail_class_n = 20
+// fail_distance_n = 30
+//
+// can include some of the same points.
+//
+// ================================================================
+
+CLASS_IDS.forEach(
+  function(classId) {
+
+    var fc =
+      diagnosedUncertain.filter(
+        ee.Filter.eq(
+          'class_id',
+          classId
+        )
+      );
+
+
+    print(
+      ee.Dictionary({
+
+        class_id:
+          classId,
+
+        class_name:
+          CLASS_NAMES[
+            classId - 1
+          ],
+
+        uncertain_n:
+          fc.size(),
+
+        rescue_pass_n:
+          fc.filter(
+            ee.Filter.eq(
+              'rescue_pass',
+              1
+            )
+          )
+          .size(),
+
+        fail_clear_n:
+          fc.filter(
+            ee.Filter.eq(
+              'fail_clear',
+              1
+            )
+          )
+          .size(),
+
+        fail_class_n:
+          fc.filter(
+            ee.Filter.eq(
+              'fail_class',
+              1
+            )
+          )
+          .size(),
+
+        fail_distance_n:
+          fc.filter(
+            ee.Filter.eq(
+              'fail_distance',
+              1
+            )
+          )
+          .size(),
+
+        fail_margin_n:
+          fc.filter(
+            ee.Filter.eq(
+              'fail_margin',
+              1
+            )
+          )
+          .size(),
+
+        fail_local_n_count:
+          fc.filter(
+            ee.Filter.eq(
+              'fail_local_n',
+              1
+            )
+          )
+          .size(),
+
+        fail_local_fraction_n:
+          fc.filter(
+            ee.Filter.eq(
+              'fail_local_fraction',
+              1
+            )
+          )
+          .size(),
+
+        primary_failure_histogram:
+          fc.aggregate_histogram(
+            'primary_failure'
+          )
+
+      })
+    );
+
+  }
+);
+
+
+// ================================================================
+// 23. AGRICULTURAL/OPEN FAILURE BY SOURCE GROUP
+// ================================================================
+//
+// Class 4 is currently below quota.
+//
+// This tells us which historical source groups still contain
+// unresolved uncertain points and why.
+//
+// ================================================================
+
+var agriFailures =
+  diagnosedUncertain.filter(
+    ee.Filter.eq(
+      'class_id',
+      4
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  'AGRICULTURAL/OPEN UNCERTAIN SOURCE GROUPS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  agriFailures.aggregate_histogram(
+    'poly_id'
+  )
+);
+
+
+// ================================================================
+// 24. BARREN/FALLOW FAILURE BY SOURCE GROUP
+// ================================================================
+//
+// Class 5 is the major remaining deficit.
+//
+// ================================================================
+
+var barrenFailures =
+  diagnosedUncertain.filter(
+    ee.Filter.eq(
+      'class_id',
+      5
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  'BARREN/FALLOW UNCERTAIN SOURCE GROUPS'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  barrenFailures.aggregate_histogram(
+    'poly_id'
+  )
+);
+
+
+// ================================================================
+// 25. VEGETATION SOURCE-GROUP CHECK
+// ================================================================
+//
+// Vegetation has enough pixels numerically,
+// but the current candidate pool is highly concentrated.
+//
+// ================================================================
+
+var vegetationCombined =
+  combinedCandidates.filter(
+    ee.Filter.eq(
+      'class_id',
+      2
+    )
+  );
+
+
+print(
+  '========================================'
+);
+
+print(
+  'VEGETATION DIVERSITY CHECK'
+);
+
+print(
+  '========================================'
+);
+
+
+print(
+  ee.Dictionary({
+
+    vegetation_candidate_n:
+      vegetationCombined.size(),
+
+    vegetation_distinct_poly_id_n:
+      ee.List(
+        vegetationCombined.aggregate_array(
+          'poly_id'
+        )
+      )
+      .distinct()
+      .size(),
+
+    vegetation_poly_histogram:
+      vegetationCombined.aggregate_histogram(
+        'poly_id'
+      )
+
+  })
+);
+
+
+// ================================================================
+// 26. FINAL MESSAGE
+// ================================================================
+
+print(
+  '========================================'
+);
+
+print(
+  '05C2B COMPLETE — DIAGNOSTIC ONLY'
+);
+
+print(
+  'NO ASSET EXPORT CREATED.'
+);
+
+print(
+  'DO NOT CHANGE THRESHOLDS YET.'
+);
+
+print(
+  'Send the QA results back for review.'
+);
+
+print(
+  '========================================'
+);

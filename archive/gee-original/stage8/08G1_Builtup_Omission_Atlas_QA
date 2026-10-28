@@ -1,0 +1,440 @@
+
+// ===========================================================
+// CHENNAI LULC - STAGE 08G-1
+// BUILT-UP OMISSION ATLAS | 2015, 2020, 2025
+//
+// CORRECTED: 2025 asset recovered from original TIFF
+//
+// Diagnostic only.
+// NO classification changes.
+// NO retraining.
+// NO exports.
+// Original assets remain unchanged.
+// ===========================================================
+
+// ===========================================================
+// 1. ORIGINAL PROJECT ASSETS
+// ===========================================================
+
+var ROOT = 'projects/assignment-482806/assets/';
+
+var roiFC = ee.FeatureCollection(
+  ROOT + 'chennai_admin_study_area_clean'
+);
+
+var roi = roiFC.geometry();
+
+var lulc2015 = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2015'
+).select(0).rename('lulc2015');
+
+var lulc2020 = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2020'
+).select(0).rename('lulc2020');
+
+// IMPORTANT CORRECTION:
+// 2025 was recovered from the original classification TIFF
+// and uploaded under this asset name.
+
+var lulc2025 = ee.Image(
+  ROOT + 'chennai_mlc_lulc_2025_from_original_tif'
+).select(0).rename('lulc2025');
+
+// Use the original locked 2015 grid.
+
+var grid = lulc2015.projection();
+
+var GRID_CRS = 'EPSG:32644';
+
+var GRID_TRANSFORM = [
+  30, 0, 399060,
+  0, -30, 1463250
+];
+
+// ===========================================================
+// 2. GAIA IMPERVIOUS SURFACE DATA
+// ===========================================================
+
+// GAIA conversion year index:
+// 2018 = 1
+// 2015 = 4
+// 2010 = 9
+// 1985 = 34
+//
+// GAIA is supporting evidence, NOT reference truth.
+
+var gaia = ee.Image(
+  'Tsinghua/FROM-GLC/GAIA/v10'
+).select('change_year_index').unmask(0);
+
+// Impervious by the end of 2015.
+
+var gaiaBy2015 = gaia.gte(4)
+  .and(gaia.lte(34));
+
+// Impervious by the end of 2018.
+
+var gaiaBy2018 = gaia.gte(1)
+  .and(gaia.lte(34));
+
+// ===========================================================
+// 3. EXISTING CLASS DEFINITIONS
+// ===========================================================
+
+// 1 = Built-up
+// 2 = Vegetation
+// 3 = Water
+// 4 = Agricultural/Open
+// 5 = Barren/Fallow
+
+function built(im) {
+  return im.eq(1);
+}
+
+function openOrBarren(im) {
+  return im.eq(4).or(im.eq(5));
+}
+
+// ===========================================================
+// 4. ORIGINAL BUILT-UP MASKS
+// ===========================================================
+
+var built15 = built(lulc2015);
+var built20 = built(lulc2020);
+var built25 = built(lulc2025);
+
+var open15 = openOrBarren(lulc2015);
+var open20 = openOrBarren(lulc2020);
+var open25 = openOrBarren(lulc2025);
+
+// ===========================================================
+// 5. POSSIBLE BUILT-UP OMISSIONS
+// ===========================================================
+
+// Areas GAIA indicates were already impervious,
+// but the corresponding LULC classification maps
+// identify as Agricultural/Open or Barren/Fallow.
+//
+// These are discrepancies, not confirmed errors.
+
+// 2015
+
+var possibleMiss15 = gaiaBy2015.and(open15);
+
+// 2020
+// GAIA's final year is 2018.
+
+var possibleMiss20 = gaiaBy2018.and(open20);
+
+// 2025
+// GAIA 2018 is historical supporting evidence only.
+
+var possibleMiss25 = gaiaBy2018.and(open25);
+
+// ===========================================================
+// 6. PERSISTENT DISAGREEMENTS
+// ===========================================================
+
+// Areas GAIA indicates as impervious by 2015,
+// but ALL THREE maps classify as Open/Barren.
+
+var persistentMismatch = gaiaBy2015
+  .and(open15)
+  .and(open20)
+  .and(open25);
+
+// ===========================================================
+// 7. POSSIBLE BUILT-UP LOSSES
+// ===========================================================
+
+// These require actual historical RGB verification.
+// Do not automatically assume classification error.
+
+var loss15to20 = built15.and(open20);
+
+var loss20to25 = built20.and(open25);
+
+// ===========================================================
+// 8. AREA MEASUREMENT
+// ===========================================================
+
+// All calculated on the original 30m analytical grid.
+
+function km2Band(mask, name) {
+
+  return ee.Image.pixelArea()
+    .divide(1e6)
+    .updateMask(mask)
+    .rename(name);
+
+}
+
+var areas = ee.Image.cat([
+
+  km2Band(
+    built15,
+    'mapped_BU_2015_km2'
+  ),
+
+  km2Band(
+    built20,
+    'mapped_BU_2020_km2'
+  ),
+
+  km2Band(
+    built25,
+    'mapped_BU_2025_km2'
+  ),
+
+  km2Band(
+    possibleMiss15,
+    'GAIA2015_vs_open2015_km2'
+  ),
+
+  km2Band(
+    possibleMiss20,
+    'GAIA2018_vs_open2020_km2'
+  ),
+
+  km2Band(
+    possibleMiss25,
+    'GAIA2018_vs_open2025_km2'
+  ),
+
+  km2Band(
+    persistentMismatch,
+    'persistent_three_year_disagreement_km2'
+  ),
+
+  km2Band(
+    loss15to20,
+    'mapped_BU2015_to_open2020_km2'
+  ),
+
+  km2Band(
+    loss20to25,
+    'mapped_BU2020_to_open2025_km2'
+  )
+
+]);
+
+// ===========================================================
+// 9. CONSOLE QA
+// ===========================================================
+
+print('==========================================');
+print('STAGE 08G-1 | BUILT-UP OMISSION ATLAS');
+print('==========================================');
+
+print('2015 classification asset:');
+print(ROOT + 'chennai_mlc_lulc_2015');
+
+print('2020 classification asset:');
+print(ROOT + 'chennai_mlc_lulc_2020');
+
+print('2025 classification asset (CORRECTED):');
+print(ROOT + 'chennai_mlc_lulc_2025_from_original_tif');
+
+print('Original 2015 projection:');
+print(lulc2015.projection());
+
+print('2020 projection:');
+print(lulc2020.projection());
+
+print('Recovered 2025 projection:');
+print(lulc2025.projection());
+
+print('2015 band names:');
+print(lulc2015.bandNames());
+
+print('2020 band names:');
+print(lulc2020.bandNames());
+
+print('2025 band names:');
+print(lulc2025.bandNames());
+
+print('------------------------------------------');
+print('CLASS DEFINITIONS');
+print('1 = Built-up');
+print('2 = Vegetation');
+print('3 = Water');
+print('4 = Agricultural/Open');
+print('5 = Barren/Fallow');
+print('------------------------------------------');
+
+// ===========================================================
+// 10. AREA AND DISAGREEMENT SUMMARY
+// ===========================================================
+
+// One grouped operation to reduce interactive load.
+
+var summaries = areas.reduceRegion({
+
+  reducer: ee.Reducer.sum(),
+
+  geometry: roi,
+
+  crs: GRID_CRS,
+
+  crsTransform: GRID_TRANSFORM,
+
+  maxPixels: 1e8,
+
+  tileScale: 8
+
+});
+
+print('==========================================');
+print('MAPPED AREA AND DISAGREEMENT SUMMARY (km2)');
+print('==========================================');
+
+print(summaries);
+
+print('IMPORTANT:');
+print('GAIA mismatches are candidates for visual inspection.');
+print('They are NOT automatically confirmed Built-up omissions.');
+
+// ===========================================================
+// 11. MAP VISUALIZATION
+// ===========================================================
+
+Map.layers().reset();
+
+Map.setOptions('SATELLITE');
+
+var palette = [
+  'ff0000', // Built-up
+  '008000', // Vegetation
+  '0000ff', // Water
+  'ffff00', // Agricultural/Open
+  'd2b48c'  // Barren/Fallow
+];
+
+Map.addLayer(
+  lulc2015,
+  {
+    min: 1,
+    max: 5,
+    palette: palette
+  },
+  '2015 ORIGINAL LULC',
+  false
+);
+
+Map.addLayer(
+  lulc2020,
+  {
+    min: 1,
+    max: 5,
+    palette: palette
+  },
+  '2020 ORIGINAL LULC',
+  false
+);
+
+Map.addLayer(
+  lulc2025,
+  {
+    min: 1,
+    max: 5,
+    palette: palette
+  },
+  '2025 ORIGINAL LULC - RECOVERED TIFF',
+  false
+);
+
+Map.addLayer(
+  gaiaBy2015.selfMask(),
+  {
+    palette: ['00ffff']
+  },
+  'GAIA IMPERVIOUS BY 2015',
+  false
+);
+
+Map.addLayer(
+  possibleMiss15.selfMask(),
+  {
+    palette: ['ff00ff']
+  },
+  '2015 POSSIBLE BUILT-UP OMISSIONS',
+  true
+);
+
+Map.addLayer(
+  possibleMiss20.selfMask(),
+  {
+    palette: ['ff9900']
+  },
+  '2020 POSSIBLE BUILT-UP OMISSIONS',
+  false
+);
+
+Map.addLayer(
+  possibleMiss25.selfMask(),
+  {
+    palette: ['ff6600']
+  },
+  '2025 POSSIBLE BUILT-UP OMISSIONS',
+  false
+);
+
+Map.addLayer(
+  persistentMismatch.selfMask(),
+  {
+    palette: ['ffff00']
+  },
+  'PERSISTENT 2015-2025 DISAGREEMENT',
+  false
+);
+
+Map.addLayer(
+  loss15to20.selfMask(),
+  {
+    palette: ['ff0000']
+  },
+  '2015 BUILT-UP TO 2020 OPEN/BARREN',
+  false
+);
+
+Map.addLayer(
+  loss20to25.selfMask(),
+  {
+    palette: ['880000']
+  },
+  '2020 BUILT-UP TO 2025 OPEN/BARREN',
+  false
+);
+
+Map.addLayer(
+  roiFC.style({
+    color: 'ffffff',
+    fillColor: '00000000',
+    width: 1
+  }),
+  {},
+  'FIXED CHENNAI STUDY BOUNDARY',
+  false
+);
+
+Map.centerObject(roi, 10);
+
+// ===========================================================
+// 12. FINAL CHECKPOINT
+// ===========================================================
+
+print('==========================================');
+print('STAGE 08G-1 DIAGNOSTIC COMPLETE');
+print('==========================================');
+
+print('NO ORIGINAL ASSETS MODIFIED.');
+print('NO RETRAINING.');
+print('NO NEW CLASSIFICATION.');
+print('NO EXPORTS.');
+
+print('Next: review Built-up omission locations');
+print('using historical reference imagery.');
+
+// ===========================================================
+// END STAGE 08G-1
+// ===========================================================
