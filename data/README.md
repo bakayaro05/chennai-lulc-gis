@@ -1,5 +1,17 @@
 # Data catalogue — Chennai LULC research
 
+<!-- experiments-v1.0.0:begin -->
+## Published supplementary experiment exports (experiments-v1.0.0)
+
+- [Versioned experimental dataset](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/experiments-v1.0.0) — five Chennai fusion/baseline scenarios and six frozen-MLC geographical-transfer scenarios (Thanjavur A/B/C; Cuddalore; Nagapattinam; Thoothukudi).
+- [Pinned SHA-256 manifest](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/experiments-v1.0.0/extended_experiment_manifest.csv) — original export basenames, file sizes and digest values. **26 original exports plus one manifest = 27 release attachments.**
+- [Derived supplementary map plates](../report/supplementary-experiments/README.md) — visualizations built from categorical rasters, not the raw source rasters or new classifications.
+- Existing [fusion result tables](../results/README.md) and [transfer-proxy tables](../results/reported/coastal_proxy_agreement_table10_7.csv) give the reported numerical comparisons.
+
+**Scope:** This supplement publishes *experimental outputs*, not the underlying full USGS Landsat archive, complete frozen training asset graph, or unrestricted Earth Engine access. Keep the official provisional 2010 reporting baseline separate from its two-way sensitivity variant. Coastal automatic product-consensus agreement is not independent ground-truth accuracy. Refer to the original GEE scripts for external dependencies and to source provenance before rerunning.
+<!-- experiments-v1.0.0:end -->
+
+
 This is the repository's **data discovery and provenance directory**, not a claim that all Earth Engine research assets have been publicly exported. A checked subset of original Stage 08 application inputs and reference samples is now available as versioned GitHub Release attachments; the app's binary runtime inputs remain excluded from the **Git source tree**. Other historical exports, fusion-candidate rasters and GEE FeatureCollections may remain external or access-controlled.
 
 ## Published checked dataset — v1.0.0

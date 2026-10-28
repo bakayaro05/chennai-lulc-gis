@@ -149,6 +149,19 @@ chennai-lulc-gis/
 
 ## Datasets, authentic maps and extended results
 
+<!-- experiments-v1.0.0:begin -->
+## Published fusion and geographical-transfer experiment exports (experiments-v1.0.0)
+
+The [supplementary experimental dataset](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/experiments-v1.0.0) contains **26 unchanged Earth Engine exports** and a [SHA-256 file manifest](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/experiments-v1.0.0/extended_experiment_manifest.csv): five Chennai fusion/baseline maps and six 2020 frozen-model geographical-transfer maps, each with categorical and colour GeoTIFFs. These exports are separate from the [Stage 08 runnable dataset](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/dataset-v1.0.0).
+
+- **[Chennai fusion plate](report/supplementary-experiments/chennai_fusion_five_panel_derived.png)** — reported 2010 provisional map, distinct 2010 two-way sensitivity, and 2015/2020/2025 retained post-classification fusion candidates.
+- **[Six-map transfer plate](report/supplementary-experiments/six_city_frozen_mlc_transfer_derived.png)** — Thanjavur A/B/C, Cuddalore, Nagapattinam and Thoothukudi. See [the supplementary figure notes](report/supplementary-experiments/README.md).
+- **[Reported numerical results](results/README.md)**, [source fusion scripts](scripts/gee/05_fusion/), [transfer scripts](scripts/gee/06_generalisability/) and [final report](report/Chennai_LULC_Report_With_Fusion_Maps.pdf) remain in the repository.
+
+**Interpretation:** the 2010 two-way map is sensitivity-only; coastal proxy agreement is **not** independently labelled classification accuracy; coastal 3 km circular pilots are **not** municipal boundaries. These exported results alone do not reproduce every historical Earth Engine input or manually reviewed decision.
+<!-- experiments-v1.0.0:end -->
+
+
 **Published checked dataset:** [Chennai LULC Dataset v1.0.0](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/dataset-v1.0.0) contains **33 individual attachments**: **26 original research files** (nine Stage 08 application inputs and 17 reference exports) and seven documentation/integrity files. The release includes [SHA-256 checksums](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/dataset-v1.0.0/dataset_file_manifest.csv), [verification instructions](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/dataset-v1.0.0/DATASET_README.md) and [scientific QA caveats](https://github.com/bakayaro05/chennai-lulc-gis/releases/download/dataset-v1.0.0/CHENNAI_DATASET_V1_QA_REPORT.md). The original 2010 map remains **provisional**; the 2010 two-way fusion sensitivity is a separate experiment. The 2025 source-polygon overlaps and approximately 30 m spacing concern for three 2015 validation points remain documented, not silently corrected. No final accepted 2005 map or full historical Earth Engine reproduction is supplied by this release.
 
 **Related research:** [Final report](report/Chennai_LULC_Report_With_Fusion_Maps.pdf) · [Results tables](results/README.md) · [Authentic figures](figures/README.md) · [Source code and provenance](scripts/gee/INDEX.md) · [Interactive app](app/README.md).

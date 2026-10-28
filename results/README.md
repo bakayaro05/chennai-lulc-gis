@@ -1,6 +1,6 @@
 # Reported research results — Chennai multi-temporal LULC
 
-This folder stores compact **source-transcribed quantitative results** from the authoritative 103-page `Chennai_LULC_Report_With_Fusion_Maps.pdf` and the locked application scientific catalogue. No data were reclassified or remotely recomputed during this extraction. Keep the report table number, **PDF page number**, class schema, denominator and design limitation attached to any use of these CSVs.
+This folder stores compact **source-transcribed quantitative results** from the earlier audited 103-page `Chennai_LULC_Report_With_Fusion_Maps.pdf` and the locked application scientific catalogue. No data were reclassified or remotely recomputed during this extraction. Keep the report table number, **PDF page number**, class schema, denominator and design limitation attached to any use of these CSVs.
 
 ## Main recorded summary tables
 
@@ -26,6 +26,13 @@ This folder stores compact **source-transcribed quantitative results** from the 
 | [`reported/transfer_six_experiment_areas_table10_8.csv`](reported/transfer_six_experiment_areas_table10_8.csv) | Table 10.8, PDF p86 | Mapped class areas for Thanjavur A/B/C + three pilot cities; **not validation scores** |
 
 ## Original-versus-fusion distinction
+
+<!-- experiments-v1.0.0:begin -->
+## Supplementary experimental map figures and original outputs
+
+The [derived five-panel fusion map](../report/supplementary-experiments/chennai_fusion_five_panel_derived.png) and [six-map frozen-MLC transfer plate](../report/supplementary-experiments/six_city_frozen_mlc_transfer_derived.png) visualize the same documented experiments. The original (georeferenced) output raster exports and their file-identity manifest are attached to the [published experiments-v1.0.0 release](https://github.com/bakayaro05/chennai-lulc-gis/releases/tag/experiments-v1.0.0). Do not substitute these figures for the numeric results or treat coastal automatic proxy agreement as manual validation.
+<!-- experiments-v1.0.0:end -->
+
 
 - **Original four-class mapped series:** [`chennai_four_class_areas.csv`](chennai_four_class_areas.csv), [Fig. 6.1](../figures/report_exports/original_fourclass_composition_fig6_1.jpeg).
 - **Five-class reported fusion series:** [`five_class_fusion_areas_table8_9.csv`](reported/five_class_fusion_areas_table8_9.csv), [Fig. 8.9](../figures/report_exports/reported_series_maps_fig8_9.jpeg).

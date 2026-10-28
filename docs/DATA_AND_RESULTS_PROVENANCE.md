@@ -1,5 +1,12 @@
 # Dataset and results expansion — provenance note
 
+<!-- experiments-v1.0.0:begin -->
+## Current public report edition (separate from original research evidence)
+
+The report PDF at `report/Chennai_LULC_Report_With_Fusion_Maps.pdf` has been replaced with a **revised public edition** exported from the author's `Github_REPORT.docx`. The older **103-page** report with SHA-256 `75f71b75d1af5a41ef4d84911c8b4678efb1d80530719fe736687b03b22bdca6` remains the fixed provenance basis of the transcribed result CSVs and four original figure JPEGs. Their historic source page numbers have **not** been remapped to the revised edition. This change does not constitute a new validation or reclassification. The revised PDF SHA-256 is recorded in `report/SHA256SUMS.txt`.
+<!-- experiments-v1.0.0:end -->
+
+
 **Basis:** 103-page authoritative `Chennai_LULC_Report_With_Fusion_Maps.pdf` (PDF SHA-256 `75f71b75d1af5a41ef4d84911c8b4678efb1d80530719fe736687b03b22bdca6`), verified locally against supplied source images and the 28 October 2026 GEE metadata audit. No Earth Engine computation was rerun and no Drive TIFF bytes were downloaded in preparing this repository supplement.
 
 ## Included

@@ -1,5 +1,12 @@
 # Authentic figures extracted from the final research report
 
+<!-- experiments-v1.0.0:begin -->
+## Report edition and figure provenance
+
+The existing four JPEGs and `figure_provenance.csv` were extracted from the **earlier 103-page PDF edition** with SHA-256 `75f71b75d1af5a41ef4d84911c8b4678efb1d80530719fe736687b03b22bdca6`. Their page numbers are retained as historical source provenance and **must not be assumed to match** the revised public report PDF exported from `Github_REPORT.docx`. See the newly generated supplementary experiment diagrams under [report/supplementary-experiments](../report/supplementary-experiments/README.md).
+<!-- experiments-v1.0.0:end -->
+
+
 The four JPEGs in [`report_exports/`](report_exports/) were extracted **byte-for-byte from embedded images** in `Chennai_LULC_Report_With_Fusion_Maps.pdf` (103 pages) with PyMuPDF; **no recolouring, class editing, cropping or reconstruction** was performed. Source figure numbers and PDF page indices are in [`figure_provenance.csv`](figure_provenance.csv).
 
 ![Reported series: 2010 original, 2015/2020/2025 fusion](report_exports/reported_series_maps_fig8_9.jpeg)
