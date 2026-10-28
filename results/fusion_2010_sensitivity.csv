@@ -1,4 +1,4 @@
-variant,official_reported_baseline,oa_percent,validation_n,builtup_area_km2,area_note,source
-original_L5L7_MLC,YES,69.3333,300,279.821871,reported 2010 provisional area,docs/RESEARCH_LINEAGE.md
-add_only_sensitivity,NO,69.6667,300,,not included in this file pending source exact area reconciliation,docs/CODE_MANUAL.md section 3.6
-two_way_sensitivity,NO,71.3333,300,304.716139,sensitivity result; not adopted official map,docs/CODE_MANUAL.md section 3.6
+variant,official_reported_baseline,correct_n,validation_n,oa_percent,builtup_correct_n,builtup_reference_n,builtup_false_positive_n,builtup_recall_percent,builtup_precision_percent,builtup_area_km2,classification_role,source_report_table,source_report_pdf_page
+original_L5L7_MLC,YES,208,300,69.33,55,60,12,91.67,82.09,279.82,original provisional reported 2010 baseline,Table 8.8,61
+add_only_sensitivity,NO,209,300,69.67,57,60,13,95.00,81.43,308.47,rejected exploratory sensitivity; not exported as adopted map,Table 8.8,61
+two_way_sensitivity,NO,214,300,71.33,57,60,7,95.00,89.06,304.72,exploratory sensitivity; reconstructed/exported later for documentation,Table 8.8; Fig 8.10,61

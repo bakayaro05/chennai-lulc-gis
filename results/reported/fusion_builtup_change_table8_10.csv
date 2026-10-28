@@ -1,0 +1,5 @@
+interval,gross_gain_km2,gross_loss_km2,net_original2010_series_km2,net_2010_two_way_sensitivity_km2,notes,source
+2010-2015,51.50,39.08,12.42,-12.47,Gross flows for original 2010; two-way only alternate net comparison,Report Table 8.10; PDF p63
+2015-2020,18.00,13.51,4.50,4.50,,Report Table 8.10; PDF p63
+2020-2025,62.39,16.53,45.86,45.86,,Report Table 8.10; PDF p63
+2010-2025,,,62.78,37.89,"Endpoint net, not adjacent-year gross transition",Report Table 8.10; PDF p63

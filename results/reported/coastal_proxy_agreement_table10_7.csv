@@ -1,0 +1,4 @@
+city,proxy_supported_agreement_percent,nonwater_proxy_agreement_percent,supported_subset_coverage_percent,water_share_of_supported_area_percent,evaluation_type,source
+Cuddalore,57.93,40.01,56.83,32.57,Automatic ESA_WorldCover + Dynamic_World consensus subset; NOT independent manual OA,Report Table 10.7; PDF p84
+Nagapattinam,82.91,57.70,56.14,59.59,Automatic ESA_WorldCover + Dynamic_World consensus subset; NOT independent manual OA,Report Table 10.7; PDF p84
+Thoothukudi,46.09,43.61,28.91,6.80,Automatic ESA_WorldCover + Dynamic_World consensus subset; NOT independent manual OA,Report Table 10.7; PDF p84

@@ -1,0 +1,4 @@
+variant,correct_n,reference_n,unweighted_percent,area_adjusted_oa_percent_rounded,change_vs_A_pp_rounded,model_refit_on_target_labels,reference_design,source
+A direct frozen,47,112,41.96,23.19,,NO,112 independently manually interpreted reference sites; original A area weights,Report Table 10.4; PDF p79
+B month restriction,50,112,44.64,20.66,-2.52,NO,same 112 reference sites; original A weights,Report Table 10.4; PDF p79
+C quantile alignment,59,112,52.68,35.94,12.76,NO,same 112 reference sites; original A weights; exploratory method selection,Report Table 10.4; PDF p79

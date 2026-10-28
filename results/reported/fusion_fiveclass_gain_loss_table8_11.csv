@@ -1,0 +1,16 @@
+period,class_id,class_name,gross_gain_km2,gross_loss_km2,net_change_km2,reported_series,source
+2010-2015,1,Built-up,51.50,39.08,12.42,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2010-2015,2,Vegetation,13.38,60.95,-47.57,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2010-2015,3,Water,20.55,2.60,17.95,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2010-2015,4,Agricultural/Open,59.36,70.67,-11.31,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2010-2015,5,Barren/Fallow,49.96,21.46,28.50,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2015-2020,1,Built-up,18.00,13.50,4.50,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2015-2020,2,Vegetation,3.46,23.00,-19.54,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2015-2020,3,Water,2.12,19.81,-17.69,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2015-2020,4,Agricultural/Open,60.73,31.45,29.28,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2015-2020,5,Barren/Fallow,31.90,28.43,3.47,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2020-2025,1,Built-up,62.39,16.53,45.86,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2020-2025,2,Vegetation,33.34,3.18,30.16,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2020-2025,3,Water,3.79,5.44,-1.65,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2020-2025,4,Agricultural/Open,21.86,96.09,-74.23,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65
+2020-2025,5,Barren/Fallow,38.20,38.35,-0.15,2010 original provisional followed by retained fusion candidates,Report Table 8.11; PDF pp64-65

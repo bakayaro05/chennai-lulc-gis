@@ -1,0 +1,4 @@
+period,stable_builtup_km2,gain_into_builtup_km2,gain_from_open_land_km2,loss_from_builtup_km2,loss_to_open_land_km2,net_builtup_km2,provisional_involved,source
+2010-2015,177.83,23.06,15.97,101.99,100.05,-78.94,YES,Report Table 6.2; PDF p40
+2015-2020,172.55,53.17,49.67,28.33,28.03,24.83,NO,Report Table 6.2; PDF p40
+2020-2025,195.37,61.00,59.69,30.35,29.07,30.66,NO,Report Table 6.2; PDF p40

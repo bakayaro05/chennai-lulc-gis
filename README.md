@@ -17,6 +17,8 @@ This repository preserves the research code and documented decisions behind a mu
 | Check **curation provenance and integrity** | [Curation audit](docs/CURATED_GEE_AUDIT.md) · [Manifest](docs/CURATED_GEE_MANIFEST.csv) |
 | Trace **asset names** across scripts | [Static asset reference index](docs/ASSET_REFERENCE_INDEX.md) |
 | See **metadata-verified Earth Engine assets** and export evidence | [Verified asset manifest](docs/ASSET_MANIFEST_VERIFIED.md) |
+| Browse **research datasets, export folders and remote GEE assets** | [Data catalogue](data/README.md) · [GEE inventory](data/manifests/gee_asset_inventory_2026-10-28.csv) |
+| View **authentic map figures** from the completed report | [Figure gallery](figures/README.md) · [Reported fusion maps](figures/report_exports/reported_series_maps_fig8_9.jpeg) |
 | View the **small, traceable results tables** (no GIS rasters) | [Results index](results/README.md) |
 | Review **study decisions and source provenance** | [Research lineage](docs/RESEARCH_LINEAGE.md) · [Original source revision](docs/SOURCE_REVISION.md) |
 
@@ -65,13 +67,21 @@ chennai-lulc-gis/
 │   ├── BEFORE_GITHUB.md                  ← Historical pre-publication preparation notes
 │   ├── PHASE4_SOURCE_AUDIT.md            ← Application-import audit (historical snapshot)
 │   └── PHASE5C_SCIENTIFIC_CONSISTENCY_AUDIT.md ← Documentation consistency report
-├── results/                              ← Small, source-traceable research summary tables (not TIFFs)
-│   ├── README.md                         ← What each result means, source and evidence caveats
+├── data/                                 ← Discoverable datasets and exact remote-export evidence
+│   ├── README.md                         ← Which binary datasets exist, access and licensing cautions
+│   └── manifests/                        ← 69 GEE assets; 8 Drive folders; 9 app file requirements
+├── figures/                              ← Actual map/plot figures extracted unchanged from final report
+│   ├── README.md                         ← Figure captions, provenance and scientific interpretation
+│   ├── figure_provenance.csv             ← PDF page, figure identity, source SHA-256
+│   └── report_exports/                   ← Four authentic original/fusion composition and map panels
+├── results/                              ← Source-labelled quantitative summaries, not large TIFFs
+│   ├── README.md                         ← Full results catalogue and methodological distinctions
 │   ├── chennai_accuracy.csv              ← Original 5-class vs derived 4-class OA
-│   ├── chennai_four_class_areas.csv      ← Archived GEE pixelArea class areas, km²
-│   ├── fusion_2010_sensitivity.csv       ← Separate original/add-only/two-way comparison
-│   └── transferability_2020.csv          ← Manual Thanjavur accuracy vs coastal proxy agreement
-├── tools/                                ← Research archive catalog/curation utilities and docs patch
+│   ├── chennai_four_class_areas.csv      ← Archived GEE original four-class area series
+│   ├── fusion_2010_sensitivity.csv       ← 2010 baseline vs add-only/two-way sensitivity
+│   ├── transferability_2020.csv          ← Manual Thanjavur vs automatic proxy results
+│   └── reported/                         ← Nine additional report tables: transitions, fusion, external QA
+├── tools/                                ← Research utilities including read-only local export inventory
 └── .gitignore                            ← Excludes credentials, caches and large GIS binaries
 ```
 
@@ -131,7 +141,18 @@ chennai-lulc-gis/
 | Find one of the 62 curated script copies and see its exact role | [Curated index](scripts/gee/INDEX.md) · [Execution guide](scripts/gee/EXECUTION_ORDER.md) |
 | Understand which remote GEE outputs were observed | [Verified asset manifest](docs/ASSET_MANIFEST_VERIFIED.md) |
 | Find readable results without opening scripts | [Results index](results/README.md) · [Chennai accuracies](results/chennai_accuracy.csv) · [Four-class areas](results/chennai_four_class_areas.csv) · [2010 sensitivity](results/fusion_2010_sensitivity.csv) · [Transferability](results/transferability_2020.csv) |
+| Find complete reported fusion areas and transition tables | [Detailed report tables](results/README.md#additional-transcribed-tables-from-final-report) · [Five-class fusion areas](results/reported/five_class_fusion_areas_table8_9.csv) · [Five-class gain/loss](results/reported/fusion_fiveclass_gain_loss_table8_11.csv) |
+| See exported map figures and external-data requirements | [Authentic figure gallery](figures/README.md) · [Data sources and manifests](data/README.md) |
 | Run or review the FastAPI / React map interface | [Application guide](app/README.md) · [`app/backend/main.py`](app/backend/main.py) · [`app/frontend/src/App.tsx`](app/frontend/src/App.tsx) |
+
+## Datasets, authentic maps and extended results
+
+- **[Dataset catalogue](data/README.md):** a structured index of **69 Earth Engine asset IDs** (62 metadata-accessible in the dated audit), **eight** screenshot-evidenced Google Drive export folders, and the **nine** exact local inputs the FastAPI viewer requires. The inventory does **not** itself contain remote asset bytes or downloadable public links.
+- **[Original report figures](figures/README.md):** the unaltered, report-embedded map panels for 2010 original/2015/2020/2025 retained fusion (Fig. 8.9), the **separate 2010 two-way sensitivity** (Fig. 8.10), and original versus fusion-adjusted class-composition plots (Figs. 6.1 and 8.8). **JPEG figures are not georeferenced rasters.**
+- **[Extended reported tables](results/README.md):** recorded classification-area transitions, original/fusion paired validation, five-class post-fusion areas, gains and losses, and external Thanjavur/coastal-city results. Each CSV names its report table and PDF page. These are **transcriptions of approved results**, not new classifications.
+- **[Local export inventory tool](tools/inventory_local_exports.py):** scans actual files already on your machine and records relative paths, sizes and SHA-256 hashes without altering the TIFFs. A checksum cannot be claimed until the file has actually been read.
+
+**Full-size research exports remain external.** Use a versioned research-data deposit or GitHub Release attachments after file identity, redistribution permissions and license terms are reviewed; see [data/README.md](data/README.md). Do not promote the 2010 two-way sensitivity to an official baseline or imply all listed GEE assets are publicly accessible.
 
 ## Research questions and scope
 

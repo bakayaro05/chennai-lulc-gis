@@ -1,0 +1,21 @@
+year,map_role,five_class_id,class_name,area_km2,basis,source
+2010,original_provisional,1,Built-up,279.82,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2010,original_provisional,2,Vegetation,81.22,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2010,original_provisional,3,Water,21.78,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2010,original_provisional,4,Agricultural/Open,114.46,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2010,original_provisional,5,Barren/Fallow,32.49,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2015,temporal_fusion,1,Built-up,292.24,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2015,temporal_fusion,2,Vegetation,33.65,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2015,temporal_fusion,3,Water,39.73,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2015,temporal_fusion,4,Agricultural/Open,103.15,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2015,temporal_fusion,5,Barren/Fallow,60.99,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2020,GAIA_ESA_WorldCover_fusion,1,Built-up,296.74,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2020,GAIA_ESA_WorldCover_fusion,2,Vegetation,14.11,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2020,GAIA_ESA_WorldCover_fusion,3,Water,22.04,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2020,GAIA_ESA_WorldCover_fusion,4,Agricultural/Open,132.43,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2020,GAIA_ESA_WorldCover_fusion,5,Barren/Fallow,64.46,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2025,GAIA_Dynamic_World_fusion,1,Built-up,342.60,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2025,GAIA_Dynamic_World_fusion,2,Vegetation,44.27,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2025,GAIA_Dynamic_World_fusion,3,Water,20.39,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2025,GAIA_Dynamic_World_fusion,4,Agricultural/Open,58.20,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62
+2025,GAIA_Dynamic_World_fusion,5,Barren/Fallow,64.31,archived_GEE_pixelArea; rounded two decimals,Report Table 8.9; PDF p62

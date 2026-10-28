@@ -1,0 +1,7 @@
+experiment,builtup_km2,vegetation_km2,water_km2,agricultural_open_km2,barren_fallow_km2,area_basis,source
+Thanjavur A,1.8732,0.0106,0.3586,13.6733,11.0757,mapped class areas,Report Table 10.8; PDF p86
+Thanjavur B,2.3790,0.0045,0.2888,10.7553,13.5638,mapped class areas,Report Table 10.8; PDF p86
+Thanjavur C,6.7055,0.2537,0.4157,11.5379,8.0784,mapped class areas,Report Table 10.8; PDF p86
+Cuddalore,4.2760,0.4668,5.4008,8.4648,9.2181,mapped class areas; exploratory ROI,Report Table 10.8; PDF p86
+Nagapattinam,6.5902,0.0783,10.5754,5.1670,5.4131,mapped class areas; exploratory ROI,Report Table 10.8; PDF p86
+Thoothukudi,11.8156,0.0946,4.2900,9.7244,1.8950,mapped class areas; exploratory ROI,Report Table 10.8; PDF p86

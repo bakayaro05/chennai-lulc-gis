@@ -1,0 +1,10 @@
+dataset_role,relative_path_under_app_data_raw,observed_drive_folder,notes,public_download_url,verified_download_sha256
+boundary,boundary/chennai_study_area.geojson,Chennai_LULC_Final4_Stage08,true study-area FeatureCollection exported from clean ROI,,
+2010_fourclass,lulc4/Chennai_LULC4_2010_provisional.tif,Chennai_LULC_Final4_Stage08,provisional original 2010 reporting map,,
+2015_fourclass,lulc4/Chennai_LULC4_2015.tif,Chennai_LULC_Final4_Stage08,original-derived four-class reporting raster,,
+2020_fourclass,lulc4/Chennai_LULC4_2020.tif,Chennai_LULC_Final4_Stage08,original-derived four-class reporting raster,,
+2025_fourclass,lulc4/Chennai_LULC4_2025.tif,Chennai_LULC_Final4_Stage08,original-derived four-class reporting raster,,
+2010_historical_rgb,satellite/Chennai_RGB_2010.tif,Chennai_LULC_Historical_RGB_Stage08,Annual Landsat display RGB+alpha composite,,
+2015_historical_rgb,satellite/Chennai_RGB_2015.tif,Chennai_LULC_Historical_RGB_Stage08,Annual Landsat display RGB+alpha composite,,
+2020_historical_rgb,satellite/Chennai_RGB_2020.tif,Chennai_LULC_Historical_RGB_Stage08,Annual Landsat display RGB+alpha composite,,
+2025_historical_rgb,satellite/Chennai_RGB_2025.tif,Chennai_LULC_Historical_RGB_Stage08,Annual Landsat display RGB+alpha composite,,

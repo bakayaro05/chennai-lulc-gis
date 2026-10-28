@@ -1,0 +1,5 @@
+file_name,source_figure,pdf_page,class_schema,content,caveat,source_document_sha256
+reported_series_maps_fig8_9.jpeg,Fig. 8.9,67,five class,2010 original provisional; 2015 temporal fusion; 2020 GAIA+WorldCover; 2025 GAIA+Dynamic World,report-embedded map figure; not source raster,75f71b75d1af5a41ef4d84911c8b4678efb1d80530719fe736687b03b22bdca6
+2010_original_vs_two_way_fig8_10.jpeg,Fig. 8.10,68,five class,2010 original reported baseline alongside two-way sensitivity only,report-embedded visual; sensitivity is not adopted baseline,75f71b75d1af5a41ef4d84911c8b4678efb1d80530719fe736687b03b22bdca6
+fusion_composition_fig8_8.jpeg,Fig. 8.8,64,five class,2010 original+2015/2020/2025 fusion-adjusted five-class areas,figure derived from GEE mapped areas; not error adjusted,75f71b75d1af5a41ef4d84911c8b4678efb1d80530719fe736687b03b22bdca6
+original_fourclass_composition_fig6_1.jpeg,Fig. 6.1,39,four class,2010 provisional+2015/2020/2025 original four-class reporting areas,original four-class reporting series; not fusion-adjusted,75f71b75d1af5a41ef4d84911c8b4678efb1d80530719fe736687b03b22bdca6

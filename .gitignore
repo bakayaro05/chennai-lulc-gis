@@ -21,3 +21,11 @@ node_modules/
 __pycache__/
 outputs/
 data/raw/
+
+results/gee_audit/
+
+results/phase5/
+
+# Local research exports / file identity manifests (not public repository data)
+data/private/
+data/exports/

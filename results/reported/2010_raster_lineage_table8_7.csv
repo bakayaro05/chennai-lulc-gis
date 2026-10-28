@@ -1,0 +1,5 @@
+gee_asset_short_name,builtup_km2,oa_percent,builtup_correct_n,builtup_reference_n,builtup_false_positives_n,role,source
+chennai_mlc_lulc_2010,127.52,40.67,22,60,12,"historical archive, not reported map",Report Table 8.7; PDF p61
+chennai_mlc_lulc_2010_manual_v1,270.92,59.33,54,60,18,Landsat 5 manual historical branch,Report Table 8.7; PDF p61
+chennai_mlc_lulc_2010_v2c,108.97,44.00,16,60,4,"historical archive, not reported map",Report Table 8.7; PDF p61
+chennai_mlc_lulc_2010_L5L7_manual_exp_v1,279.82,69.33,55,60,12,reported provisional 2010 baseline,Report Table 8.7; PDF p61
