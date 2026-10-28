@@ -16,6 +16,7 @@ This repository preserves the research code and documented decisions behind a mu
 | Locate the exact **unmodified originals** | [Original GEE archive](archive/gee-original/) |
 | Check **curation provenance and integrity** | [Curation audit](docs/CURATED_GEE_AUDIT.md) · [Manifest](docs/CURATED_GEE_MANIFEST.csv) |
 | Trace **asset names** across scripts | [Static asset reference index](docs/ASSET_REFERENCE_INDEX.md) |
+| See **metadata-verified Earth Engine assets** and export evidence | [Verified asset manifest](docs/ASSET_MANIFEST_VERIFIED.md) |
 | Review **study decisions and source provenance** | [Research lineage](docs/RESEARCH_LINEAGE.md) · [Original source revision](docs/SOURCE_REVISION.md) |
 
 ## Research questions and scope
@@ -158,7 +159,7 @@ The 62 selected files are **copies of the originals**, with `.js` suffixes added
 - This repository **does not contain** the Earth Engine-hosted training/reference assets or large source/output GeoTIFFs. Some required resources may need access permissions.
 - Some historical GEE scripts rely on manually drawn geometries and Code Editor imports that are **not embedded** in the source code.
 - The **FastAPI + React/Leaflet prototype** was developed separately. `app/` contains the application source. Running it requires the local raster inputs and setup documented in [app/README.md](app/README.md).
-- **2005 final LULC**, automated end-to-end reruns, and live task-completion verification are **not claimed** here.
+- An accepted **2005 final LULC** product and automated end-to-end reruns are **not claimed**. The [asset manifest](docs/ASSET_MANIFEST_VERIFIED.md) records 62/69 accessible static Earth Engine IDs and 107 `SUCCEEDED` operations from the October 2026 snapshot; these do not establish full task-to-file provenance.
 
 ## Documentation, provenance and maintenance
 
@@ -172,9 +173,9 @@ The original 156-file archive is a **historical, read-only record**. Do not rewr
 
 ## Current limitations and next repository milestones
 
-- Complete an **asset existence / task-completion manifest** rather than inferring success from source `Export.*` statements.
-- Add the actual **FastAPI backend and React/Leaflet frontend** from the separate application project, with environment files and large outputs appropriately excluded.
-- Perform a **public-repository security and attribution audit** (tokens, data permissions, third-party licenses). The repository is currently public.
+- Maintain and periodically recheck the [verified asset manifest](docs/ASSET_MANIFEST_VERIFIED.md): 62/69 code-derived IDs returned metadata and 7 remained unresolved in the recorded snapshot. Asset existence and `SUCCEEDED` operations are not complete output-file or scientific validation.
+- Preserve the imported [Stage 08 FastAPI/React application](app/README.md); its four classification rasters, four historical RGB rasters and true boundary GeoJSON remain external runtime inputs rather than tracked GitHub files.
+- Maintain the public-repository security and attribution review (tokens, data permissions, third-party licenses). The October 2026 local pattern scan reported no matches but does not guarantee absolute absence of secrets; see [Phase 5C audit](docs/PHASE5C_SCIENTIFIC_CONSISTENCY_AUDIT.md).
 - Establish a suitable **citation, contribution, licensing and versioned-release policy** after those checks; no open-source reuse license is declared by the repository at present.
 
 ---

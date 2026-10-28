@@ -103,16 +103,9 @@ npm run build
 
 The frontend uses `VITE_API_BASE_URL` if set; otherwise it calls `http://127.0.0.1:8000`. The backend CORS settings allow requests from `localhost:5173` and `127.0.0.1:5173`.
 
-### Packaging note: TypeScript config filename
+### Packaging status: TypeScript configuration
 
-At the first GitHub import, the TypeScript configuration appeared under **`frontend/tsconfig.js`**, although its content is a JSON TypeScript configuration and the frontend's `build` script invokes `tsc --noEmit`. Standard TypeScript auto-discovery requires **`frontend/tsconfig.json`**. Rename the file **in the GitHub working copy**, without altering its contents or the original source project:
-
-```bash
-cd ~/Documents/Chennai-LULC-GitHub/chennai-lulc-gis
-mv app/frontend/tsconfig.js app/frontend/tsconfig.json
-```
-
-This is a filename/packaging correction, **not a scientific code change**. Commit the rename with this documentation after checking `npm run build`.
+The initial GitHub import used `frontend/tsconfig.js` for a JSON TypeScript configuration. That one-time packaging rename is **complete**: the repository now contains `frontend/tsconfig.json`. The user's October 2026 GitHub-working-copy `npm ci` and `npm run build` both passed. Do **not** run the previous rename command on a fresh clone.
 
 ## 5. Backend API routes
 
@@ -148,7 +141,9 @@ cd backend
 
 `backend/tests/test_api.py` checks health/metadata, official area data, boundary, a real pixel query, classification PNG tiles and all four historical satellite tile endpoints. It does **not** run meaningfully without the local GeoTIFFs and true boundary.
 
-**Frontend:** `npm run build` must pass after the TypeScript configuration rename. This README documents commands; the current GitHub audit did not execute full application tests against the local Windows raster dataset.
+**Frontend:** `npm run build` passed in the user's GitHub working copy after the completed TypeScript config rename. The user's final local Windows Stage 08 project passed 3/3 backend API tests using its real nine runtime inputs; five tested backend source files matched the GitHub working copy by SHA-256. These results do not imply a fresh Git clone has been independently tested with data.
+
+**Phase 5B raster QA note (October 2026):** Four historical RGB files passed structural/coverage checks, although intermediate alpha values were observed. The four LULC GeoTIFFs had matching full-resolution grids, class counts and footprints; the separate overview audit flagged absent `OVERVIEW_RESAMPLING`/`rio_overview` metadata. Their pyramid generation method is **unverified**, not proven incorrect. The archived GEE class-area sum (~529.7711 km²), local whole-cell area (532.8351 km²), vector area (~529.450838 km²) and historical 528.785508 km² mask diagnostic are different quantities. Stage 07AE previously interpreted the last value as a mask-as-value underestimate; independent local reconciliation is still pending. See [Phase 5C audit](../docs/PHASE5C_SCIENTIFIC_CONSISTENCY_AUDIT.md).
 
 ## 7. Scientific and reproducibility cautions
 

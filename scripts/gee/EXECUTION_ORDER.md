@@ -41,7 +41,7 @@ This file is a **roadmap, not a one-click executable pipeline**. Source code is 
 
 ## Still requires human validation
 
-- The actual completed GEE Tasks and asset metadata for all claimed exports.
+- Some individual GEE task-to-asset/Drive-file identity checks remain outstanding. The October 2026 [asset manifest](../../docs/ASSET_MANIFEST_VERIFIED.md) documents 62/69 code-referenced assets with metadata and 107 succeeded operations, but does not confirm every file's exact destination or pixel integrity.
 - The earliest 2010 intermediate branch versus reported L5/L7 provisional lineage.
 - Stage 7's local class-name variations (e.g. class 5 terminology) against the master palette.
 - Whether manually imported geometries/point references are materialised and accessible.

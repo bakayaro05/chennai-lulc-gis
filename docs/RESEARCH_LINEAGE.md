@@ -7,4 +7,4 @@
 5. Thanjavur 2020 frozen Chennai MLC (five classes): direct area-adjusted accuracy 23.1854%, season-matched 20.6625%, quantile harmonised 35.9444% on 112 manually labelled reference locations. No Gaussian retraining.
 6. Cuddalore, Nagapattinam, Thoothukudi were *automatic product-agreement screens*, not independently measured accuracy. Overall proxy agreement 57.9251%, 82.9085%, 46.0861% respectively, on covered subsets.
 
-A file's presence in the archive does **not** prove that it produced an adopted result. Detailed statuses will be verified from source after the full GitHub repository is available.
+A file's presence in the archive does **not** prove that it produced an adopted result. Source roles are now documented in the [Code Manual](CODE_MANUAL.md) and [curation audit](CURATED_GEE_AUDIT.md); the October 2026 [asset manifest](ASSET_MANIFEST_VERIFIED.md) records 62/69 metadata-accessible assets and 107 succeeded operations. Neither source inspection nor metadata/task history alone proves every file's scientific adoption or completes task-to-export verification.
