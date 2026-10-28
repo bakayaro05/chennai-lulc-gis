@@ -1,0 +1,4 @@
+variant,official_reported_baseline,oa_percent,validation_n,builtup_area_km2,area_note,source
+original_L5L7_MLC,YES,69.3333,300,279.821871,reported 2010 provisional area,docs/RESEARCH_LINEAGE.md
+add_only_sensitivity,NO,69.6667,300,,not included in this file pending source exact area reconciliation,docs/CODE_MANUAL.md section 3.6
+two_way_sensitivity,NO,71.3333,300,304.716139,sensitivity result; not adopted official map,docs/CODE_MANUAL.md section 3.6

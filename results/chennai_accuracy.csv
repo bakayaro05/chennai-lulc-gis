@@ -1,0 +1,5 @@
+year,product_status,original_five_class_oa_percent,five_class_correct_of_300,four_class_reporting_oa_percent,source
+2010,PROVISIONAL_ORIGINAL_L5L7_MLC,69.3333,208,81.0,docs/CODE_MANUAL.md sections 3.2-3.3
+2015,ORIGINAL_MLC,85.6667,257,88.6667,docs/CODE_MANUAL.md sections 3.2-3.3
+2020,ORIGINAL_MLC,86.3333,259,95.6667,docs/CODE_MANUAL.md sections 3.2-3.3
+2025,ORIGINAL_MLC,83.6667,251,96.6667,docs/CODE_MANUAL.md sections 3.2-3.3

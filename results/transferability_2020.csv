@@ -1,0 +1,7 @@
+geography,variant,measurement,percent,reference_n,interpretation,source
+Thanjavur,A_direct,AREA_ADJUSTED_OA,23.1854,112,manually interpreted reference; frozen Chennai five-class MLC,docs/CODE_MANUAL.md section 6
+Thanjavur,B_season_matched,AREA_ADJUSTED_OA,20.6625,112,source month matched; no target-label MLC retraining,docs/CODE_MANUAL.md section 6
+Thanjavur,C_quantile_harmonised,AREA_ADJUSTED_OA,35.9444,112,unlabelled target feature alignment; frozen MLC,docs/CODE_MANUAL.md section 6
+Cuddalore,automatic_consensus,AUTOMATIC_PROXY_AGREEMENT,57.9251,,covered subset; NOT independent manually referenced accuracy,docs/RESEARCH_LINEAGE.md
+Nagapattinam,automatic_consensus,AUTOMATIC_PROXY_AGREEMENT,82.9085,,covered subset; NOT independent manually referenced accuracy,docs/RESEARCH_LINEAGE.md
+Thoothukudi,automatic_consensus,AUTOMATIC_PROXY_AGREEMENT,46.0861,,covered subset; NOT independent manually referenced accuracy,docs/RESEARCH_LINEAGE.md

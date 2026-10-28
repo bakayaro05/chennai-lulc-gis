@@ -1,0 +1,17 @@
+year,area_basis,reporting_class_id,reporting_class_name,area,unit,source
+2010,ARCHIVED_GEE_PIXELAREA,1,Built-up,279.821871,km2,app/backend/catalog.py
+2010,ARCHIVED_GEE_PIXELAREA,2,Vegetation,81.218516,km2,app/backend/catalog.py
+2010,ARCHIVED_GEE_PIXELAREA,3,Water,21.778480,km2,app/backend/catalog.py
+2010,ARCHIVED_GEE_PIXELAREA,4,Agricultural & Vacant/Unused Open Land,146.952238,km2,app/backend/catalog.py
+2015,ARCHIVED_GEE_PIXELAREA,1,Built-up,200.882401,km2,app/backend/catalog.py
+2015,ARCHIVED_GEE_PIXELAREA,2,Vegetation,33.654600,km2,app/backend/catalog.py
+2015,ARCHIVED_GEE_PIXELAREA,3,Water,39.730711,km2,app/backend/catalog.py
+2015,ARCHIVED_GEE_PIXELAREA,4,Agricultural & Vacant/Unused Open Land,255.503391,km2,app/backend/catalog.py
+2020,ARCHIVED_GEE_PIXELAREA,1,Built-up,225.716608,km2,app/backend/catalog.py
+2020,ARCHIVED_GEE_PIXELAREA,2,Vegetation,14.108663,km2,app/backend/catalog.py
+2020,ARCHIVED_GEE_PIXELAREA,3,Water,22.036104,km2,app/backend/catalog.py
+2020,ARCHIVED_GEE_PIXELAREA,4,Agricultural & Vacant/Unused Open Land,267.909728,km2,app/backend/catalog.py
+2025,ARCHIVED_GEE_PIXELAREA,1,Built-up,256.372809,km2,app/backend/catalog.py
+2025,ARCHIVED_GEE_PIXELAREA,2,Vegetation,44.269634,km2,app/backend/catalog.py
+2025,ARCHIVED_GEE_PIXELAREA,3,Water,20.389113,km2,app/backend/catalog.py
+2025,ARCHIVED_GEE_PIXELAREA,4,Agricultural & Vacant/Unused Open Land,208.739548,km2,app/backend/catalog.py

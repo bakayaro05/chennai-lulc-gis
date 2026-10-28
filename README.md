@@ -4,7 +4,7 @@
 
 This repository preserves the research code and documented decisions behind a multi-temporal land-use/land-cover (LULC) study of the **Chennai Urban Study Area, Tamil Nadu, India**. It includes the original Google Earth Engine (GEE) code history, a curated selection of research scripts, and documentation of the classification, quality-assurance, fusion, and geographical generalisability experiments.
 
-> **Research status (28 October 2026):** The research scope considers **2005, 2010, 2015, 2020 and 2025**, with **no future LULC prediction**. The documented assessed series currently comprises **2010 (provisional), 2015, 2020 and 2025**. A final accepted **2005** classification has **not** been established from the archived evidence. The original 2010 map is *not* replaced by the later two-way fusion sensitivity experiment.
+> **Research evidence snapshot (28–29 October 2026):** The research scope considers **2005, 2010, 2015, 2020 and 2025**, with **no future LULC prediction**. The documented assessed series currently comprises **2010 (provisional), 2015, 2020 and 2025**. A final accepted **2005** classification has **not** been established from the archived evidence. The original 2010 map is *not* replaced by the later two-way fusion sensitivity experiment.
 
 ## Start here
 
@@ -17,7 +17,121 @@ This repository preserves the research code and documented decisions behind a mu
 | Check **curation provenance and integrity** | [Curation audit](docs/CURATED_GEE_AUDIT.md) · [Manifest](docs/CURATED_GEE_MANIFEST.csv) |
 | Trace **asset names** across scripts | [Static asset reference index](docs/ASSET_REFERENCE_INDEX.md) |
 | See **metadata-verified Earth Engine assets** and export evidence | [Verified asset manifest](docs/ASSET_MANIFEST_VERIFIED.md) |
+| View the **small, traceable results tables** (no GIS rasters) | [Results index](results/README.md) |
 | Review **study decisions and source provenance** | [Research lineage](docs/RESEARCH_LINEAGE.md) · [Original source revision](docs/SOURCE_REVISION.md) |
+
+## Repository structure and file guide
+
+This is the **recommended directory map for first-time visitors**. The repository contains two deliberately different forms of Earth Engine code: the **complete, untouched historical archive** and a smaller **curated reading collection**. The numbering is a research-workflow label, not an instruction to run everything in ascending order.
+
+```text
+chennai-lulc-gis/
+├── README.md                             ← You are here: project overview and directory guide
+├── archive/gee-original/                 ← 156 preserved GEE Code Editor source files
+│   ├── [67 scripts at this level]         ← Foundations, 2015 work, early 2010 experiments, exports
+│   ├── stage7/                           ← 39 scripts: 2010 manual reconstruction, QA, four-class work
+│   ├── stage8/                           ← 29 scripts: urban omission audits and fusion experiments
+│   └── tnjregion/                        ← 21 scripts: Thanjavur transfer + Tamil Nadu proxy screens
+├── scripts/gee/                          ← 62 selected, byte-identical copies, grouped by research role
+│   ├── 01_foundation/                    ← 2025/2020 source workflows, historical preparation
+│   ├── 02_2015_mlc/                      ← 2015 training, validation and Gaussian classification
+│   ├── 03_2010_provisional/              ← Historical manual 2010 lineage and L5/L7 provisional map
+│   ├── 04_four_class/                    ← Five-to-four class aggregation, verification and exports
+│   ├── 05_fusion/                        ← Post-classification 2015–2025 fusion + 2010 sensitivity
+│   ├── 06_generalisability/              ← Frozen-model Thanjavur A/B/C + coastal proxy comparisons
+│   ├── 07_map_exports/                   ← ROI, classified maps, Landsat RGB and index exports
+│   ├── INDEX.md                          ← Every curated script and its specific research role
+│   ├── EXECUTION_ORDER.md                ← Safe interpretation/checkpoint sequence (not a batch runner)
+│   └── README.md                         ← Curation conditions and source preservation
+├── app/                                  ← Final Stage 08 interactive map application source
+│   ├── backend/                          ← FastAPI: metadata, areas, pixel queries and PNG tile routes
+│   ├── frontend/                         ← React/TypeScript + Leaflet: maps, timelapse and controls
+│   ├── gee/                              ← Stage 08 supporting boundary / historical RGB export code
+│   ├── tools/                            ← Local raster and RGB integrity checks
+│   ├── docs/                             ← Archived app raster QA record
+│   └── README.md                         ← App setup, nine required local data files and limitations
+├── docs/                                 ← Detailed scientific and code-provenance documentation
+│   ├── CODE_MANUAL.md                    ← Complete 156-file explanations and historical decisions
+│   ├── SCRIPT_INDEX.md / .csv            ← Complete filenames, inventory and original SHA-256 values
+│   ├── CODE_SCAN_CATALOG.md / .csv       ← Source-derived catalogue of referenced code features
+│   ├── CODE_MANUAL_REVIEWED_V1.md        ← Earlier reviewed working document (not the master manual)
+│   ├── RESEARCH_LINEAGE.md               ← Accepted baselines versus experiments/sensitivity
+│   ├── ASSET_REFERENCE_INDEX.md          ← Static references to remote Earth Engine asset names
+│   ├── ASSET_MANIFEST_VERIFIED.md        ← 69-ID metadata audit, export evidence and limitations
+│   ├── CURATED_GEE_MANIFEST.csv          ← Mappings/hashes for the 62 curated source copies
+│   ├── CURATED_GEE_AUDIT.md              ← Selection integrity, labels and unresolved checks
+│   ├── CURATION_REAUDIT.md               ← Why eight additional archived files were curated
+│   ├── SOURCE_REVISION.md                ← Exact upstream GEE archive commit and snapshot method
+│   ├── BEFORE_GITHUB.md                  ← Historical pre-publication preparation notes
+│   ├── PHASE4_SOURCE_AUDIT.md            ← Application-import audit (historical snapshot)
+│   └── PHASE5C_SCIENTIFIC_CONSISTENCY_AUDIT.md ← Documentation consistency report
+├── results/                              ← Small, source-traceable research summary tables (not TIFFs)
+│   ├── README.md                         ← What each result means, source and evidence caveats
+│   ├── chennai_accuracy.csv              ← Original 5-class vs derived 4-class OA
+│   ├── chennai_four_class_areas.csv      ← Archived GEE pixelArea class areas, km²
+│   ├── fusion_2010_sensitivity.csv       ← Separate original/add-only/two-way comparison
+│   └── transferability_2020.csv          ← Manual Thanjavur accuracy vs coastal proxy agreement
+├── tools/                                ← Research archive catalog/curation utilities and docs patch
+└── .gitignore                            ← Excludes credentials, caches and large GIS binaries
+```
+
+**Why two copies of some scripts?** The 156 files under `archive/gee-original/` retain the original upstream filenames, including names without `.js`, alternative branches and unsuccessful experiments. The 62 selected files in `scripts/gee/` are source-preserving copies organized for navigation; **their placement does not mean every experiment was adopted or can run alone**. The other 94 files are still available in the archive. The original upstream revision is recorded in [SOURCE_REVISION.md](docs/SOURCE_REVISION.md).
+
+### What do `stage7`, `stage8` and `tnjregion` mean?
+
+| Original archive location | Meaning in this research | Examples and interpretation |
+|---|---|---|
+| [`archive/gee-original/`](archive/gee-original/) (67 root-level files) | Earlier/foundation and parallel workflows: 2025 and 2020 source classifiers, 2015 manual training and independent validation, early 2010 transfer attempts, original exports and utilities | `01_stage1_to_stage4_2025_master` is the multi-stage source workflow; `04A`–`04K` cover 2015 manual work; `05*`/`06*` document 2010 preliminary and corrected experiments. **Not all branches are final**. |
+| [`stage7/`](archive/gee-original/stage7/) (39 files) | Continued historical **2010 reconstruction and diagnostic work**, culminating in the provisional Landsat 5+7 Gaussian MLC. Also four-class reporting/exports, cross-year plausibility checks and RF comparisons | `07F` prepares reviewed 2010 samples; `07M`/`07N` test L5+L7; `07O` exports the **reported provisional 2010** MLC; `07AC`/`07AC5` handle four-class maps; `07X`/`07Y` are exploratory RF comparisons. |
+| [`stage8/`](archive/gee-original/stage8/) (29 files) | Diagnosis of **2015 Built-up omission**, historical pixel/context experiments and post-classification fusion alternatives using independent built-up evidence | `08D`/`08E` test historical site/pixel disagreement; `08F*` tests context/SNIC; `08G9`/`08G10` prepare retained 2015/2020/2025 fusion candidates; `08G15` evaluates a **2010 two-way sensitivity**; `11_...` contains later export instructions. |
+| [`tnjregion/`](archive/gee-original/tnjregion/) (21 files) | **TNJ = Thanjavur**: outside-Chennai geographic generalisability benchmark and follow-on Tamil Nadu city screening | `01_TNJ_2020_Frozen_MLC` applies the Chennai model without local retraining; `03*` prepares and interprets reference samples; `04_TNJ_2020_Final_Accuracy_Benchmark` is a **manually referenced accuracy benchmark**; `06B`/`06C` test season matching/quantile harmonisation; `08*`/`10*` cover city screens/map exports. |
+
+**Important:** `Stage 7` and `Stage 8` are the project's historical research stages; they are **not** seven-class/eight-class maps. `TNJ` is a geographic workstream, and the **`04` in `04_TNJ_2020_Final_Accuracy_Benchmark` is a script step**, *not* LULC class 4, the year 2004 or a separate project stage. More detailed script-by-script explanations are in the [complete Code Manual](docs/CODE_MANUAL.md).
+
+### How to read the filenames and annotations
+
+| Pattern in a filename | How to interpret it |
+|---|---|
+| `01_`, `04A_`, `07O_`, `08G10_` | Number and letter designate a historical script/checkpoint/branch; not a single clean automated execution order. |
+| `2010`, `2015`, `2020`, `2025` | The observation/classification year being processed. The number at the **start** of the filename usually refers to a **workflow step**, not an observation year. |
+| `MLC`, `RF`, `SNIC` | Gaussian Maximum Likelihood Classification; Random Forest experimental comparison; Simple Non-Iterative Clustering for exploratory spatial context. RF/SNIC branches are not automatically accepted baselines. |
+| `training`, `validation`, `manual`, `QA`, `CV` | Training/reference preparation, independently reviewed validation, manual interpretation, quality assurance, and cross-validation; these are not synonymous. |
+| `L5L7`, `GAIA`, `GHSL`, `WorldCover`, `DW`, `WSF` | Sensor combination and external spatial data source; the source's year, role and evidential limitations matter. `DW` here denotes Dynamic World. |
+| `A`, `B`, `C` in Thanjavur experiments | **A:** direct frozen transfer; **B:** source-month/season matching; **C:** unsupervised spectral quantile harmonisation. The frozen Gaussian model is not retrained. |
+| `V2`, `v1`, `exp`, `candidate`, `FINAL`, `FIXED` | Original author's version/experiment labels, **not** repository-wide independent scientific approval. Look up the specific file's status in the [curated index](scripts/gee/INDEX.md) or [Code Manual](docs/CODE_MANUAL.md). |
+
+### Application source and repository-maintenance files
+
+| File or folder | What it contains / why it matters |
+|---|---|
+| [`app/backend/main.py`](app/backend/main.py) | FastAPI entry point; health/metadata/area/boundary/pixel endpoints and LULC/historical RGB tile routes. |
+| [`app/backend/catalog.py`](app/backend/catalog.py) | Supported years, official archived GEE area values, class legends, accuracy figures and paths for external inputs. |
+| [`app/backend/raster_service.py`](app/backend/raster_service.py) | Read-only classification raster validation, boundary loading, spatial pixel lookup and categorical PNG tiles. |
+| [`app/backend/satellite_service.py`](app/backend/satellite_service.py) | Annual Landsat RGBA raster validation and historical imagery tile generation. |
+| [`app/backend/tests/test_api.py`](app/backend/tests/test_api.py) | Real-data integration tests; the final local project passed 3/3 in the October 2026 audit. Tests need the nine external inputs. |
+| [`app/backend/requirements.txt`](app/backend/requirements.txt) | Pinned Python backend dependencies; install in a local virtual environment. |
+| [`app/frontend/src/App.tsx`](app/frontend/src/App.tsx) | Main React map interface, year selection, timelapse, overlays, class legend and pixel inspection. |
+| [`app/frontend/src/api.ts`](app/frontend/src/api.ts) | Typed HTTP requests to the FastAPI backend; defaults to `127.0.0.1:8000`. |
+| [`app/frontend/src/main.tsx`](app/frontend/src/main.tsx) | React bootstrap; loads Leaflet and application styles. |
+| [`app/frontend/package.json`](app/frontend/package.json) / [`package-lock.json`](app/frontend/package-lock.json) | Frontend scripts, versioned dependencies and npm installation lockfile. |
+| [`app/frontend/tsconfig.json`](app/frontend/tsconfig.json) / [`vite.config.ts`](app/frontend/vite.config.ts) | TypeScript checks and Vite local development/build settings. |
+| [`app/tools/audit_rasters.py`](app/tools/audit_rasters.py) / [`audit_satellite_rgb.py`](app/tools/audit_satellite_rgb.py) | Local scientific raster QA; do not confuse diagnostic tags with independently verified overview generation methods. |
+| [`app/gee/`](app/gee/) | Application-oriented boundary and historical satellite exports, separate from archived GEE research scripts. |
+| [`app/docs/milestone0_audit.json`](app/docs/milestone0_audit.json) | Historical local counts, grid QA and transition-matrix diagnostics, not the authoritative GEE pixel-area replacement. |
+| [`tools/build_script_catalog.py`](tools/build_script_catalog.py) | Generates source-derived inventory/catalogue from the archived original scripts. |
+| [`tools/curate_gee.py`](tools/curate_gee.py) / [`gee_curated_selection.csv`](tools/gee_curated_selection.csv) | Builds/verifies the exact 62-copy curated set against the 156-file archive. |
+| [`tools/phase5c_docs_patch.py`](tools/phase5c_docs_patch.py) | Historic one-time narrow Markdown correction helper; **not** a model or raster processing stage. |
+
+### Key files for each task
+
+| Want to do this | Go to |
+|---|---|
+| Understand the research and accepted versus exploratory claims | [Code Manual](docs/CODE_MANUAL.md) · [Research lineage](docs/RESEARCH_LINEAGE.md) |
+| Browse every one of the 156 original scripts | [Complete script index](docs/SCRIPT_INDEX.md) · [Original GEE archive](archive/gee-original/) |
+| Find one of the 62 curated script copies and see its exact role | [Curated index](scripts/gee/INDEX.md) · [Execution guide](scripts/gee/EXECUTION_ORDER.md) |
+| Understand which remote GEE outputs were observed | [Verified asset manifest](docs/ASSET_MANIFEST_VERIFIED.md) |
+| Find readable results without opening scripts | [Results index](results/README.md) · [Chennai accuracies](results/chennai_accuracy.csv) · [Four-class areas](results/chennai_four_class_areas.csv) · [2010 sensitivity](results/fusion_2010_sensitivity.csv) · [Transferability](results/transferability_2020.csv) |
+| Run or review the FastAPI / React map interface | [Application guide](app/README.md) · [`app/backend/main.py`](app/backend/main.py) · [`app/frontend/src/App.tsx`](app/frontend/src/App.tsx) |
 
 ## Research questions and scope
 
@@ -80,6 +194,8 @@ The diagram describes **methodological relationships**, not an automatically run
 | 2020 | **86.33%** (259/300) | **95.67%** | Also serves as the frozen source model for geographical transfer |
 | 2025 | **83.67%** (251/300) | **96.67%** | Original classification; recovered TIFF and reporting export were separately audited |
 
+A compact machine-readable version is provided in [results/chennai_accuracy.csv](results/chennai_accuracy.csv).
+
 The four-class accuracies are derived assessments on merged labels. Consult [CODE_MANUAL.md](docs/CODE_MANUAL.md) and [the curated execution guide](scripts/gee/EXECUTION_ORDER.md) before interpreting per-class results or comparing different denominators.
 
 ### Post-classification fusion is not a new Gaussian model
@@ -98,38 +214,11 @@ The five-class **Chennai 2020 Gaussian MLC was held frozen**. Thanjavur was eval
 | **B — source-month/season matching** | **20.6625%** |
 | **C — unsupervised quantile spectral harmonisation** | **35.9444%** |
 
+The documented transfer/proxy metrics are also indexed in [results/transferability_2020.csv](results/transferability_2020.csv).
+
 Experiment C's estimated improvement over A is **+12.759 percentage points**, with an *approximate* reported 95% interval of **+3.9345 to +21.5835 points**. The interval does **not** fully account for spatial dependence or reference-label uncertainty. These are exploratory transferability findings, not claims of robust model generalisation.
 
 Cuddalore (**57.9251%**), Nagapattinam (**82.9085%**) and Thoothukudi (**46.0861%**) were evaluated by **automatic agreement with ESA WorldCover + Dynamic World consensus on eligible areas**, *not* independently interpreted ground-truth accuracy. The proxy covered only subsets of each city's map, so these numbers must not be directly compared with the Thanjavur manually referenced accuracies.
-
-## Repository layout
-
-```text
-.
-├── archive/
-│   └── gee-original/          # All 156 original GEE source files, unchanged
-│       ├── stage7/
-│       ├── stage8/
-│       └── tnjregion/
-├── scripts/
-│   └── gee/                   # 62 byte-identical curated source copies
-│       ├── 01_foundation/
-│       ├── 02_2015_mlc/
-│       ├── 03_2010_provisional/
-│       ├── 04_four_class/
-│       ├── 05_fusion/
-│       ├── 06_generalisability/
-│       ├── 07_map_exports/
-│       ├── INDEX.md
-│       └── EXECUTION_ORDER.md
-├── docs/                       # Full code manual, inventories, manifests, decisions
-├── tools/                      # Reproducible archive scanner and curation verifier
-├── app/                        # Imported Stage 08 FastAPI and React–Leaflet application
-├── results/                    # Placeholder for small verified results / manifests
-└── README.md
-```
-
-The 62 selected files are **copies of the originals**, with `.js` suffixes added where needed. They are not necessarily independently executable or scientifically accepted outputs. The other 94 historical files remain in `archive/gee-original/`; the archive includes superseded trials, alternatives, diagnostics and script variants. The selection criteria and decision labels are in [the curation manifest](docs/CURATED_GEE_MANIFEST.csv).
 
 ## How to explore and reproduce safely
 
